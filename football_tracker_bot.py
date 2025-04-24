@@ -7,6 +7,7 @@ from discord.ext import commands
 
 from config import BOT_TOKEN, CHANNEL_ID
 from utils.personality import get_greeting
+from utils.personality import greet_message
 from modules.power_manager import setup_power_management
 from modules.verbose_logger import log_info
 from modules.scheduler import schedule_day
@@ -25,7 +26,7 @@ async def on_ready():
     log_info(f"✅ Logged in as {bot.user}")
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
-        await channel.send(f"{get_greeting()}")
+        await channel.send(f"{greet_message()}")
 
     # 3) Load all cogs 
     for fname in os.listdir("cogs"):

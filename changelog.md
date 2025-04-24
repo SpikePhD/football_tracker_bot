@@ -1,4 +1,4 @@
-**Football Tracker Bot v1.0.0**
+**Football Tracker Bot v0.9.0**
 Author: SpikePhD
 
 **Features:**  
