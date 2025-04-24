@@ -1,4 +1,4 @@
-**Football Tracker Bot v0.9.0**
+**Football Tracker Bot v1.0.0**
 Author: SpikePhD
 
 **Features:**  
@@ -10,6 +10,7 @@ Author: SpikePhD
 • Avoid sending repetead messages to reduce spam  
 • Detects “Full-Time” and posts final score + scorer events  
 • Commands:
-  • `!matches` – list today’s tracked fixtures  
-  • `!competitions` – list all competitions being tracked  
+  • `!matches` – lists today’s tracked fixtures  
+  • `!competitions` – lists all competitions being tracked  
   • `!hello` / `!hi` – simple alive check & greeting  
+  • `!changelog` – version tracking documentation

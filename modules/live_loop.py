@@ -52,7 +52,7 @@ async def run_live_loop(bot):
                 tag = f" ({detail})" if detail != "Normal Goal" else ""
                 event_strings.append(f"{minute}' - {player}{tag} {side}")
             elif e['type'] == 'Card' and e['detail'] == 'Red Card':
-                event_strings.append(f"{minute}' - {player} {side} 🟥")
+                event_strings.append(f"{minute}' - {player} (Red Card) {side}")
 
         # build and send the live update line
         line = f"{home} {score['home']} - {score['away']} {away}"

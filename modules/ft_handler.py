@@ -56,7 +56,7 @@ async def fetch_and_post_ft(bot):
                 extra = f" ({e['detail']})" if e['detail']!="Normal Goal" else ""
                 detail_lines.append(f"{minute}' – {player}{extra} {tag}")
             elif e['type']=="Card" and e['detail']=="Red Card":
-                detail_lines.append(f"{minute}' – {player} {tag} 🟥")
+                detail_lines.append(f"{minute}' – {player} {tag} (Red Card)")
 
         ft_line = f"FT: {home} {goals['home']} – {goals['away']} {away}"
         if detail_lines:
@@ -98,7 +98,7 @@ async def post_initial_fts(fixtures, bot):
                 extra = f" ({e['detail']})" if e['detail']!="Normal Goal" else ""
                 detail_lines.append(f"{minute}' – {player}{extra} {tag}")
             elif e['type']=="Card" and e['detail']=="Red Card":
-                detail_lines.append(f"{minute}' – {player} {tag} 🟥")
+                detail_lines.append(f"{minute}' – {player} {tag} (Red Card)")
 
         line = f"FT: {home} {goals['home']} – {goals['away']} {away}"
         if detail_lines:
