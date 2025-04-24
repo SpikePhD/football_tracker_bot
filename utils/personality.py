@@ -19,4 +19,4 @@ def get_greeting():
 
 # Alive boot message
 def greet_message():
-    return f"Something stopped be, but now I have started again"
+    return f"Something stopped me, but now I have started again"

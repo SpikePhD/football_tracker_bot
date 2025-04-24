@@ -1,60 +1,66 @@
 # modules/scheduler.py
-
 import asyncio
 from datetime import datetime
-from config import TRACKED_LEAGUE_IDS
+from config import TRACKED_LEAGUE_IDS, CHANNEL_ID
 from utils.api_client import fetch_day_fixtures
 from utils.time_utils import italy_now, parse_utc_to_italy
 from modules.verbose_logger import log_info
 from modules.live_loop import run_live_loop
-from modules.ft_handler import post_initial_fts, fetch_and_post_ft
+from modules.ft_handler import fetch_and_post_ft
 
-def is_tracked(league_id):
+
+def is_tracked(league_id: int) -> bool:
     return league_id in TRACKED_LEAGUE_IDS
 
+
 async def schedule_day(bot):
+    """Checks today’s fixtures, sleeps until the first KO if needed,
+    then launches the 8-minute polling loop (live + FT)."""
+
+    # ── 1. Get today’s fixtures ───────────────────────────────────
     log_info("📅 Fetching fixtures for today…")
     fixtures = await fetch_day_fixtures()
 
-    # 1) post any already-FTs
-    await post_initial_fts(fixtures, bot)
+    tracked = [m for m in fixtures if is_tracked(m["league"]["id"])]
 
-    # 2) filter today’s tracked matches
-    today = [m for m in fixtures if is_tracked(m['league']['id'])]
-    if not today:
+    if not tracked:
         log_info("📅 No tracked matches today")
         return
 
-    today.sort(key=lambda m: m['fixture']['date'])
-    for m in today:
-        ko   = parse_utc_to_italy(m['fixture']['date']).strftime("%H:%M")
-        home = m['teams']['home']['name']
-        away = m['teams']['away']['name']
-        print(f"🕒 {ko} — {home} vs {away}")
+    # Sort by kick-off time (UTC strings)
+    tracked.sort(key=lambda m: m["fixture"]["date"])
 
-    now   = italy_now()
-    kicks = [
-        parse_utc_to_italy(m['fixture']['date'])
-        for m in today
-        if parse_utc_to_italy(m['fixture']['date']) > now
-    ]
+    # ── 2. Pretty-print today’s list ──────────────────────────────
+    for m in tracked:
+        ko_local = parse_utc_to_italy(m["fixture"]["date"]).strftime("%H:%M")
+        home = m["teams"]["home"]["name"]
+        away = m["teams"]["away"]["name"]
+        print(f"🕒 {ko_local} — {home} vs {away}")
 
-    if not kicks:
-        log_info("⏸ No upcoming KOs—launching live loop")
+    # ── 3. Work out timing ───────────────────────────────────────
+    first_ko = parse_utc_to_italy(tracked[0]["fixture"]["date"])
+    now = italy_now()
+
+    # If a match is already live, start immediately
+    if now >= first_ko:
+        log_info("▶️ Matches already live – launching live loop now")
         await run_live_loop(bot)
     else:
-        first = min(kicks)
-        delta = (first - now).total_seconds()
-        h, rem = divmod(int(delta), 3600)
-        m = rem // 60
-        log_info(f"⏳ Sleeping {h}h{m}m until first KO at {first.strftime('%H:%M')}")
-        await asyncio.sleep(delta)
-        log_info("🚀 Starting live polling loop")
-
-    # 3) continuous polling until midnight
-    end = datetime.combine(now.date(), datetime.max.time()).replace(tzinfo=now.tzinfo)
-    while italy_now() < end:
-        log_info("🔁 Live check")
+        delta_sec = (first_ko - now).total_seconds()
+        h, remainder = divmod(int(delta_sec), 3600)
+        m = remainder // 60
+        log_info(f"⏳ Sleeping {h}h{m}m until first KO at {first_ko:%H:%M}")
+        await asyncio.sleep(delta_sec)
         await run_live_loop(bot)
-        await fetch_and_post_ft(bot)
-        await asyncio.sleep(8 * 60)
+
+    # ── 4. Continue polling every 8 minutes until midnight ───────
+    end_of_day = datetime.combine(now.date(), datetime.max.time()).replace(tzinfo=now.tzinfo)
+    log_info(f"🚀 Polling until {end_of_day:%H:%M} every 8 min")
+
+    counter = 1
+    while italy_now() < end_of_day:
+        log_info(f"[{counter}] 🔁 Live check")
+        await run_live_loop(bot)          # live + goal / RC posts
+        await fetch_and_post_ft(bot)      # FT verification
+        counter += 1
+        await asyncio.sleep(480)          # 8 minutes
