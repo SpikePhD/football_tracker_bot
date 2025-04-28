@@ -10,7 +10,7 @@ HELLO_MESSAGES = [
     "Did you know Internazionale is the third team of Milano, after Ac Milan and Milan Futuro?",
     "Hello! Forza Milan",
     "I live! And I bleed Red and Black",
-    "Hello my Rossonero brothe, what's up?",
+    "Hello my Rossonero brother, what's up?",
     "After Instanbul, we had Athens",
     "Forza lotta, vincerai! Non ti lasceremo mai!",
     "It is true that I follow all the matches, but in truth, I am a Milanista.",
