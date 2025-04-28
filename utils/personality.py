@@ -11,7 +11,11 @@ HELLO_MESSAGES = [
     "Hello! Forza Milan",
     "I live! And I and bleed Red and Black",
     "Hey what's up?",
-    "Dida, Oddo, Nesta, Maldini (c), Jankulovski, Gattuso, Pirlo, Ambrosini, Seedorf, Kaká, Inzaghi"
+    "After Instanbul, we had Athens",
+    "Forza lotta, vincerai! Non ti lasceremo mai!",
+    "It is true that I follow all the matches, but in truth, I am a Milanista.",
+    "Forza Milan, louder today than yesterday, and louder tomorrow than today",
+    "Dida, Oddo, Nesta, Maldini (c), Jankulovski, Gattuso, Pirlo, Ambrosini, Seedorf, Kaká, Inzaghi",
 ]
 
 def get_greeting():
