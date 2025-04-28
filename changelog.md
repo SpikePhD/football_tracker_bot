@@ -1,15 +1,10 @@
 **Football Tracker Bot v1.1.0**
 Author: SpikePhD
-
 • Fixed an issue with the scheduler, that would not catch live matches if the bot started in the middle of these matches
-• minor grammatical error spotted and corrected  
-
-
+• minor grammatical errors spotted and corrected  
 
 **Football Tracker Bot v1.0.0**
-Author: SpikePhD
-
-**Features:**  
+Author: SpikePhD 
 • Ready for field test
 • Posts a startup greeting  
 • Fetches and prints today’s fixtures on startup and at 11:00 (Italy time)  

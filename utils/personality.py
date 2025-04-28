@@ -9,8 +9,8 @@ BOT_NAME = "Marco Van Botten"
 HELLO_MESSAGES = [
     "Did you know Internazionale is the third team of Milano, after Ac Milan and Milan Futuro?",
     "Hello! Forza Milan",
-    "I live! And I and bleed Red and Black",
-    "Hey what's up?",
+    "I live! And I bleed Red and Black",
+    "Hello my Rossonero brothe, what's up?",
     "After Instanbul, we had Athens",
     "Forza lotta, vincerai! Non ti lasceremo mai!",
     "It is true that I follow all the matches, but in truth, I am a Milanista.",
@@ -23,4 +23,4 @@ def get_greeting():
 
 # Alive boot message
 def greet_message():
-    return f"Something stopped me, but now I have started again"
+    return f"I am back Online"
