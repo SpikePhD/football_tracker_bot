@@ -5,15 +5,17 @@ import discord
 import os
 import pytz                                   #  ← new
 
-from discord.ext import commands
+from discord.ext import commands, tasks      #  ← combine imports
+from datetime import time                    #  ← new
 
 from config import BOT_TOKEN, CHANNEL_ID
 from utils.personality import greet_message
 from modules.power_manager import setup_power_management
 from modules.verbose_logger import log_info
 from modules.scheduler import schedule_day
-from datetime import time                    #  ← new
-from discord.ext import tasks                 #  ← new
+
+# ←–– NEW: import your message‐editing helper
+from modules.message_edit_tracker import setup as setup_msg_tracker
 
 # ─── Intents & bot setup ─────────────────────────
 intents = discord.Intents.default()
@@ -21,7 +23,6 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 italy_tz = pytz.timezone("Europe/Rome")        #  ← new
-
 
 @tasks.loop(time=time(hour=11, minute=0, tzinfo=italy_tz))
 async def daily_scheduler():
@@ -47,6 +48,9 @@ async def on_ready():
         mod_name = fname[:-3]
         await bot.load_extension(f"cogs.{mod_name}")
         log_info(f"✔ loaded cog: cogs.{mod_name}")
+
+    # ←–– NEW: wire up the message‐edit tracker
+    await setup_msg_tracker(bot)
 
     # 4) Hand off to scheduler
     await schedule_day(bot)
