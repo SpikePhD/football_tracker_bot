@@ -1,66 +1,112 @@
-# modules/message_edit_tracker.py
+"""
+message_edit_tracker.py  •  football_tracker_bot
 
-import pytz
+Logic for “upsert”‑style posting:
+• If the bot has posted fewer than MAX_MESSAGES messages in the channel,
+  update (edit) the most recent one.
+• Once the cap is reached, start sending new messages again.
+
+Exported coroutine
+------------------
+    upsert_message(channel: discord.TextChannel, embed: discord.Embed) -> discord.Message
+"""
+
+from __future__ import annotations
+
 import asyncio
-from datetime import datetime, time as dt_time
-from discord import TextChannel, Message
-from discord.ext import tasks, commands
-from modules.verbose_logger import log_info, log_warning, log_error
+import logging
+from typing import Sequence
 
-# ——— Configuration ———
-ITALY_TZ    = pytz.timezone("Europe/Rome")
-THRESHOLD   = 30    # number of user messages before we post a fresh one
+import discord
 
-# ——— Internal State ———
-_last_bot_message: Message | None = None
-_user_msg_count: int     = 0
+log = logging.getLogger(__name__)
 
-# ——— Helpers ———
-def _on_user_message(msg: Message):
-    """Count every non-bot message to decide when to rotate updates."""
-    global _user_msg_count
-    if msg.author.bot:
-        return
-    _user_msg_count += 1
+# --------------------------------------------------------------------------- #
+#  Tuning constants                                                           #
+# --------------------------------------------------------------------------- #
 
-async def handle_update(channel: TextChannel, content: str):
+MAX_MESSAGES = 30          # how many of *our own* messages to keep visible
+FETCH_LIMIT  = 100         # how far back to look in channel history
+
+# --------------------------------------------------------------------------- #
+#  Helpers                                                                    #
+# --------------------------------------------------------------------------- #
+
+
+async def _get_own_messages(
+    channel: discord.TextChannel,
+) -> list[discord.Message]:
     """
-    Post or edit the last bot message in `channel` with `content`.
-    - If <THRESHOLD user msgs have passed, send a NEW message.
-    - Otherwise edit the previous one.
+    Return the bot’s own messages, newest → oldest, up to MAX_MESSAGES.
+
+    We restrict the search to FETCH_LIMIT to avoid huge history scans.
     """
-    global _last_bot_message, _user_msg_count
+    me       = channel.guild.me
+    messages = []
 
-    # If we have a “last message” and haven't hit the user-message threshold, try edit
-    if _last_bot_message and _user_msg_count < THRESHOLD:
-        try:
-            await _last_bot_message.edit(content=content)
-            log_info("✏️ Edited previous update")
-            return
-        except Exception as e:
-            log_warning(f"Failed to edit message, sending new one: {e}")
+    async for m in channel.history(limit=FETCH_LIMIT, oldest_first=False):
+        if m.author == me:
+            messages.append(m)
+            if len(messages) >= MAX_MESSAGES:
+                break
 
-    # Otherwise, send a fresh message
+    return messages
+
+
+# --------------------------------------------------------------------------- #
+#  Public API                                                                 #
+# --------------------------------------------------------------------------- #
+
+
+async def upsert_message(
+    channel: discord.TextChannel,
+    embed: discord.Embed,
+    *,
+    attachments: Sequence[discord.File] | None = None,
+) -> discord.Message:
+    """
+    Edit the most recent bot message while we’re below MAX_MESSAGES;
+    otherwise post a fresh one.
+
+    Returns the `discord.Message` object that now contains the embed.
+    """
+    own_msgs = await _get_own_messages(channel)
+
+    if own_msgs and len(own_msgs) < MAX_MESSAGES:
+        last = own_msgs[0]
+        log.debug(
+            "Editing message %s (%d/%d in channel)",
+            last.id,
+            len(own_msgs),
+            MAX_MESSAGES,
+        )
+        # ➜  EARLY RETURN ‑‑ stops the function here so we don’t fall through
+        return await last.edit(embed=embed, attachments=attachments or [])
+
+    log.debug(
+        "Posting new message — %d existing (limit %d)",
+        len(own_msgs),
+        MAX_MESSAGES,
+    )
+    return await channel.send(embed=embed, files=attachments or [])
+
+
+# --------------------------------------------------------------------------- #
+#  Convenience wrapper (optional)                                             #
+# --------------------------------------------------------------------------- #
+
+
+async def safe_upsert(
+    channel: discord.TextChannel,
+    embed: discord.Embed,
+    **kwargs,
+) -> None:
+    """
+    Fire‑and‑forget wrapper for use inside endless background tasks.
+    Catches and logs any exception instead of killing the loop.
+    """
     try:
-        _last_bot_message = await channel.send(content)
-        log_info("🆕 Posted new update message")
-        _user_msg_count = 0
-    except Exception as e:
-        log_error(f"Could not post update message: {e}")
-
-# ——— Daily Reset ———
-@tasks.loop(time=dt_time(hour=0, minute=0, tzinfo=ITALY_TZ))
-async def _daily_reset():
-    """Wipe out yesterday’s state at midnight Italy time."""
-    global _last_bot_message, _user_msg_count
-    _last_bot_message = None
-    _user_msg_count   = 0
-    log_info("🔄 Daily reset: cleared last message and user‐msg count")
-
-# ——— Module Setup ———
-async def setup(bot: commands.Bot):
-    # 1) Listen to every message to count user activity
-    bot.add_listener(_on_user_message, "on_message")
-    # 2) Kick off the daily reset loop
-    _daily_reset.start()
-    log_info("✔ message_edit_tracker module loaded")
+        await upsert_message(channel, embed, **kwargs)
+    except Exception:
+        log.exception("Failed to upsert message in #%s", channel)
+        await asyncio.sleep(5)  # simple back‑off to avoid hot‑looping
