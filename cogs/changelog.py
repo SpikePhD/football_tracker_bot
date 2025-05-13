@@ -1,5 +1,6 @@
 # cogs/changelog.py
-
+import logging
+logger = logging.getLogger(__name__)
 import pathlib
 from discord.ext import commands
 
@@ -32,4 +33,4 @@ class Changelog(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Changelog(bot))
-    print("✔ cogs.changelog loaded")
+    logger.info("✔ cogs.changelog loaded")

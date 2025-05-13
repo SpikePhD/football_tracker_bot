@@ -1,4 +1,8 @@
 # cogs/matches.py
+
+import logging
+logger = logging.getLogger(__name__)
+
 from discord.ext import commands
 from utils.api_client import fetch_day_fixtures
 from utils.time_utils import parse_utc_to_italy, italy_now
@@ -49,4 +53,4 @@ class Matches(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Matches(bot))
-    print("✔ cogs.matches loaded")
+    logger.info("✔ cogs.matches loaded")

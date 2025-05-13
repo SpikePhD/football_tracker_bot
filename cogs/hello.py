@@ -1,4 +1,8 @@
 # cogs/hello.py
+
+import logging
+logger = logging.getLogger(__name__)
+
 from discord.ext import commands
 from utils.personality import get_greeting
 
@@ -19,4 +23,4 @@ class Hello(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Hello(bot))
-    print("[INFO ] hello cog loaded")
+    logger.info("[INFO ] hello cog loaded")

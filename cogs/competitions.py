@@ -1,4 +1,8 @@
 # cogs/competitions.py
+
+import logging
+logger = logging.getLogger(__name__)
+
 from discord.ext import commands
 from config import TRACKED_LEAGUE_IDS
 
@@ -44,4 +48,4 @@ class Competitions(commands.Cog):
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Competitions(bot))
-    print("✔ cogs.competitions loaded")
+    logger.info("✔ cogs.competitions loaded")
