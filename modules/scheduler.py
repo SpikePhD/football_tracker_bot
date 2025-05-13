@@ -1,17 +1,19 @@
 # modules/scheduler.py
 
 import asyncio
+import logging # MODIFIED: Import standard logging
 from datetime import datetime
-# config import for TRACKED_LEAGUE_IDS is no longer needed here if api_client filters
+
 from utils.api_client import fetch_day_fixtures
 from utils.time_utils import italy_now, parse_utc_to_italy
-from modules.verbose_logger import log_info # Ensure log_error is imported if used, or standardize logger
-# is_tracked import is no longer needed if api_client filters
-# from modules.track_leagues import is_tracked 
+# MODIFIED: Remove verbose_logger import
+# from modules.verbose_logger import log_info 
 
 from modules.live_loop import run_live_loop
-# MODIFIED: Add post_initial_fts to the import
 from modules.ft_handler import fetch_and_post_ft, post_initial_fts
+
+# MODIFIED: Get a logger instance for this module
+logger = logging.getLogger(__name__)
 
 
 async def schedule_day(bot):
@@ -19,59 +21,58 @@ async def schedule_day(bot):
     then launches the 8-minute polling loop (live + FT)."""
 
     # ── 1. Get today’s fixtures (already filtered by league in new api_client) ───
-    log_info("📅 Fetching fixtures for today…")
+    logger.info("📅 Fetching fixtures for today…") # MODIFIED
     fixtures = await fetch_day_fixtures(bot.http_session) 
 
     if not fixtures: 
-        log_info("📅 No tracked league fixtures found for today or API error. Scheduling will not proceed for this cycle.")
+        logger.info("📅 No tracked league fixtures found for today or API error. Scheduling will not proceed for this cycle.") # MODIFIED
         return
 
-    # --- NEW: Call post_initial_fts for matches already at Full Time ---
-    log_info("ℹ️ Checking for any matches already at Full Time to post initial results...")
+    # --- Call post_initial_fts for matches already at Full Time ---
+    logger.info("ℹ️ Checking for any matches already at Full Time to post initial results...") # MODIFIED
     await post_initial_fts(fixtures, bot)
-    # --- End of new call for post_initial_fts ---
+    # --- End of call for post_initial_fts ---
 
-    # Filter for matches that are 'Not Started' or 'Time To Be Defined' to determine KO waiting time.
     tracked_for_ko_timing = [
         m for m in fixtures
         if m.get('fixture', {}).get('status', {}).get('short') in ("NS", "TBD")
     ]
     
     if not tracked_for_ko_timing:
-        log_info("📅 No 'Not Started' or 'TBD' tracked matches today to schedule specific KO waiting.")
-        log_info("▶️ Performing an immediate live check for any ongoing matches...")
+        logger.info("📅 No 'Not Started' or 'TBD' tracked matches today to schedule specific KO waiting.") # MODIFIED
+        logger.info("▶️ Performing an immediate live check for any ongoing matches...") # MODIFIED
         await run_live_loop(bot)
     else:
         tracked_for_ko_timing.sort(key=lambda m: m["fixture"]["date"])
 
-        log_info("--- Upcoming Matches to be Tracked Live (Not Started/TBD) ---")
+        logger.info("--- Upcoming Matches to be Tracked Live (Not Started/TBD) ---") # MODIFIED
         for m_ko in tracked_for_ko_timing:
             ko_local = parse_utc_to_italy(m_ko["fixture"]["date"]).strftime("%H:%M")
             home = m_ko["teams"]["home"]["name"]
             away = m_ko["teams"]["away"]["name"]
-            log_info(f"🕒 {ko_local} — {home} vs {away} (ID: {m_ko['fixture']['id']})")
-        log_info("-----------------------------------------------------------")
+            logger.info(f"🕒 {ko_local} — {home} vs {away} (ID: {m_ko['fixture']['id']})") # MODIFIED
+        logger.info("-----------------------------------------------------------") # MODIFIED
 
         first_ko_details = tracked_for_ko_timing[0]
         first_ko_time = parse_utc_to_italy(first_ko_details["fixture"]["date"])
         current_italy_time = italy_now()
 
         if current_italy_time >= first_ko_time:
-            log_info(f"▶️ First KO ({first_ko_time:%H:%M}) for {first_ko_details['fixture']['id']} is past or now – launching live loop immediately.")
+            logger.info(f"▶️ First KO ({first_ko_time:%H:%M}) for {first_ko_details['fixture']['id']} is past or now – launching live loop immediately.") # MODIFIED
             await run_live_loop(bot)
         else:
             delta_sec = (first_ko_time - current_italy_time).total_seconds()
             if delta_sec > 0:
                 h, remainder = divmod(int(delta_sec), 3600)
                 m_val = remainder // 60
-                log_info(f"⏳ Sleeping {h}h{m_val}m until first KO at {first_ko_time:%H:%M} for match ID {first_ko_details['fixture']['id']}.")
+                logger.info(f"⏳ Sleeping {h}h{m_val}m until first KO at {first_ko_time:%H:%M} for match ID {first_ko_details['fixture']['id']}.") # MODIFIED
                 await asyncio.sleep(delta_sec)
             await run_live_loop(bot) 
             
     # ── 4. Continue polling every 8 minutes until midnight ───────
     current_day_date_italy = italy_now().date() 
     end_of_day = datetime.combine(current_day_date_italy, datetime.max.time()).replace(tzinfo=italy_now().tzinfo)
-    log_info(f"🚀 Polling active. Will run checks every 8 min until {end_of_day:%H:%M:%S} (Italy Time).")
+    logger.info(f"🚀 Polling active. Will run checks every 8 min until {end_of_day:%H:%M:%S} (Italy Time).") # MODIFIED
 
     counter = 1
     approx_total_cycles = 0
@@ -88,7 +89,7 @@ async def schedule_day(bot):
             if remaining_seconds_in_loop > 0:
                 approx_remaining_cycles = max(0, remaining_seconds_in_loop / 480)
         
-        log_info(f"[{counter} / ~{approx_total_cycles:.0f} | Rem: ~{approx_remaining_cycles:.0f}] 🔁 Live & FT check cycle.")
+        logger.info(f"[{counter} / ~{approx_total_cycles:.0f} | Rem: ~{approx_remaining_cycles:.0f}] 🔁 Live & FT check cycle.") # MODIFIED
         
         await run_live_loop(bot)
         await fetch_and_post_ft(bot)
@@ -96,4 +97,4 @@ async def schedule_day(bot):
         counter += 1
         await asyncio.sleep(480) 
     
-    log_info(f"🏁 End of day ({current_day_date_italy}) reached. Polling stopped.")
+    logger.info(f"🏁 End of day ({current_day_date_italy}) reached. Polling stopped.") # MODIFIED

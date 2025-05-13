@@ -1,4 +1,14 @@
 # football_tracker_bot.py (Additions/Modifications)
+import logging
+import sys # For directing to stdout
+
+logging.basicConfig(
+    level=logging.INFO,  # Default level - INFO and above will be shown
+    # Use logging.DEBUG when you need more detailed tracing during development
+    format="[%(asctime)s] [%(levelname)-8s] [%(name)-20s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout, # Explicitly set stream to stdout for console output
+)
 
 import os
 import asyncio
@@ -12,8 +22,11 @@ import aiohttp # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NEW: Import aiohttp
 from config import BOT_TOKEN, CHANNEL_ID
 from utils.personality import greet_message
 from modules.power_manager import setup_power_management
-from modules.verbose_logger import log_info, log_error
 from modules.scheduler import schedule_day
+
+logger = logging.getLogger(__name__) 
+# Using __name__ is standard and will use the module's path as the logger name (e.g., "football_tracker_bot")
+# Alternatively, you could use a fixed name like: logger = logging.getLogger("MarcoVanBotten")
 
 # --- Intents & bot setup ---
 intents = discord.Intents.default()

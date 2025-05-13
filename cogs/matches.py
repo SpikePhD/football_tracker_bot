@@ -15,7 +15,7 @@ class Matches(commands.Cog):
         help="List today's tracked fixtures (upcoming, live or final)."
     )
     async def matches(self, ctx: commands.Context):
-        fixtures = await fetch_day_fixtures()
+        fixtures = await fetch_day_fixtures(self.bot.http_session)
         if not fixtures:
             return await ctx.send("📭 No tracked matches today.")
 
