@@ -32,7 +32,7 @@ async def fetch_and_post_ft(bot):
             continue
 
         log_info(f"🔍 FT check for match {match_id}")
-        payload = await fetch_fixture_by_id(match_id)
+        payload = await fetch_fixture_by_id(bot.http_session, match_id)
         # now payload is a dict, so .get works
         resp = payload.get('response')
         if not resp:
@@ -78,7 +78,7 @@ async def post_initial_fts(fixtures, bot):
         if m['fixture']['status']['short'] != "FT":
             continue
 
-        payload = await fetch_fixture_by_id(m['fixture']['id'])
+        payload = await fetch_fixture_by_id(bot.http_session, m['fixture']['id'])
         resp    = payload.get('response')
         if not resp:
             continue
