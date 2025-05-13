@@ -42,29 +42,29 @@ async def launch_daily_operations_manager(bot_instance: commands.Bot):
     global current_day_scheduler_task
     
     if current_day_scheduler_task and not current_day_scheduler_task.done():
-        log_info("🔄 A daily operations schedule is already running. Attempting to cancel previous instance...")
+        logger.info("🔄 A daily operations schedule is already running. Attempting to cancel previous instance...")
         current_day_scheduler_task.cancel()
         try:
             await current_day_scheduler_task
         except asyncio.CancelledError:
-            log_info("👍 Previous daily operations schedule task successfully cancelled.")
+            logger.info("👍 Previous daily operations schedule task successfully cancelled.")
         except Exception as e:
-            log_error(f"🚨 Error while awaiting cancellation of previous task: {e}")
+            logger.error(f"🚨 Error while awaiting cancellation of previous task: {e}")
     
-    log_info("🚀 Launching new daily operations schedule task...")
+    logger.info("🚀 Launching new daily operations schedule task...")
     current_day_scheduler_task = asyncio.create_task(schedule_day(bot_instance)) # Pass bot_instance
     
     try:
         await current_day_scheduler_task
     except asyncio.CancelledError:
-        log_info("📅 Daily operations schedule task was cancelled.")
+        logger.info("📅 Daily operations schedule task was cancelled.")
     except Exception as e:
-        log_error(f"💥 Daily operations schedule task failed: {e}")
+        logger.error(f"💥 Daily operations schedule task failed: {e}")
 
 
 @tasks.loop(time=time(hour=11, minute=0, tzinfo=italy_tz))
 async def eleven_am_daily_trigger():
-    log_info("⏰ 11:00 AM (Europe/Rome) – Triggering daily operations schedule manager.")
+    logger.info("⏰ 11:00 AM (Europe/Rome) – Triggering daily operations schedule manager.")
     asyncio.create_task(launch_daily_operations_manager(bot))
 
 # --- Bot Events ---
@@ -73,17 +73,17 @@ async def on_ready():
     # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NEW: Create ClientSession here
     if not hasattr(bot, 'http_session') or bot.http_session.closed:
         bot.http_session = aiohttp.ClientSession()
-        log_info("🚀 Global aiohttp.ClientSession created.")
+        logger.info("🚀 Global aiohttp.ClientSession created.")
     # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
     setup_power_management()
-    log_info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
         await channel.send(greet_message())
     else:
-        log_error(f"❌ Could not find channel with ID: {CHANNEL_ID}. Updates will not be sent.")
+        logger.error(f"❌ Could not find channel with ID: {CHANNEL_ID}. Updates will not be sent.")
 
     # Load cogs (your existing logic)
     cogs_path = "cogs" 
@@ -93,38 +93,38 @@ async def on_ready():
             if fname.endswith(".py") and fname != "__init__.py":
                 try:
                     await bot.load_extension(f"{cogs_path}.{fname[:-3]}")
-                    log_info(f"✔ Loaded cog: {cogs_path}.{fname[:-3]}")
+                    logger.info(f"✔ Loaded cog: {cogs_path}.{fname[:-3]}")
                     loaded_cogs_count += 1
                 except commands.ExtensionError as e:
-                    log_error(f"❌ Failed to load cog {cogs_path}.{fname[:-3]}: {e}")
+                    logger.error(f"❌ Failed to load cog {cogs_path}.{fname[:-3]}: {e}")
         if loaded_cogs_count == 0:
-            log_info("ℹ️ No cogs were loaded from the 'cogs' directory.")
+            logger.info("ℹ️ No cogs were loaded from the 'cogs' directory.")
     else:
-        log_info(f"ℹ️ Cogs directory '{cogs_path}' not found. No cogs loaded.")
+        logger.info(f"ℹ️ Cogs directory '{cogs_path}' not found. No cogs loaded.")
 
-    log_info("🚀 Bot ready. Kicking off initial daily operations schedule manager.")
+    logger.info("🚀 Bot ready. Kicking off initial daily operations schedule manager.")
     asyncio.create_task(launch_daily_operations_manager(bot))
 
     if not eleven_am_daily_trigger.is_running():
         eleven_am_daily_trigger.start()
-        log_info("Task loop 'eleven_am_daily_trigger' has been started.")
+        logger.info("Task loop 'eleven_am_daily_trigger' has been started.")
 
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< NEW: Ensure ClientSession is closed on bot shutdown
 async def cleanup_sessions():
     if hasattr(bot, 'http_session') and not bot.http_session.closed:
         await bot.http_session.close()
-        log_info("💨 Global aiohttp.ClientSession closed.")
+        logger.info("💨 Global aiohttp.ClientSession closed.")
 
 @bot.event
 async def on_disconnect(): # This event is usually reliable for cleanup
-    log_info("🔌 Bot disconnected. Initiating session cleanup...")
+    logger.info("🔌 Bot disconnected. Initiating session cleanup...")
     await cleanup_sessions()
 
 # It's also good practice to attempt cleanup if the bot is explicitly closed.
 # We can hook into the bot's close method.
 original_bot_close = bot.close
 async def new_bot_close():
-    log_info("🛑 Bot close initiated. Cleaning up sessions...")
+    logger.info("🛑 Bot close initiated. Cleaning up sessions...")
     await cleanup_sessions()
     await original_bot_close()
 bot.close = new_bot_close
