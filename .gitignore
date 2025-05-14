@@ -1,19 +1,23 @@
-        # Virtual environment
-        .venv/
-        venv/
-        ENV/
-        env/
+# Environment variables
+.env*
 
-        # Environment variables
-        .env*
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
 
-        # Log files
-        logs/
-        *.log
-        
-        # Other common Python ignores (optional but good practice)
-        # build/
-        # dist/
-        # *.egg-info/
-        ```
-        This will prevent these generated files and sensitive/local files from being accidentally committed.
+# Virtual environment folders
+.venv/
+venv/
+ENV/
+env/
+
+# Log files and directories
+logs/
+*.log
+auto_update.log
+
+# OS-specific files (good to have)
+.DS_Store
+Thumbs.db
