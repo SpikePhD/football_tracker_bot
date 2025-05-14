@@ -1,55 +1,25 @@
 # modules/live_loop.py
 
-import logging
-from config import CHANNEL_ID
-from utils.api_client import fetch_live_fixtures
-from utils.time_utils import italy_now
-from modules.ft_handler import track_match_for_ft
-from modules.message_edit_tracker import safe_upsert
-logger = logging.getLogger(__name__)
-already_posted = set()
-
-async def run_live_loop(bot):
-    """
-    Poll /fixtures?live=all, post/edit any new goals or red cards,
-    and register each match for later FT checking.
-    """
-    now = italy_now()
-    logger.info(f"[{now.strftime('%H:%M')}] 🌐 Querying live endpoint…")
-
-    matches = await fetch_live_fixtures(bot.http_session) 
-    if not matches: 
-        logger.info(f"[{now.strftime('%H:%M')}] 😕 No live fixtures returned or error in fetch.") 
-        return
-
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
-        logger.error(f"[{now.strftime('%H:%M')}] ❌ Cannot find channel with ID {CHANNEL_ID}") 
-        return
-
-    for match in matches:
-        match_id = match['fixture']['id']
-        home = match['teams']['home']['name']
-        away = match['teams']['away']['name']
-        score = match['goals']
-        key = f"{match_id}_{score['home']}-{score['away']}"# modules/live_loop.py (Temporary version for debugging - direct send)
-
 import logging 
 
-from config import CHANNEL_ID # TRACKED_LEAGUE_IDS import removed as filtering is done by api_client
+# MODIFIED: TRACKED_LEAGUE_IDS import removed as api_client filters.
+# 'discord' import is also removed as this module no longer sends directly.
+from config import CHANNEL_ID 
 from utils.api_client import fetch_live_fixtures
 from utils.time_utils import italy_now
 from modules.ft_handler import track_match_for_ft
-# MODIFIED: Comment out or remove message_edit_tracker import
-# from modules.message_edit_tracker import safe_upsert 
+# MODIFIED: Import from the new discord_poster module
+from modules.discord_poster import post_live_update 
 
 logger = logging.getLogger(__name__)
+
+# keep track of which live scores we've already posted this session
 already_posted = set()
 
 async def run_live_loop(bot):
     """
-    Poll /fixtures?live=all, POST any new goals or red cards (debugging direct send),
-    and register each match for later FT checking.
+    Polls /fixtures?live=all, prepares update strings, and tells discord_poster
+    to handle the posting/editing of live updates. Also registers matches for FT checking.
     """
     now = italy_now()
     logger.info(f"[{now.strftime('%H:%M')}] 🌐 Querying live endpoint…")
@@ -59,13 +29,15 @@ async def run_live_loop(bot):
         logger.info(f"[{now.strftime('%H:%M')}] 😕 No live fixtures returned or error in fetch.")
         return
 
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
-        logger.error(f"[{now.strftime('%H:%M')}] ❌ Cannot find channel with ID {CHANNEL_ID}")
-        return
+    # The channel object itself is not strictly needed here anymore, 
+    # as discord_poster.py will get it using CHANNEL_ID and the bot object.
+    # However, having a check here can be an early exit if the CHANNEL_ID is misconfigured.
+    # Let's keep a lightweight check or rely on discord_poster's error handling.
+    # For now, we'll pass CHANNEL_ID and let discord_poster resolve it.
 
     for match in matches:
-        # Redundant league filtering already removed, which is good.
+        # Redundant league filtering (if league_id not in TRACKED_LEAGUE_IDS)
+        # should have been removed in a previous step, as api_client.fetch_live_fixtures now filters.
 
         match_id = match['fixture']['id']
         home = match['teams']['home']['name']
@@ -92,20 +64,15 @@ async def run_live_loop(bot):
                 event_strings.append(f"{minute}' - {player} (Red Card) {side}")
         
         already_posted.add(key)
-        track_match_for_ft(match)
+        track_match_for_ft(match) # This remains important
 
-        line = f"{home} {score['home']} - {score['away']} {away}"
+        # Prepare the content string for the update
+        line_content = f"{home} {score['home']} - {score['away']} {away}"
         if event_strings:
-            line += " (" + "; ".join(event_strings) + ")"
+            line_content += " (" + "; ".join(event_strings) + ")"
 
-        # MODIFIED: Revert to channel.send() for debugging
-        try:
-            if channel: # Ensure channel is still valid
-                await channel.send(line)
-                logger.info(f"📢 Posted (direct send for debug) live update: {line}") # MODIFIED log message
-            else:
-                logger.error(f"[{now.strftime('%H:%M')}] ❌ Channel became invalid before sending for match {match_id}")
-        except discord.Forbidden:
-            logger.error(f"❌ Missing permissions to send message in #{channel.name} for match {match_id}.")
-        except Exception as e:
-            logger.error(f"💥 Failed to send message for match {match_id}: {e}", exc_info=True)
+        # MODIFIED: Call the new discord_poster function
+        # It will handle getting the channel object, deciding to edit/send new, and actual sending.
+        logger.info(f"📢 Preparing to post/edit live update via DiscordPoster: {line_content}")
+        await post_live_update(bot, CHANNEL_ID, content=line_content)
+        # The actual "Editing message..." or "Sending new message..." log will now come from discord_poster.py
