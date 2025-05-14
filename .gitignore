@@ -1,1 +1,19 @@
-.env
+        # Virtual environment
+        .venv/
+        venv/
+        ENV/
+        env/
+
+        # Environment variables
+        .env*
+
+        # Log files
+        logs/
+        *.log
+        
+        # Other common Python ignores (optional but good practice)
+        # build/
+        # dist/
+        # *.egg-info/
+        ```
+        This will prevent these generated files and sensitive/local files from being accidentally committed.
