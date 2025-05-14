@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 tracked_matches = {} # Stores matches being tracked for FT status
 
+def clear_tracked_matches_today(): # NEW FUNCTION
+    global tracked_matches
+    logger.info("🔄 Clearing 'tracked_matches' dictionary for the new day.")
+    tracked_matches.clear()
+
 def track_match_for_ft(match_data: dict):
     """
     Registers a match to be checked for Full-Time status later.

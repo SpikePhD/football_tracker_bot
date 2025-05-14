@@ -21,6 +21,11 @@ HISTORY_LOOKUP_LIMIT = 50
 # FT messages and Cog messages will use different functions and won't affect this.
 _last_live_update_message_id: int | None = None
 
+def reset_last_live_update_message_id_for_new_day(): # NEW FUNCTION
+    global _last_live_update_message_id
+    logger.info("🔄 Resetting '_last_live_update_message_id' for the new day.")
+    _last_live_update_message_id = None
+
 
 async def post_live_update(
     bot: discord.Client, 

@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 # keep track of which live scores we've already posted this session
 already_posted = set()
 
+def clear_already_posted_today(): # NEW FUNCTION
+    global already_posted
+    logger.info("🔄 Clearing 'already_posted' set for the new day.")
+    already_posted.clear()
+
 async def run_live_loop(bot):
     """
     Polls /fixtures?live=all, prepares update strings, and tells discord_poster

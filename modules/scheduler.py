@@ -3,22 +3,25 @@
 import asyncio
 import logging # MODIFIED: Import standard logging
 from datetime import datetime
-
 from utils.api_client import fetch_day_fixtures
 from utils.time_utils import italy_now, parse_utc_to_italy
-# MODIFIED: Remove verbose_logger import
-# from modules.verbose_logger import log_info 
+from modules.live_loop import run_live_loop, clear_already_posted_today
+from modules.ft_handler import fetch_and_post_ft, post_initial_fts, clear_tracked_matches_today
+from modules.discord_poster import reset_last_live_update_message_id_for_new_day
 
-from modules.live_loop import run_live_loop
-from modules.ft_handler import fetch_and_post_ft, post_initial_fts
-
-# MODIFIED: Get a logger instance for this module
 logger = logging.getLogger(__name__)
-
 
 async def schedule_day(bot):
     """Checks today’s fixtures, posts initial FTs, sleeps until the first KO if needed,
     then launches the 8-minute polling loop (live + FT)."""
+
+    # --- NEW: Clear previous day's state at the beginning of a new schedule_day run ---
+    logger.info("🌅 New 'schedule_day' cycle starting. Clearing daily states...")
+    clear_already_posted_today()
+    clear_tracked_matches_today()
+    reset_last_live_update_message_id_for_new_day()
+    logger.info("✅ Daily states cleared.")
+    # --- End of state clearing ---
 
     # ── 1. Get today’s fixtures (already filtered by league in new api_client) ───
     logger.info("📅 Fetching fixtures for today…") # MODIFIED
