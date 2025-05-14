@@ -1,4 +1,6 @@
 # football_tracker_bot.py (Additions/Modifications)
+# COMMENT TO CHECK AUTO_UPDATE.SH
+
 import logging
 import sys # For directing to stdout
 
