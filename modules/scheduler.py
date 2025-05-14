@@ -7,7 +7,7 @@ from utils.api_client import fetch_day_fixtures
 from utils.time_utils import italy_now, parse_utc_to_italy
 from modules.live_loop import run_live_loop, clear_already_posted_today
 from modules.ft_handler import fetch_and_post_ft, post_initial_fts, clear_tracked_matches_today
-from modules.discord_poster import reset_last_live_update_message_id_for_new_day
+# from modules.discord_poster import reset_last_live_update_message_id_for_new_day # <<< THIS ONE
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ async def schedule_day(bot):
     logger.info("🌅 New 'schedule_day' cycle starting. Clearing daily states...")
     clear_already_posted_today()
     clear_tracked_matches_today()
-    reset_last_live_update_message_id_for_new_day()
+    # reset_last_live_update_message_id_for_new_day() # Removed as discord_poster no longer manages this state for editing
     logger.info("✅ Daily states cleared.")
     # --- End of state clearing ---
 
