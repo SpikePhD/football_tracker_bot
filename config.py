@@ -10,7 +10,7 @@ API_KEY    = os.getenv("API_KEY")      # your Football‑API key
 BOT_TOKEN  = os.getenv("BOT_TOKEN")    # your Discord bot token
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-# ─ Which leagues you track today
+# ─ Tracked Leagues
 TRACKED_LEAGUE_IDS = [
     135,  # Serie A
     137,  # Coppa Italia
@@ -31,3 +31,6 @@ TRACKED_LEAGUE_IDS = [
     1,    # World Cup
     4     # EURO
 ]
+
+# - Tracked individual teams
+AC_MILAN_TEAM_ID = 489

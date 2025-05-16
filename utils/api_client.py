@@ -2,6 +2,9 @@
 import asyncio 
 import aiohttp
 import logging # MODIFIED: Import standard logging
+import pytz
+from datetime import datetime
+from .time_utils import get_current_season_year, parse_utc_to_italy
 
 from config import API_KEY, TRACKED_LEAGUE_IDS
 from utils.time_utils import get_italy_date_string
@@ -87,3 +90,53 @@ async def fetch_fixture_by_id(session: aiohttp.ClientSession, fixture_id: int) -
     payload = await _make_request(session, url)
     
     return payload
+
+async def fetch_next_team_fixture(session: aiohttp.ClientSession, team_id: int) -> dict | None:
+    """
+    Fetches the next 'Not Started' fixture for a specific team in the current season.
+    Returns the fixture dictionary or None if not found or on error.
+    """
+    season_year = get_current_season_year()
+    # API endpoint to get all "Not Started" fixtures for the team in the specified season
+    url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&season={season_year}&status=NS"
+    logger.info(f"🌐 API Request: Fetching next fixture for team {team_id}, season {season_year} using URL: {url}")
+
+    payload = await _make_request(session, url)
+
+    if payload and isinstance(payload.get("response"), list) and payload["response"]:
+        fixtures = payload["response"]
+        
+        # Sort by fixture date to find the earliest upcoming one
+        # The API might already return them sorted, but explicit sort is safer.
+        fixtures.sort(key=lambda f: f.get('fixture', {}).get('date', ''))
+        
+        now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
+
+        for fixture_details in fixtures:
+            fixture_obj = fixture_details.get('fixture', {})
+            date_str = fixture_obj.get('date')
+            if not date_str:
+                logger.warning(f"Fixture for team {team_id} missing date: {fixture_details.get('id', 'N/A')}")
+                continue
+            
+            try:
+                # API fixture dates are typically UTC, like "2024-08-10T14:00:00+00:00"
+                match_date_utc = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                # Ensure the match date is actually in the future
+                if match_date_utc > now_utc:
+                    logger.info(f"Found next fixture for team {team_id}: ID {fixture_obj.get('id')} on {date_str}")
+                    return fixture_details # Return the entire fixture object
+            except ValueError:
+                logger.error(f"Could not parse fixture date '{date_str}' for team ID {team_id}, fixture ID {fixture_obj.get('id', 'N/A')}.")
+                continue
+        
+        logger.info(f"No future 'Not Started' fixtures found for team ID {team_id} in season {season_year} after sorting and date checking from {len(fixtures)} potential fixtures.")
+        return None # No future "Not Started" fixture found
+        
+    elif payload and isinstance(payload.get("response"), list) and not payload["response"]:
+        logger.info(f"API returned no 'Not Started' (NS) fixtures for team ID {team_id} in season {season_year}.")
+        return None
+    else:
+        # _make_request would have logged an error if payload was None due to API/HTTP error
+        logger.warning(f"Could not fetch or process fixtures for team ID {team_id}, season {season_year}. Payload received: {str(payload)[:200]}")
+        return None

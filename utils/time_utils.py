@@ -22,3 +22,15 @@ def get_italy_date_string():
 def time_until(dt):
     """Returns a timedelta until the given datetime (assumed localized)."""
     return dt - italy_now()
+
+def get_current_season_year() -> int:
+    """
+    Determines the current football season year.
+    Assumes European league timing (e.g., season 2024 runs from mid-2024 to mid-2025).
+    """
+    now = datetime.now()
+    
+    if now.month >= 8:  # August
+        return now.year
+    else:
+        return now.year - 1
