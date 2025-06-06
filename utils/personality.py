@@ -11,7 +11,7 @@ HELLO_MESSAGES = [
     "Hello! Forza Milan",
     "I live! And I bleed Red and Black",
     "Hello my Rossonero brother, what's up?",
-    "After Instanbul, we had Athens",
+    "After Istanbul, we had Athens",
     "Forza lotta, vincerai! Non ti lasceremo mai!",
     "It is true that I follow all the matches, but in truth, I am a Milanista.",
     "Forza Milan, louder today than yesterday, and louder tomorrow than today",
