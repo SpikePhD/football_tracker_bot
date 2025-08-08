@@ -1,4 +1,5 @@
 # football_tracker_bot.py
+# line to manually test auto_update.sh. Test 1.
 
 import logging
 import sys # For directing to stdout
