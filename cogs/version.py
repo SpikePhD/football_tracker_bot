@@ -43,7 +43,7 @@ class VersionCommand(commands.Cog):
     )
     async def version_cmd(self, ctx: commands.Context):
         commit = get_commit_desc()
-        await ctx.send(f"🧩 Running commit: `{commit}`")
+        await ctx.send(f"Running commit: `{commit}`")
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(VersionCommand(bot))
