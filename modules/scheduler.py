@@ -6,7 +6,7 @@ from datetime import datetime
 from modules import api_provider
 from utils.time_utils import italy_now, parse_utc_to_italy
 from modules.live_loop import run_live_loop, clear_already_posted_today
-from modules.ft_handler import fetch_and_post_ft, post_initial_fts, clear_tracked_matches_today
+from modules.ft_handler import fetch_and_post_ft, clear_tracked_matches_today
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +26,6 @@ async def schedule_day(bot):
     if not fixtures:
         logger.info("📅 No tracked league fixtures found for today or API error. Scheduling will not proceed for this cycle.")
         return
-
-    # ── 2. Post results for any matches already at Full Time ──────────────────
-    logger.info("ℹ️ Checking for any matches already at Full Time to post initial results...")
-    await post_initial_fts(fixtures, bot)
 
     tracked_for_ko_timing = [
         m for m in fixtures

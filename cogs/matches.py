@@ -50,7 +50,20 @@ def build_matches_message(fixtures: list) -> str:
                 time_str = ko_dt.strftime("%H:%M")
                 lines.append(f"• {time_str} — {home} vs {away}")
             elif status == "FT":
-                lines.append(f"• FT: {home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}")
+                ft_event_parts = []
+                for e in m.get('events', []):
+                    if e['type'] == 'Goal':
+                        tag = f" ({e['detail']})" if e['detail'] != "Normal Goal" else ""
+                        side = "(H)" if e['team']['name'] == home else "(A)"
+                        ft_event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']}{tag} {side}")
+                    elif e['type'] == 'Card' and e['detail'] == 'Red Card':
+                        side = "(H)" if e['team']['name'] == home else "(A)"
+                        ft_event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']} (Red Card) {side}")
+                score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
+                if ft_event_parts:
+                    lines.append(f"• FT: {score_str} ({'; '.join(ft_event_parts)})")
+                else:
+                    lines.append(f"• FT: {score_str}")
             else:
                 elapsed = m.get('fixture', {}).get('status', {}).get('elapsed')
                 if status == "HT":
