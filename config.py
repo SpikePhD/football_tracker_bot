@@ -42,7 +42,13 @@ TRACKED_LEAGUE_IDS = [
 ]
 
 # - Tracked individual teams
-AC_MILAN_TEAM_ID = 489
+AC_MILAN_TEAM_ID = 489        # API-Football team ID
+AC_MILAN_ESPN_TEAM_ID = 103   # ESPN team ID
+
+# Leagues AC Milan can appear in (used by !milan to search for next fixture)
+AC_MILAN_LEAGUE_SLUGS = ["ita.1", "ita.coppa_italia", "ita.super_cup",
+                          "uefa.champions", "uefa.europa", "uefa.europa.conf",
+                          "uefa.super_cup", "fifa.cwc"]
 
 # ─ Human-readable league names (shared by matches and competitions cogs)
 LEAGUE_NAME_MAP = {

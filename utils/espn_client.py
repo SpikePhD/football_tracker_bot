@@ -187,6 +187,69 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
         return None
 
 
+# ── Team schedule ─────────────────────────────────────────────────────────────
+
+async def fetch_next_team_fixture_espn(
+    session: aiohttp.ClientSession,
+    espn_team_id: int | str,
+    slugs: list[str],
+) -> dict | None:
+    """
+    Find the next upcoming fixture for a team across a list of league slugs.
+    Returns a normalised match dict (same shape as fetch_all_leagues) or None.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    async def _fetch_schedule(slug: str) -> list[dict]:
+        url = f"{ESPN_BASE}/{slug}/teams/{espn_team_id}/schedule"
+        try:
+            async with session.get(url, timeout=ESPN_TIMEOUT) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json(content_type=None)
+                return data.get("events", [])
+        except Exception as e:
+            logger.warning(f"espn_client: schedule fetch failed for {slug}: {e}")
+            return []
+
+    tasks = [_fetch_schedule(slug) for slug in slugs]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    upcoming: list[tuple] = []  # (datetime, event_dict, league_id)
+    slug_to_league = {}  # built lazily — we only need it for normalization
+
+    # Build reverse slug→league_id map from LEAGUE_SLUG_MAP if available
+    try:
+        from config import LEAGUE_SLUG_MAP
+        slug_to_league = {v: k for k, v in LEAGUE_SLUG_MAP.items()}
+    except ImportError:
+        pass
+
+    for slug, events in zip(slugs, results):
+        if isinstance(events, Exception) or not events:
+            continue
+        league_id = slug_to_league.get(slug, 0)
+        for event in events:
+            date_str = event.get("date", "")
+            if not date_str:
+                continue
+            try:
+                event_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            status_state = event.get("status", {}).get("type", {}).get("state", "pre")
+            if event_dt > now and status_state == "pre":
+                upcoming.append((event_dt, event, league_id))
+
+    if not upcoming:
+        return None
+
+    upcoming.sort(key=lambda x: x[0])
+    event_dt, event, league_id = upcoming[0]
+    return _normalize_event(event, league_id)
+
+
 # ── HTTP requests ─────────────────────────────────────────────────────────────
 
 async def fetch_scoreboard(
