@@ -1,3 +1,35 @@
+**Football Tracker Bot v3.1.0**
+Author: SpikePhD
+UX Polish, Persistent Memory & Deployment Improvements:
+
+• !matches Grouped by Competition:
+  • Fixtures now grouped under bold competition headers, sorted by first kick-off time.
+  • FT matches show full scorer details inline (e.g. FT: Milan 2-1 Inter (30' - Leao (H); 77' - Giroud (H))).
+  • Live matches show current minute and full event list (e.g. LIVE [67']: Milan 1-0 Inter (30' - Leao (H))).
+• Morning Fixture Broadcast:
+  • Bot automatically posts a greeting + today's grouped fixture list at 06:30 AM (Italy time) every day.
+• Improved Startup Message:
+  • On restart, bot posts the full grouped fixture list alongside "I am back Online".
+  • Removed duplicate FT announcements that previously appeared separately after startup.
+• Silent / Verbose Mode:
+  • !silent (aliases: !Silent, !SILENT) — pauses automatic broadcasts (startup message, morning list).
+  • !verbose (aliases: !Verbose, !VERBOSE) — resumes automatic broadcasts.
+  • Live match updates, FT results, and all commands always work regardless of mode.
+  • Mode persists across restarts via bot_memory/state.json.
+• Persistent Bot Memory:
+  • New bot_memory/ folder (Pi-owned, gitignored) for runtime state that survives updates.
+  • New inject_memory/ folder (GitHub-controlled) for reference data (Milan calendar, etc.).
+  • New modules/storage.py — thin JSON read/write wrapper for bot_memory/.
+• Deployment Improvements:
+  • New update.sh script replaces manual update steps: pulls code, initialises missing bot_memory/
+    files with safe defaults, restarts the service.
+  • New update_bot.bat — one double-click on Windows to deploy the latest version to the Pi.
+• Bug Fixes:
+  • Fixed ESPN goal times displayed as raw seconds (e.g. 1800') instead of minutes (30').
+  • Fixed missing goal scorers when ESPN reports score changes before populating event details
+    (deduplication key now includes event count, not just scoreline).
+  • Fixed LEAGUE_NAME_MAP duplicated between cogs — moved to config.py as single source of truth.
+
 **Football Tracker Bot v3.0.0**
 Author: SpikePhD
 ESPN Integration & Major Reliability Overhaul:

@@ -1,6 +1,8 @@
-# Football Tracker Bot
+# Football Tracker Bot — Marco Van Botten
 
-A Discord bot that monitors live football matches and posts real-time score updates, goal events, red cards, and full-time results to a Discord channel. Built around the [API-Football](https://www.api-football.com/) (v3) API and [discord.py](https://discordpy.readthedocs.io/).
+A Discord bot that monitors live football matches and posts real-time score updates, goal events, red cards, and full-time results to a Discord channel.
+
+Primary data source: [ESPN public API](https://github.com/pseudo-r/Public-ESPN-API) (no auth, no rate limits, polled every 60 seconds). [API-Football v3](https://www.api-football.com/) is kept as an automatic fallback.
 
 The bot has a particular focus on AC Milan and the major Italian and European competitions, but any set of leagues can be tracked via configuration.
 
@@ -8,24 +10,30 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 
 ## Features
 
-- Posts live score updates every 8 minutes (goals, red cards)
-- Posts full-time results with scorer/event details
-- Catches matches already underway or finished when the bot starts
-- Daily schedule: fetches fixtures at 11:00 AM (Italy time), sleeps until first kick-off, then polls until midnight
+- Live score updates every **60 seconds** via ESPN (goals, red cards, current minute)
+- Full-time results with complete scorer and event details
+- **Grouped by competition** — `!matches` shows fixtures under bold league headers
+- **Morning broadcast** at 06:30 AM (Italy time) — greeting + today's grouped fixture list
+- **Startup snapshot** — on restart, immediately posts the day's fixture status
+- Daily schedule: scheduler kicks off at 11:00 AM (Italy time), sleeps until first kick-off, polls until midnight
+- Automatic fallback to API-Football if ESPN is unavailable (3-strike threshold, 10-minute retry)
+- Silent/verbose mode to suppress automatic broadcasts without stopping live updates
+- Persistent bot memory — state survives restarts and code updates
 - Disables OS sleep on startup so the bot stays online on a home machine
-- Auto-update script for unattended deployment via `systemd`
 
 ### Discord Commands
 
 | Command | Aliases | Description |
 |---|---|---|
-| `!matches` | — | Lists today's tracked fixtures with current status |
-| `!competitions` | — | Lists all competitions being tracked |
-| `!milan` | `!nextmilan`, `!acmilan` | Shows AC Milan's next scheduled match |
-| `!hi` | `!hello` | Alive check / greeting |
-| `!changelog` | — | Displays the contents of `CHANGELOG.md` |
+| `!matches` | — | Today's tracked fixtures grouped by competition, with live minutes and scorers |
+| `!competitions` | — | Lists all tracked competitions |
+| `!milan` | `!nextmilan`, `!acmilan` | AC Milan's next scheduled match |
+| `!hi` | `!hello` | Alive check / random greeting |
+| `!changelog` | — | Displays the version changelog |
 | `!version` | — | Shows the current bot version |
-| `!api` | `!apistatus`, `!provider` | Shows which data API is active (ESPN or API-Football fallback) |
+| `!api` | `!apistatus`, `!provider` | Shows active data provider (ESPN or API-Football fallback) |
+| `!silent` | `!Silent`, `!SILENT` | Pause automatic broadcasts (startup, morning message) |
+| `!verbose` | `!Verbose`, `!VERBOSE` | Resume automatic broadcasts |
 
 ---
 
@@ -33,7 +41,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 
 - Python 3.11+
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
-- An API-Football API key ([api-football.com](https://www.api-football.com/))
+- An API-Football API key ([api-football.com](https://www.api-football.com/)) — used as fallback only
 - A Discord channel ID where the bot will post updates
 
 ---
@@ -43,7 +51,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/football_tracker_bot.git
+git clone https://github.com/SpikePhD/football_tracker_bot.git
 cd football_tracker_bot
 ```
 
@@ -63,8 +71,6 @@ pip install -r requirements.txt
 
 ### 4. Configure environment variables
 
-Copy the example file and fill in your values:
-
 ```bash
 cp .env.example .env
 ```
@@ -77,19 +83,7 @@ API_KEY=your_api_football_key_here
 CHANNEL_ID=123456789012345678
 ```
 
-### 5. (Optional) Adjust tracked leagues
-
-Edit `config.py` to change which competitions are tracked. The `TRACKED_LEAGUE_IDS` list uses API-Football league IDs:
-
-```python
-TRACKED_LEAGUE_IDS = [
-    135,  # Serie A
-    2,    # Champions League
-    # ... add or remove as needed
-]
-```
-
-### 6. Run the bot
+### 5. Run the bot
 
 ```bash
 python football_tracker_bot.py
@@ -97,9 +91,7 @@ python football_tracker_bot.py
 
 ---
 
-## Deployment (Linux / systemd)
-
-The bot is designed to run as a persistent `systemd` service with optional auto-updates.
+## Deployment (Raspberry Pi / Linux / systemd)
 
 ### Create a systemd service
 
@@ -107,7 +99,7 @@ Create `/etc/systemd/system/marco_van_botten.service`:
 
 ```ini
 [Unit]
-Description=Football Tracker Discord Bot
+Description=Marco Van Botten Football Tracker Bot
 After=network-online.target
 Wants=network-online.target
 
@@ -134,17 +126,20 @@ sudo systemctl start marco_van_botten
 sudo journalctl -u marco_van_botten -f   # follow logs
 ```
 
-### Auto-update script
+### Updating the bot
 
-`auto_update.sh` checks for new commits on the `main` branch and restarts the service if updates are found. Schedule it with cron:
+**From Windows** — double-click `update_bot.bat`. This SSH-es into the Pi and runs `update.sh` automatically.
+
+**From the Pi directly:**
 
 ```bash
-crontab -e
-# Add:
-0 * * * * /home/lucac/football_tracker_bot/auto_update.sh
+cd ~/football_tracker_bot && bash update.sh
 ```
 
-Configure the paths at the top of `auto_update.sh` to match your deployment.
+`update.sh` does the following safely:
+1. `git pull` — fetches the latest code and `inject_memory/` contents
+2. Creates any new `bot_memory/` files with safe defaults — **never overwrites existing Pi state**
+3. Restarts the `marco_van_botten` systemd service
 
 ---
 
@@ -152,50 +147,107 @@ Configure the paths at the top of `auto_update.sh` to match your deployment.
 
 ```
 football_tracker_bot/
-├── football_tracker_bot.py   # Entry point — bot setup, lifecycle, daily trigger
-├── config.py                 # Environment config and league/team IDs
-├── requirements.txt
-├── auto_update.sh            # Unattended update + service restart script
 │
-├── cogs/                     # Discord command extensions (loaded dynamically)
-│   ├── matches.py            # !matches command
-│   ├── competitions.py       # !competitions command
-│   ├── milan_command.py      # !milan command
-│   ├── hello.py              # !hi / !hello command
-│   ├── changelog.py          # !changelog command
-│   ├── version.py            # !version command
-│   └── api_status.py         # !api command (shows active data provider)
+├── football_tracker_bot.py   # Entry point — bot lifecycle, task loops, cog loading
+├── config.py                 # All config: secrets, league IDs, league names, ESPN slugs
+├── requirements.txt
+├── update.sh                 # Safe deployment script for the Pi
+├── update_bot.bat            # One-click Windows updater (SSH → update.sh)
+├── auto_update.sh            # Unattended auto-update via cron
+│
+├── bot_memory/               # Pi-owned runtime state (gitignored, never overwritten)
+│   └── state.json            # {"silent": false} — persists across restarts
+│
+├── inject_memory/            # GitHub-controlled reference data (updated on git pull)
+│   └── (milan_calendar.json, etc. — added as needed)
+│
+├── cogs/                     # Discord command extensions (loaded dynamically at startup)
+│   ├── matches.py            # !matches — grouped fixture list with scorers
+│   ├── competitions.py       # !competitions
+│   ├── milan_command.py      # !milan / !nextmilan
+│   ├── hello.py              # !hi / !hello
+│   ├── changelog.py          # !changelog
+│   ├── version.py            # !version
+│   ├── api_status.py         # !api — live provider status
+│   └── mode.py               # !silent / !verbose — broadcast mode toggle
 │
 ├── modules/                  # Core bot logic
-│   ├── scheduler.py          # Daily cycle: fetch → wait for KO → poll loop
-│   ├── live_loop.py          # Live fixture polling and deduplication
-│   ├── ft_handler.py         # Full-time result detection and posting
+│   ├── scheduler.py          # Daily cycle: fetch → sleep until KO → poll loop
+│   ├── live_loop.py          # Live fixture polling and score deduplication
+│   ├── ft_handler.py         # Full-time detection and result posting
 │   ├── api_provider.py       # ESPN primary / API-Football fallback coordination
 │   ├── discord_poster.py     # Centralised Discord message sending
+│   ├── bot_mode.py           # Silent/verbose flag (reads/writes bot_memory/state.json)
+│   ├── storage.py            # JSON read/write wrapper for bot_memory/
 │   └── power_manager.py      # OS sleep prevention
 │
 └── utils/                    # Stateless utilities
-    ├── espn_client.py        # ESPN public API client (no auth, no rate limit)
-    ├── api_client.py         # API-Football client (fallback)
+    ├── espn_client.py        # ESPN public API client — fetches and normalises match data
+    ├── api_client.py         # API-Football client (fallback path)
     ├── time_utils.py         # Italy timezone helpers
-    └── personality.py        # Greeting message variants
+    └── personality.py        # Greeting and startup message variants
 ```
+
+---
+
+## Architecture
+
+```
+football_tracker_bot.py
+    └── on_ready()
+            ├── loads all cogs/ dynamically
+            ├── posts startup message (greeting + grouped fixture list)  [verbose mode only]
+            ├── starts six_thirty_morning_trigger (tasks.loop @ 06:30)   [verbose mode only]
+            ├── starts eleven_am_daily_trigger (tasks.loop @ 11:00)
+            └── calls launch_daily_operations_manager()
+                    └── schedule_day()                       ← modules/scheduler.py
+                            ├── api_provider.fetch_day()     ← modules/api_provider.py
+                            │       ├── espn_client (primary, 60s poll)
+                            │       └── api_client  (fallback, 480s poll)
+                            ├── [sleep until first KO]
+                            └── loop every 60s (ESPN) / 480s (fallback):
+                                    ├── run_live_loop()      ← modules/live_loop.py
+                                    └── fetch_and_post_ft()  ← modules/ft_handler.py
+
+All Discord sends → modules/discord_poster.py
+Bot memory reads/writes → modules/storage.py → bot_memory/state.json
+```
+
+### Data flow — ESPN primary path
+
+1. `api_provider.fetch_day()` fetches all 18 leagues concurrently via `espn_client.fetch_all_leagues()`
+2. Results are cached for 55 seconds — subsequent calls within the window hit the cache
+3. `espn_client` normalises ESPN's response format into the same dict shape used by API-Football, so all downstream code is provider-agnostic
+4. If ESPN fails 3 times consecutively, `api_provider` switches to API-Football and logs the transition loudly
+5. After 10 minutes, ESPN is probed again; on success the bot switches back automatically
+
+### Deduplication — live updates
+
+`live_loop.py` tracks which score states have already been posted using a key:
+
+```
+{match_id}_{home_goals}-{away_goals}_{event_count}
+```
+
+The event count is included because ESPN sometimes reports a score change before populating the scorer details. Including it ensures a follow-up post when scorer data arrives.
 
 ---
 
 ## Configuration Reference
 
-All secrets are loaded from `.env` via `python-dotenv`. The bot will raise a clear `RuntimeError` at startup if any required variable is missing.
+Secrets are loaded from `.env` via `python-dotenv`. The bot raises a clear `RuntimeError` at startup if any are missing.
 
 | Variable | Required | Description |
 |---|---|---|
 | `BOT_TOKEN` | Yes | Discord bot token |
-| `API_KEY` | Yes | API-Football (v3) key |
-| `CHANNEL_ID` | Yes | Discord channel ID for live updates |
+| `API_KEY` | Yes | API-Football (v3) key (fallback only) |
+| `CHANNEL_ID` | Yes | Discord channel ID for all updates |
 
-Non-secret configuration lives in `config.py`:
+Non-secret config lives in `config.py`:
 
 | Name | Description |
 |---|---|
 | `TRACKED_LEAGUE_IDS` | List of API-Football league IDs to monitor |
-| `AC_MILAN_TEAM_ID` | Team ID used by the `!milan` command (default: 489) |
+| `LEAGUE_NAME_MAP` | Maps league ID → human-readable name (shared by all cogs) |
+| `LEAGUE_SLUG_MAP` | Maps league ID → ESPN URL slug |
+| `AC_MILAN_TEAM_ID` | Team ID used by `!milan` command (default: 489) |
