@@ -56,6 +56,8 @@ def _map_status(state: str, period: int, description: str, status_name: str) -> 
 def _normalize_details(details: list, team_id_to_name: dict) -> list:
     """Convert ESPN competition details (goals, cards) to API-Football event format."""
     events = []
+    seen: set = set()  # deduplicate ESPN duplicate entries by (minute, player, type)
+
     for detail in details:
         etype = detail.get("type", {}).get("text", "")
         athletes = detail.get("athletesInvolved", [])
@@ -63,6 +65,11 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
         clock_val = int(detail.get("clock", {}).get("value", 0)) // 60
         team_id = detail.get("team", {}).get("id")
         team_name = team_id_to_name.get(team_id, "Unknown")
+
+        dedup_key = (clock_val, player_name, etype)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
 
         if etype == "Goal":
             events.append({

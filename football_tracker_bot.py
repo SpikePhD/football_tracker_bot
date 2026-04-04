@@ -125,6 +125,11 @@ async def six_thirty_morning_trigger():
     except Exception as e:
         logger.error(f"❌ Morning trigger: failed to send message: {e}", exc_info=True)
 
+@tasks.loop(time=time(hour=0, minute=1, tzinfo=italy_tz))
+async def midnight_trigger():
+    logger.info("🌙 00:01 AM (Europe/Rome) – Midnight trigger: restarting daily operations for new day.")
+    await launch_daily_operations_manager(bot)
+
 @tasks.loop(time=time(hour=11, minute=0, tzinfo=italy_tz))
 async def eleven_am_daily_trigger():
     logger.info("⏰ 11:00 AM (Europe/Rome) – Triggering daily operations schedule manager.")
@@ -181,6 +186,13 @@ async def on_ready():
         except RuntimeError as e:
             logger.error(f"❌ Failed to start 'six_thirty_morning_trigger': {e}.", exc_info=True)
 
+    if not midnight_trigger.is_running():
+        try:
+            midnight_trigger.start()
+            logger.info("Task loop 'midnight_trigger' has been started.")
+        except RuntimeError as e:
+            logger.error(f"❌ Failed to start 'midnight_trigger': {e}.", exc_info=True)
+
     if not eleven_am_daily_trigger.is_running():
         try:
             eleven_am_daily_trigger.start()
@@ -212,6 +224,9 @@ async def main():
         if six_thirty_morning_trigger.is_running():
             six_thirty_morning_trigger.cancel()
             logger.info("Task loop 'six_thirty_morning_trigger' cancelled.")
+        if midnight_trigger.is_running():
+            midnight_trigger.cancel()
+            logger.info("Task loop 'midnight_trigger' cancelled.")
         if eleven_am_daily_trigger.is_running():
             eleven_am_daily_trigger.cancel()
             logger.info("Task loop 'eleven_am_daily_trigger' cancelled.")

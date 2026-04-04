@@ -12,12 +12,32 @@ from modules.discord_poster import post_new_general_message
 logger = logging.getLogger(__name__)
 
 tracked_matches = {}  # {match_id: {"exp_ft": datetime, "initial_score_at_tracking": {...}}}
+_already_announced_ft: set = set()  # match IDs that have already received a FT announcement
 
 
 def clear_tracked_matches_today():
-    global tracked_matches
+    global tracked_matches, _already_announced_ft
     logger.info("🔄 Clearing 'tracked_matches' dictionary for the new day.")
     tracked_matches.clear()
+    _already_announced_ft.clear()
+
+
+def seed_already_announced_ft(fixtures: list) -> None:
+    """
+    Pre-populate the announced-FT set with matches already finished when the
+    scheduler starts. Prevents re-announcing results already visible in the
+    startup/morning broadcast message.
+    """
+    global _already_announced_ft
+    count = 0
+    for match in fixtures:
+        if match.get("fixture", {}).get("status", {}).get("short") == "FT":
+            mid = match["fixture"].get("id")
+            if mid:
+                _already_announced_ft.add(mid)
+                count += 1
+    if count:
+        logger.info(f"🌱 Seeded {count} already-FT match IDs (will not re-announce).")
 
 
 def track_match_for_ft(match_data: dict):
@@ -123,7 +143,18 @@ async def fetch_and_post_ft(bot: discord.Client):
 
             match_details = finished_by_id[match_id]
             await _post_ft_from_data(bot, match_details)
+            _already_announced_ft.add(match_id)
             del tracked_matches[match_id]
+
+        # Orphan FT detection: matches that reached FT without being seen as LIVE
+        # (e.g. bot was offline, or match finished before scheduler started polling).
+        for match in finished:
+            mid = match["fixture"]["id"]
+            if mid in tracked_matches or mid in _already_announced_ft:
+                continue
+            logger.info(f"🆕 [Orphan FT] Announcing untracked FT match {mid}.")
+            await _post_ft_from_data(bot, match)
+            _already_announced_ft.add(mid)
 
     else:
         # ── API-Football fallback path ─────────────────────────────────────────
