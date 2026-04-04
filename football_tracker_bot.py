@@ -137,7 +137,10 @@ async def on_ready():
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
         try:
-            await channel.send(greet_message())
+            fixtures = await api_provider.fetch_day(bot.http_session)
+            fixtures.sort(key=lambda m: m['fixture']['date'])
+            content = f"{greet_message()}\n\n{build_matches_message(fixtures)}"
+            await channel.send(content)
         except discord.Forbidden:
             logger.error(f"❌ Missing permissions to send greeting message to channel ID: {CHANNEL_ID}.")
         except Exception as e:
