@@ -44,6 +44,28 @@ TRACKED_LEAGUE_IDS = [
 # - Tracked individual teams
 AC_MILAN_TEAM_ID = 489
 
+# ─ Human-readable league names (shared by matches and competitions cogs)
+LEAGUE_NAME_MAP = {
+    135:  "Serie A",
+    137:  "Coppa Italia",
+    547:  "Supercoppa Italiana",
+    39:   "Premier League",
+    45:   "FA Cup",
+    48:   "Carabao Cup",
+    528:  "Community Shield",
+    140:  "La Liga",
+    143:  "Copa del Rey",
+    556:  "Supercopa de España",
+    2:    "Champions League",
+    3:    "Europa League",
+    848:  "Conference League",
+    531:  "UEFA Super Cup",
+    1168: "Intercontinental Cup",
+    15:   "Club World Cup",
+    1:    "FIFA World Cup",
+    4:    "UEFA EURO",
+}
+
 # ─ ESPN league slugs (maps API-Football league ID → ESPN URL slug)
 LEAGUE_SLUG_MAP = {
     135:  "ita.1",               # Serie A
