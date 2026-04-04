@@ -8,7 +8,6 @@ from .time_utils import get_current_season_year, parse_utc_to_italy
 
 from config import API_KEY, TRACKED_LEAGUE_IDS
 from utils.time_utils import get_italy_date_string
-# from modules.verbose_logger import log_error, log_warning, log_info
 
 logger = logging.getLogger(__name__)
 

@@ -4,7 +4,6 @@ import os
 import platform
 import atexit
 import logging
-# from modules.verbose_logger import log_info
 
 logger = logging.getLogger(__name__)
 

@@ -14,7 +14,6 @@ logging.basicConfig(
 
 import os
 import asyncio
-import pytz
 from datetime import time
 
 import discord
@@ -28,35 +27,15 @@ from modules.scheduler import schedule_day
 from modules import api_provider
 from modules.bot_mode import is_verbose, get_mode
 from cogs.matches import build_matches_message
-import subprocess, pathlib
+from cogs.version import get_version_info
+from utils.time_utils import italy_tz
 
 logger = logging.getLogger(__name__)
-
-REPO_DIR = pathlib.Path(__file__).resolve().parent
-if not (REPO_DIR / ".git").is_dir():
-    REPO_DIR = REPO_DIR.parent
-
-def current_git_commit() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "-C", str(REPO_DIR), "describe", "--always", "--dirty", "--tags"],
-            text=True, stderr=subprocess.STDOUT
-        ).strip()
-    except Exception:
-        try:
-            return subprocess.check_output(
-                ["git", "-C", str(REPO_DIR), "rev-parse", "--short", "HEAD"],
-                text=True, stderr=subprocess.STDOUT
-            ).strip()
-        except Exception:
-            return "unknown"
 
 # --- Intents & bot setup ---
 intents = discord.Intents.default()
 intents.message_content = True # Ensure this is enabled if you use message content
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-italy_tz = pytz.timezone("Europe/Rome")
 current_day_scheduler_task: asyncio.Task | None = None
 
 # --- HTTP Session Management ---
@@ -139,7 +118,7 @@ async def eleven_am_daily_trigger():
 @bot.event
 async def on_ready():
     logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    logger.info(f"🚀 Running bot from commit: {current_git_commit()}")
+    logger.info(f"🚀 Running bot from commit: {get_version_info()['sha']}")
     await ensure_http_session(bot) # Ensure session is ready
     setup_power_management()
 
@@ -206,7 +185,7 @@ async def on_resumed():
     """Called when the bot successfully resumes a session after a disconnection."""
     logger.info("🔄 Discord session RESUMED. Ensuring HTTP session is active.")
     await ensure_http_session(bot)
-    logger.info(f"🔄 Discord session RESUMED. Commit: {current_git_commit()}")
+    logger.info(f"🔄 Discord session RESUMED. Commit: {get_version_info()['sha']}")
 
 @bot.event
 async def on_disconnect():

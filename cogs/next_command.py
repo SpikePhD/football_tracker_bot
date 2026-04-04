@@ -2,7 +2,7 @@
 import logging
 from discord.ext import commands
 
-from config import LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, DOMESTIC_SLUG_GROUPS, INTERNATIONAL_SLUGS
+from config import LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, build_league_slugs
 from utils.espn_client import search_team_espn, fetch_next_team_fixture_espn
 from utils.time_utils import parse_utc_to_italy
 from modules.discord_poster import post_new_message_to_context
@@ -10,11 +10,6 @@ from modules.discord_poster import post_new_message_to_context
 logger = logging.getLogger(__name__)
 
 _TRACKED_SLUGS: set = set(LEAGUE_SLUG_MAP.values())
-
-
-def _build_slugs(primary_slug: str) -> list:
-    domestic = DOMESTIC_SLUG_GROUPS.get(primary_slug, [primary_slug])
-    return list(dict.fromkeys(domestic + INTERNATIONAL_SLUGS))
 
 
 class NextCommand(commands.Cog):
@@ -40,7 +35,7 @@ class NextCommand(commands.Cog):
             return
 
         espn_team_id, primary_slug = result
-        slugs = _build_slugs(primary_slug)
+        slugs = build_league_slugs(primary_slug)
 
         match = await fetch_next_team_fixture_espn(self.bot.http_session, espn_team_id, slugs)
         if match is None:

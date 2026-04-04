@@ -2,7 +2,7 @@
 import logging
 from discord.ext import commands
 
-from config import AC_MILAN_TEAM_ID, AC_MILAN_ESPN_TEAM_ID, AC_MILAN_LEAGUE_SLUGS, LEAGUE_NAME_MAP
+from config import AC_MILAN_TEAM_ID, AC_MILAN_ESPN_TEAM_ID, LEAGUE_NAME_MAP, build_league_slugs
 from utils.espn_client import fetch_next_team_fixture_espn
 from utils.time_utils import parse_utc_to_italy
 from modules.discord_poster import post_new_message_to_context
@@ -25,7 +25,7 @@ class MilanCommand(commands.Cog):
         match = await fetch_next_team_fixture_espn(
             self.bot.http_session,
             AC_MILAN_ESPN_TEAM_ID,
-            AC_MILAN_LEAGUE_SLUGS,
+            build_league_slugs("ita.1"),
         )
 
         if not match:

@@ -5,6 +5,7 @@ from discord.ext import commands
 from config import LEAGUE_NAME_MAP
 from modules import api_provider
 from utils.time_utils import parse_utc_to_italy, italy_now
+from utils.event_formatter import format_match_events
 from modules.discord_poster import post_new_message_to_context
 
 logger = logging.getLogger(__name__)
@@ -50,15 +51,7 @@ def build_matches_message(fixtures: list) -> str:
                 time_str = ko_dt.strftime("%H:%M")
                 lines.append(f"• {time_str} — {home} vs {away}")
             elif status == "FT":
-                ft_event_parts = []
-                for e in m.get('events', []):
-                    if e['type'] == 'Goal':
-                        tag = f" ({e['detail']})" if e['detail'] != "Normal Goal" else ""
-                        side = "(H)" if e['team']['name'] == home else "(A)"
-                        ft_event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']}{tag} {side}")
-                    elif e['type'] == 'Card' and e['detail'] == 'Red Card':
-                        side = "(H)" if e['team']['name'] == home else "(A)"
-                        ft_event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']} (Red Card) {side}")
+                ft_event_parts = format_match_events(m.get('events', []), home, away)
                 score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
                 if ft_event_parts:
                     lines.append(f"• FT: {score_str} ({'; '.join(ft_event_parts)})")
@@ -73,16 +66,7 @@ def build_matches_message(fixtures: list) -> str:
                 else:
                     minute_str = status
 
-                event_parts = []
-                for e in m.get('events', []):
-                    if e['type'] == 'Goal':
-                        tag = f" ({e['detail']})" if e['detail'] != "Normal Goal" else ""
-                        side = "(H)" if e['team']['name'] == home else "(A)"
-                        event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']}{tag} {side}")
-                    elif e['type'] == 'Card' and e['detail'] == 'Red Card':
-                        side = "(H)" if e['team']['name'] == home else "(A)"
-                        event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']} (Red Card) {side}")
-
+                event_parts = format_match_events(m.get('events', []), home, away)
                 score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
                 if event_parts:
                     lines.append(f"• LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)})")

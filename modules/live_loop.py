@@ -7,6 +7,7 @@ from config import CHANNEL_ID
 from modules import api_provider
 from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
+from utils.event_formatter import format_match_events
 from modules.ft_handler import track_match_for_ft
 from modules.discord_poster import post_live_update
 
@@ -43,9 +44,6 @@ async def run_live_loop(bot):
     # For now, we'll pass CHANNEL_ID and let discord_poster resolve it.
 
     for match in matches:
-        # Redundant league filtering (if league_id not in TRACKED_LEAGUE_IDS)
-        # should have been removed in a previous step, as api_client.fetch_live_fixtures now filters.
-
         match_id = match['fixture']['id']
         home = match['teams']['home']['name']
         away = match['teams']['away']['name']
@@ -56,29 +54,14 @@ async def run_live_loop(bot):
         if key in already_posted:
             continue
 
-        event_strings = []
-
-        for e in events:
-            minute = e['time']['elapsed']
-            player = e['player']['name']
-            side = "(H)" if e['team']['name'] == home else "(A)"
-
-            if e['type'] == 'Goal':
-                detail = e['detail']
-                tag = f" ({detail})" if detail != "Normal Goal" else ""
-                event_strings.append(f"{minute}' - {player}{tag} {side}")
-            elif e['type'] == 'Card' and e['detail'] == 'Red Card':
-                event_strings.append(f"{minute}' - {player} (Red Card) {side}")
+        event_strings = format_match_events(events, home, away)
 
         already_posted.add(key)
-        track_match_for_ft(match) # This remains important
+        track_match_for_ft(match)
 
-        # Prepare the content string for the update
         line_content = f"{home} {score['home']} - {score['away']} {away}"
         if event_strings:
             line_content += " (" + "; ".join(event_strings) + ")"
 
-        # It will handle getting the channel object, deciding to edit/send new, and actual sending.
-        logger.info(f"📢 Preparing to post/edit live update via DiscordPoster: {line_content}")
+        logger.info(f"📢 Posting live update: {line_content}")
         await post_live_update(bot, CHANNEL_ID, content=line_content)
-        # The actual "Editing message..." or "Sending new message..." log will now come from discord_poster.py

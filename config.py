@@ -45,11 +45,6 @@ TRACKED_LEAGUE_IDS = [
 AC_MILAN_TEAM_ID = 489        # API-Football team ID
 AC_MILAN_ESPN_TEAM_ID = 103   # ESPN team ID
 
-# Leagues AC Milan can appear in (used by !milan to search for next fixture)
-AC_MILAN_LEAGUE_SLUGS = ["ita.1", "ita.coppa_italia", "ita.super_cup",
-                          "uefa.champions", "uefa.europa", "uefa.europa.conf",
-                          "uefa.super_cup", "fifa.cwc"]
-
 # ─ Human-readable league names (shared by matches and competitions cogs)
 LEAGUE_NAME_MAP = {
     135:  "Serie A",
@@ -84,6 +79,15 @@ DOMESTIC_SLUG_GROUPS = {
     "eng.1": ["eng.1", "eng.fa", "eng.league_cup", "eng.charity"],
     "esp.1": ["esp.1", "esp.copa_del_rey", "esp.super_cup"],
 }
+
+
+def build_league_slugs(primary_slug: str) -> list:
+    """
+    Return the full list of ESPN league slugs to search for a team's next fixture.
+    Combines the domestic group for the given primary slug with all international slugs.
+    """
+    domestic = DOMESTIC_SLUG_GROUPS.get(primary_slug, [primary_slug])
+    return list(dict.fromkeys(domestic + INTERNATIONAL_SLUGS))
 
 # ─ ESPN league slugs (maps API-Football league ID → ESPN URL slug)
 LEAGUE_SLUG_MAP = {

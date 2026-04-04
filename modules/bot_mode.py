@@ -17,7 +17,8 @@ def get_mode() -> str:
 
 
 def set_mode(mode: str) -> None:
-    assert mode in _VALID_MODES, f"Invalid mode: {mode}"
+    if mode not in _VALID_MODES:
+        raise ValueError(f"Invalid mode: {mode!r}. Must be one of {_VALID_MODES}.")
     state = load(_STATE_FILE, _DEFAULTS)
     state["mode"] = mode
     save(_STATE_FILE, state)

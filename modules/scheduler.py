@@ -78,11 +78,8 @@ async def schedule_day(bot):
     )
 
     counter = 1
-    approx_total_cycles = 0
-    if italy_now() < end_of_day:
-        initial_remaining_seconds = (end_of_day - italy_now()).total_seconds()
-        if initial_remaining_seconds > 0:
-            approx_total_cycles = max(1, initial_remaining_seconds / interval)
+    _now = italy_now()
+    approx_total_cycles = max(1, (end_of_day - _now).total_seconds() / interval) if _now < end_of_day else 0
 
     while italy_now() < end_of_day:
         interval = api_provider.get_poll_interval()

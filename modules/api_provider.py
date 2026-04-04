@@ -218,10 +218,3 @@ async def fetch_fixture(session: aiohttp.ClientSession, fixture_id) -> dict | No
     """
     return await api_client.fetch_fixture_by_id(session, fixture_id)
 
-
-async def fetch_next_team_fixture(session: aiohttp.ClientSession, team_id: int) -> dict | None:
-    """
-    Fetch the next scheduled fixture for a team.
-    Always uses API-Football (ESPN team ID mapping deferred).
-    """
-    return await api_client.fetch_next_team_fixture(session, team_id)

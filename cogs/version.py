@@ -4,15 +4,12 @@ import logging
 import subprocess
 import pathlib
 from discord.ext import commands
+from modules.discord_poster import post_new_message_to_context
 
 logger = logging.getLogger(__name__)
 
-# Resolve repo root (works whether this file is in cogs/ or repo root)
-REPO_DIR = pathlib.Path(__file__).resolve().parent
-if (REPO_DIR / ".git").is_dir():
-    pass
-else:
-    REPO_DIR = REPO_DIR.parent
+# Resolve repo root (parent of the cogs/ directory)
+REPO_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 def _git(*args) -> str:
     try:
@@ -51,7 +48,6 @@ class VersionCommand(commands.Cog):
             f"Last update: `{info['date']}`\n"
             f"Message: {info['message']}"
         )
-        from modules.discord_poster import post_new_message_to_context
         await post_new_message_to_context(ctx, content=msg)
 
 async def setup(bot: commands.Bot):

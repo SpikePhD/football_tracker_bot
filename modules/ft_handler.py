@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from config import CHANNEL_ID
 from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
+from utils.event_formatter import format_match_events
 from modules.discord_poster import post_new_general_message
 
 logger = logging.getLogger(__name__)
@@ -76,28 +77,9 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     goals = match_details.get("goals", {"home": "?", "away": "?"})
     events = match_details.get("events", [])
 
-    detail_lines = []
-    for e_event in events:
-        minute = e_event.get("time", {}).get("elapsed", "?")
-        player_name = e_event.get("player", {}).get("name", "N/A")
-        team_name_event = e_event.get("team", {}).get("name")
+    detail_lines = format_match_events(events, home_team, away_team)
 
-        side_tag = ""
-        if team_name_event == home_team:
-            side_tag = "(H)"
-        elif team_name_event == away_team:
-            side_tag = "(A)"
-
-        event_type = e_event.get("type")
-        event_detail = e_event.get("detail")
-
-        if event_type == "Goal":
-            extra = f" ({event_detail})" if event_detail and event_detail != "Normal Goal" else ""
-            detail_lines.append(f"{minute}' – {player_name}{extra} {side_tag}")
-        elif event_type == "Card" and event_detail == "Red Card":
-            detail_lines.append(f"{minute}' – {player_name} {side_tag} (Red Card)")
-
-    ft_message = f"FT: {home_team} {goals.get('home', '?')} – {goals.get('away', '?')} {away_team}"
+    ft_message = f"FT: {home_team} {goals.get('home', '?')} - {goals.get('away', '?')} {away_team}"
     if detail_lines:
         ft_message += f" ({'; '.join(detail_lines)})"
 
@@ -209,33 +191,3 @@ async def fetch_and_post_ft(bot: discord.Client):
             await _post_ft_from_data(bot, normalized)
             del tracked_matches[match_id]
 
-
-# ── Initial FT check on startup ───────────────────────────────────────────────
-
-async def post_initial_fts(fixtures_list: list, bot: discord.Client):
-    """Post FT results for matches already finished when the bot fetches today's fixtures."""
-    logger.info(f"🔎 Checking {len(fixtures_list)} fetched fixtures for initial FT posts.")
-    ft_posted_count = 0
-
-    for match_data in fixtures_list:
-        fixture_details = match_data.get("fixture", {})
-        if fixture_details.get("status", {}).get("short") != "FT":
-            continue
-
-        match_id = fixture_details.get("id")
-        if not match_id:
-            logger.warning("⚠️ Found a fixture marked FT but without an ID. Skipping.")
-            continue
-
-        ft_posted_count += 1
-        logger.info(f"Found match ID {match_id} already FT in initial list. Posting...")
-
-        if not match_data.get("events"):
-            logger.warning(f"ℹ️ Match ID {match_id} (initial FT) has no event data. Result will have no scorer details.")
-
-        await _post_ft_from_data(bot, match_data)
-
-    if ft_posted_count == 0:
-        logger.info("✅ No matches were already FT from the fetched list for initial posting.")
-    else:
-        logger.info(f"✅ Processed and posted {ft_posted_count} initially FT matches.")
