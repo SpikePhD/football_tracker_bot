@@ -141,6 +141,13 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
         status_name = status_type.get("name", "")
         status_short = _map_status(state, period, description, status_name)
 
+        # Current match minute (live matches only)
+        display_clock = status_obj.get("displayClock", "")
+        try:
+            elapsed_min = int(display_clock.split(":")[0]) if display_clock else int(status_obj.get("clock", 0)) // 60
+        except (ValueError, IndexError):
+            elapsed_min = int(status_obj.get("clock", 0)) // 60
+
         # Score (None before match starts)
         if state == "pre":
             home_score = None
@@ -161,7 +168,7 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
             "fixture": {
                 "id": espn_event.get("id"),   # string, e.g. "737084"
                 "date": espn_event.get("date"),  # UTC ISO, e.g. "2026-04-04T13:00Z"
-                "status": {"short": status_short},
+                "status": {"short": status_short, "elapsed": elapsed_min},
             },
             "teams": {
                 "home": {"name": home_team_name},

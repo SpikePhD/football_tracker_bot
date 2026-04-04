@@ -52,7 +52,29 @@ def build_matches_message(fixtures: list) -> str:
             elif status == "FT":
                 lines.append(f"• FT: {home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}")
             else:
-                lines.append(f"• LIVE: {home} {goals.get('home', '?')}-{goals.get('away', '?')} {away} ({status})")
+                elapsed = m.get('fixture', {}).get('status', {}).get('elapsed')
+                if status == "HT":
+                    minute_str = "HT"
+                elif elapsed:
+                    minute_str = f"{elapsed}'"
+                else:
+                    minute_str = status
+
+                event_parts = []
+                for e in m.get('events', []):
+                    if e['type'] == 'Goal':
+                        tag = f" ({e['detail']})" if e['detail'] != "Normal Goal" else ""
+                        side = "(H)" if e['team']['name'] == home else "(A)"
+                        event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']}{tag} {side}")
+                    elif e['type'] == 'Card' and e['detail'] == 'Red Card':
+                        side = "(H)" if e['team']['name'] == home else "(A)"
+                        event_parts.append(f"{e['time']['elapsed']}' - {e['player']['name']} (Red Card) {side}")
+
+                score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
+                if event_parts:
+                    lines.append(f"• LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)})")
+                else:
+                    lines.append(f"• LIVE [{minute_str}]: {score_str}")
 
     return "\n".join(lines)
 
