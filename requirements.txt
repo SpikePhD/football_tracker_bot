@@ -1,3 +1,4 @@
 discord.py==2.3.2
-aiohttp
-pytz
+aiohttp==3.9.5
+pytz==2024.1
+python-dotenv==1.0.1

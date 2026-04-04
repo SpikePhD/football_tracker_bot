@@ -106,7 +106,7 @@ async def launch_daily_operations_manager(bot_instance: commands.Bot):
 @tasks.loop(time=time(hour=11, minute=0, tzinfo=italy_tz))
 async def eleven_am_daily_trigger():
     logger.info("⏰ 11:00 AM (Europe/Rome) – Triggering daily operations schedule manager.")
-    asyncio.create_task(launch_daily_operations_manager(bot))
+    await launch_daily_operations_manager(bot)
 
 # --- Bot Events ---
 @bot.event
@@ -168,40 +168,30 @@ async def on_disconnect():
     """
     logger.warning("🔌 Bot disconnected. Initiating session cleanup. Reconnection will be attempted by discord.py.")
 
-original_bot_close = bot.close
-async def new_bot_close():
-    logger.info("🛑 Bot close initiated. Cleaning up tasks and sessions...")
-    if eleven_am_daily_trigger.is_running():
-        eleven_am_daily_trigger.cancel()
-        logger.info("Task loop 'eleven_am_daily_trigger' cancelled.")
-
-    global current_day_scheduler_task
-    if current_day_scheduler_task and not current_day_scheduler_task.done():
-        current_day_scheduler_task.cancel()
-        logger.info("Current 'schedule_day' task cancelled.")
-        try:
-            await current_day_scheduler_task # Allow it to process cancellation
-        except asyncio.CancelledError:
-            logger.info("'schedule_day' task processed cancellation.")
-        except Exception as e:
-            logger.error(f"Error during 'schedule_day' task cleanup: {e}", exc_info=True)
-
-
-    await cleanup_sessions()
-    await original_bot_close()
-    logger.info("👋 Bot has been shut down gracefully.")
-
-bot.close = new_bot_close
+async def main():
+    try:
+        async with bot:
+            await bot.start(BOT_TOKEN)
+    finally:
+        logger.info("🛑 Shutting down. Cleaning up tasks and sessions...")
+        if eleven_am_daily_trigger.is_running():
+            eleven_am_daily_trigger.cancel()
+            logger.info("Task loop 'eleven_am_daily_trigger' cancelled.")
+        if current_day_scheduler_task and not current_day_scheduler_task.done():
+            current_day_scheduler_task.cancel()
+            logger.info("Current 'schedule_day' task cancelled.")
+            try:
+                await current_day_scheduler_task
+            except asyncio.CancelledError:
+                logger.info("'schedule_day' task processed cancellation.")
+            except Exception as e:
+                logger.error(f"Error during 'schedule_day' task cleanup: {e}", exc_info=True)
+        await cleanup_sessions()
+        logger.info("👋 Bot has been shut down gracefully.")
 
 
 if __name__ == "__main__":
     try:
-        bot.run(BOT_TOKEN)
+        asyncio.run(main())
     except Exception as e:
-        logger.critical(f"💥 Unhandled exception at bot.run() level: {e}", exc_info=True)
-    finally:
-        if asyncio.get_event_loop().is_running():
-             asyncio.get_event_loop().run_until_complete(cleanup_sessions())
-             logger.info("Final cleanup_sessions call completed from __main__ finally block.")
-        else:
-            logger.info("Event loop not running in __main__ finally block. Cleanup relied on bot.close().")
+        logger.critical(f"💥 Unhandled exception: {e}", exc_info=True)

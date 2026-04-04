@@ -1,10 +1,9 @@
 # cogs/matches.py
 import logging
 from discord.ext import commands
-from utils.api_client import fetch_day_fixtures # For fetching match data
+from modules import api_provider
 from utils.time_utils import parse_utc_to_italy, italy_now # For time formatting
 from datetime import datetime
-# MODIFIED: Import from the new discord_poster module
 from modules.discord_poster import post_new_message_to_context
 
 logger = logging.getLogger(__name__)
@@ -20,10 +19,8 @@ class Matches(commands.Cog):
         help="List today's tracked fixtures (upcoming, live or final)."
     )
     async def matches(self, ctx: commands.Context):
-        # This call should already be using self.bot.http_session
-        fixtures = await fetch_day_fixtures(self.bot.http_session) 
+        fixtures = await api_provider.fetch_day(self.bot.http_session)
         if not fixtures:
-            # MODIFIED: Use discord_poster
             await post_new_message_to_context(ctx, content="📭 No tracked matches today.")
             return
 
@@ -54,8 +51,7 @@ class Matches(commands.Cog):
 
         header = f"**Today's tracked matches ({current_time.strftime('%Y-%m-%d')}):**"
         message_content = "\n".join([header, *lines])
-        
-        # MODIFIED: Use discord_poster
+
         await post_new_message_to_context(ctx, content=message_content)
 
 async def setup(bot: commands.Bot):

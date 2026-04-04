@@ -1,5 +1,4 @@
 # modules/discord_poster.py
-# MODIFIED: Simplified to always send new messages for live updates.
 
 import logging
 import discord
@@ -20,8 +19,8 @@ logger = logging.getLogger(__name__)
 
 
 async def post_live_update(
-    bot: discord.Client, 
-    channel_id: int, 
+    bot: discord.Client,
+    channel_id: int,
     content: str | None = None,
     embed: discord.Embed | None = None,
     attachments: Sequence[discord.File] | None = None
@@ -51,13 +50,13 @@ async def post_live_update(
         logger.error(f"DiscordPoster: Missing permissions to send live update message in #{channel.name}.", exc_info=True)
     except Exception as e:
         logger.error(f"DiscordPoster: Failed to send new live update message in #{channel.name}: {e}", exc_info=True)
-    
+
     return None
 
 
 async def post_new_general_message(
-    bot: discord.Client, 
-    channel_id: int, 
+    bot: discord.Client,
+    channel_id: int,
     content: str | None = None,
     embed: discord.Embed | None = None,
     attachments: Sequence[discord.File] | None = None
@@ -74,7 +73,7 @@ async def post_new_general_message(
     if not isinstance(channel, discord.TextChannel):
         logger.error(f"DiscordPoster: Channel ID {channel_id} did not yield a valid TextChannel for new general message.")
         return None
-        
+
     current_attachments = attachments or []
     try:
         logger.info(f"DiscordPoster: Sending new general message to #{channel.name}")
@@ -84,11 +83,11 @@ async def post_new_general_message(
         logger.error(f"DiscordPoster: Missing permissions to send general message in #{channel.name}.", exc_info=True)
     except Exception as e:
         logger.error(f"DiscordPoster: Failed to send new general message in #{channel.name}: {e}", exc_info=True)
-    
+
     return None
 
 async def post_new_message_to_context(
-    ctx: commands.Context, 
+    ctx: commands.Context,
     content: str | None = None,
     embed: discord.Embed | None = None,
     attachments: Sequence[discord.File] | None = None
@@ -102,8 +101,8 @@ async def post_new_message_to_context(
         return None
 
     current_attachments = attachments or []
+    command_name = ctx.command.name if ctx.command else "unknown command"
     try:
-        command_name = ctx.command.name if ctx.command else "unknown command"
         logger.info(f"DiscordPoster: Sending new message via context for command '{command_name}' in #{ctx.channel.name}")
         new_message = await ctx.send(content=content, embed=embed, files=current_attachments)
         return new_message
@@ -111,5 +110,5 @@ async def post_new_message_to_context(
         logger.error(f"DiscordPoster: Missing permissions to send message via context for command '{command_name}' in #{ctx.channel.name}.", exc_info=True)
     except Exception as e:
         logger.error(f"DiscordPoster: Failed to send new message via context for command '{command_name}': {e}", exc_info=True)
-        
+
     return None

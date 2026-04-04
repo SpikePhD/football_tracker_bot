@@ -59,9 +59,11 @@ class MilanCommand(commands.Cog):
                 competition_name = league_data.get('name', 'N/A')
                 round_name = league_data.get('round', '')
 
-                # Determine opponent
-                opponent = away_team if home_team.lower() == "ac milan" else home_team
-                venue = "San Siro (Home)" if home_team.lower() == "ac milan" else f"Away at {home_team}" if away_team.lower() == "ac milan" else "Venue N/A"
+                # Determine opponent using team ID to avoid string-matching issues
+                home_team_id = teams_data.get('home', {}).get('id')
+                is_home = (home_team_id == AC_MILAN_TEAM_ID)
+                opponent = away_team if is_home else home_team
+                venue = "San Siro (Home)" if is_home else f"Away at {home_team}"
 
 
                 message = (

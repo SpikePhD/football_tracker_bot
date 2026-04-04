@@ -1,22 +1,20 @@
 # modules/live_loop.py
 
-import logging 
+import logging
 
-# MODIFIED: TRACKED_LEAGUE_IDS import removed as api_client filters.
 # 'discord' import is also removed as this module no longer sends directly.
-from config import CHANNEL_ID 
-from utils.api_client import fetch_live_fixtures
+from config import CHANNEL_ID
+from modules import api_provider
 from utils.time_utils import italy_now
 from modules.ft_handler import track_match_for_ft
-# MODIFIED: Import from the new discord_poster module
-from modules.discord_poster import post_live_update 
+from modules.discord_poster import post_live_update
 
 logger = logging.getLogger(__name__)
 
 # keep track of which live scores we've already posted this session
 already_posted = set()
 
-def clear_already_posted_today(): # NEW FUNCTION
+def clear_already_posted_today():
     global already_posted
     logger.info("🔄 Clearing 'already_posted' set for the new day.")
     already_posted.clear()
@@ -29,12 +27,12 @@ async def run_live_loop(bot):
     now = italy_now()
     logger.info(f"[{now.strftime('%H:%M')}] 🌐 Querying live endpoint…")
 
-    matches = await fetch_live_fixtures(bot.http_session) 
-    if not matches: 
+    matches = await api_provider.fetch_live(bot.http_session)
+    if not matches:
         logger.info(f"[{now.strftime('%H:%M')}] 😕 No live fixtures returned or error in fetch.")
         return
 
-    # The channel object itself is not strictly needed here anymore, 
+    # The channel object itself is not strictly needed here anymore,
     # as discord_poster.py will get it using CHANNEL_ID and the bot object.
     # However, having a check here can be an early exit if the CHANNEL_ID is misconfigured.
     # Let's keep a lightweight check or rely on discord_poster's error handling.
@@ -52,10 +50,10 @@ async def run_live_loop(bot):
 
         if key in already_posted:
             continue
-        
+
         events = match.get('events', [])
         event_strings = []
-        
+
         for e in events:
             minute = e['time']['elapsed']
             player = e['player']['name']
@@ -67,7 +65,7 @@ async def run_live_loop(bot):
                 event_strings.append(f"{minute}' - {player}{tag} {side}")
             elif e['type'] == 'Card' and e['detail'] == 'Red Card':
                 event_strings.append(f"{minute}' - {player} (Red Card) {side}")
-        
+
         already_posted.add(key)
         track_match_for_ft(match) # This remains important
 
@@ -76,7 +74,6 @@ async def run_live_loop(bot):
         if event_strings:
             line_content += " (" + "; ".join(event_strings) + ")"
 
-        # MODIFIED: Call the new discord_poster function
         # It will handle getting the channel object, deciding to edit/send new, and actual sending.
         logger.info(f"📢 Preparing to post/edit live update via DiscordPoster: {line_content}")
         await post_live_update(bot, CHANNEL_ID, content=line_content)

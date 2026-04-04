@@ -3,11 +3,9 @@
 import os
 import platform
 import atexit
-import logging # MODIFIED: Import standard logging
-# MODIFIED: Remove verbose_logger import
+import logging
 # from modules.verbose_logger import log_info
 
-# MODIFIED: Get a logger instance for this module
 logger = logging.getLogger(__name__)
 
 def disable_sleep():
@@ -21,7 +19,7 @@ def disable_sleep():
         # else:
         #     logger.info("🔌 [Windows] Sleep disabled (AC)")
         os.system("powercfg -change -standby-timeout-ac 0")
-        logger.info("🔌 [Windows] Sleep disabled (AC)") # MODIFIED
+        logger.info("🔌 [Windows] Sleep disabled (AC)")
     elif os_name == "Linux":
         # ret_code = os.system("systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target")
         # if ret_code != 0:
@@ -29,23 +27,23 @@ def disable_sleep():
         # else:
         #     logger.info("🔌 [Linux] Sleep services masked")
         os.system("systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target")
-        logger.info("🔌 [Linux] Sleep services masked") # MODIFIED
+        logger.info("🔌 [Linux] Sleep services masked")
     else:
-        logger.info(f"🔌 No sleep management for OS {os_name}") # MODIFIED
+        logger.info(f"🔌 No sleep management for OS {os_name}")
 
 def restore_sleep():
     os_name = platform.system()
     if os_name == "Windows":
         os.system("powercfg -change -standby-timeout-ac 15")
-        logger.info("🔌 [Windows] Sleep restored to 15m (AC)") # MODIFIED (added AC for clarity)
+        logger.info("🔌 [Windows] Sleep restored to 15m (AC)")
     elif os_name == "Linux":
         os.system("systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target")
-        logger.info("🔌 [Linux] Sleep services unmasked") # MODIFIED
+        logger.info("🔌 [Linux] Sleep services unmasked")
     else:
-        logger.info(f"🔌 No restore needed for OS {os_name}") # MODIFIED
+        logger.info(f"🔌 No restore needed for OS {os_name}")
 
 def setup_power_management():
-    logger.info("⚙️ Setting up power management...") # MODIFIED: Added a log for setup start
+    logger.info("⚙️ Setting up power management...")
     disable_sleep()
     atexit.register(restore_sleep)
-    logger.info("👍 Power management setup complete. Sleep restore registered on exit.") # MODIFIED: Added a log for setup end
+    logger.info("👍 Power management setup complete. Sleep restore registered on exit.")

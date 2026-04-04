@@ -1,199 +1,204 @@
 # modules/ft_handler.py
 
 import logging
-import discord # For type hinting bot: discord.Client
+import discord
 from datetime import datetime, timedelta
 
 from config import CHANNEL_ID
-from utils.api_client import fetch_fixture_by_id # Still needed if post_initial_fts optimization is reverted
 from utils.time_utils import italy_now
-# MODIFIED: Import from the new discord_poster module
 from modules.discord_poster import post_new_general_message
 
 logger = logging.getLogger(__name__)
 
-tracked_matches = {} # Stores matches being tracked for FT status
+tracked_matches = {}  # {match_id: {"exp_ft": datetime, "initial_score_at_tracking": {...}}}
 
-def clear_tracked_matches_today(): # NEW FUNCTION
+
+def clear_tracked_matches_today():
     global tracked_matches
     logger.info("🔄 Clearing 'tracked_matches' dictionary for the new day.")
     tracked_matches.clear()
 
+
 def track_match_for_ft(match_data: dict):
-    """
-    Registers a match to be checked for Full-Time status later.
-
-    Args:
-        match_data: The match dictionary object from the API.
-    """
+    """Register a live match to be checked for Full-Time status."""
     try:
-        match_id    = match_data['fixture']['id']
-        kickoff_utc = match_data['fixture']['date']
-        
-        kickoff     = datetime.fromisoformat(kickoff_utc.replace('Z', '+00:00'))
-        kickoff     = kickoff.astimezone(italy_now().tzinfo)
+        match_id = match_data["fixture"]["id"]
+        kickoff_utc = match_data["fixture"]["date"]
 
-        expected_ft_check_time = kickoff + timedelta(minutes=112) 
-        
+        kickoff = datetime.fromisoformat(kickoff_utc.replace("Z", "+00:00"))
+        kickoff = kickoff.astimezone(italy_now().tzinfo)
+        expected_ft_check_time = kickoff + timedelta(minutes=112)
+
         tracked_matches[match_id] = {
             "exp_ft": expected_ft_check_time,
-            "initial_score_at_tracking":  match_data.get('goals', {'home': None, 'away': None}) 
+            "initial_score_at_tracking": match_data.get("goals", {"home": None, "away": None}),
         }
 
-        home_team_name = match_data.get('teams', {}).get('home', {}).get('name', 'Home Team')
-        away_team_name = match_data.get('teams', {}).get('away', {}).get('name', 'Away Team')
-        logger.info(f"🆕 Tracking {home_team_name} vs {away_team_name} (ID: {match_id}) for FT. Expected check around {expected_ft_check_time.strftime('%H:%M')}")
+        home = match_data.get("teams", {}).get("home", {}).get("name", "Home Team")
+        away = match_data.get("teams", {}).get("away", {}).get("name", "Away Team")
+        logger.info(
+            f"🆕 Tracking {home} vs {away} (ID: {match_id}) for FT. "
+            f"Expected check around {expected_ft_check_time.strftime('%H:%M')}"
+        )
     except KeyError as e:
         logger.error(f"Error tracking match for FT: Missing key {e} in match_data. Data: {str(match_data)[:200]}", exc_info=True)
     except Exception as e:
-        logger.error(f"Unexpected error in track_match_for_ft for data {str(match_data)[:200]}: {e}", exc_info=True)
+        logger.error(f"Unexpected error in track_match_for_ft: {e}", exc_info=True)
 
+
+# ── Shared FT posting logic ───────────────────────────────────────────────────
+
+async def _post_ft_from_data(bot: discord.Client, match_details: dict):
+    """Build and send the FT result message from a normalized match dict."""
+    home_team = match_details.get("teams", {}).get("home", {}).get("name", "Home Team")
+    away_team = match_details.get("teams", {}).get("away", {}).get("name", "Away Team")
+    goals = match_details.get("goals", {"home": "?", "away": "?"})
+    events = match_details.get("events", [])
+
+    detail_lines = []
+    for e_event in events:
+        minute = e_event.get("time", {}).get("elapsed", "?")
+        player_name = e_event.get("player", {}).get("name", "N/A")
+        team_name_event = e_event.get("team", {}).get("name")
+
+        side_tag = ""
+        if team_name_event == home_team:
+            side_tag = "(H)"
+        elif team_name_event == away_team:
+            side_tag = "(A)"
+
+        event_type = e_event.get("type")
+        event_detail = e_event.get("detail")
+
+        if event_type == "Goal":
+            extra = f" ({event_detail})" if event_detail and event_detail != "Normal Goal" else ""
+            detail_lines.append(f"{minute}' – {player_name}{extra} {side_tag}")
+        elif event_type == "Card" and event_detail == "Red Card":
+            detail_lines.append(f"{minute}' – {player_name} {side_tag} (Red Card)")
+
+    ft_message = f"FT: {home_team} {goals.get('home', '?')} – {goals.get('away', '?')} {away_team}"
+    if detail_lines:
+        ft_message += f" ({'; '.join(detail_lines)})"
+
+    logger.info(f"📢 Posting FT result: {ft_message}")
+    await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
+
+
+# ── Main FT detection (dual-path) ─────────────────────────────────────────────
 
 async def fetch_and_post_ft(bot: discord.Client):
     """
-    Iterates through tracked matches, checks if they are past their expected FT time,
-    fetches their status, and if FT, posts the result via discord_poster.
+    Check tracked matches for Full-Time status and post results.
+
+    ESPN mode (primary): reads finished matches from the cached scoreboard — no extra API call.
+    Fallback mode: calls API-Football per tracked match after expected FT time.
     """
+    from modules import api_provider  # late import to avoid circular dependency
+
     current_time = italy_now()
-    for match_id, info in list(tracked_matches.items()): # Iterate over a copy
-        if current_time < info["exp_ft"]:
-            continue
 
-        logger.info(f"🔍 Checking FT status for match ID {match_id} (Expected FT check time: {info['exp_ft'].strftime('%H:%M')})")
-        
-        payload = await fetch_fixture_by_id(bot.http_session, match_id) 
-        
-        if not payload:
-            logger.warning(f"⚠️ No payload received from API for FT check of match ID {match_id}. Will retry next cycle if still tracked.")
-            continue
+    if api_provider.is_espn_healthy():
+        # ── ESPN path ──────────────────────────────────────────────────────────
+        finished = await api_provider.fetch_finished_today(bot.http_session)
+        finished_by_id = {m["fixture"]["id"]: m for m in finished}
 
-        api_response_list = payload.get('response')
-        if not isinstance(api_response_list, list) or not api_response_list:
-            logger.warning(f"⚠️ 'response' field missing, not a list, or empty in API payload for FT check of match ID {match_id}. Payload: {str(payload)[:200]}")
-            continue
-            
-        match_details = api_response_list[0]
+        for match_id, info in list(tracked_matches.items()):
+            if current_time < info["exp_ft"]:
+                continue  # too early to expect FT
 
-        fixture_status_short = match_details.get('fixture', {}).get('status', {}).get('short')
+            if match_id not in finished_by_id:
+                # Match not yet in FT — check if it's been suspiciously long
+                elapsed = (current_time - info["exp_ft"]).total_seconds()
+                if elapsed > 1800:  # 30 min past expected FT with no result
+                    logger.warning(
+                        f"⚠️ Match ID {match_id} is 30+ min past expected FT but not showing as FT "
+                        f"in ESPN scoreboard. Dropping from tracking."
+                    )
+                    del tracked_matches[match_id]
+                continue
 
-        if fixture_status_short != "FT":
-            logger.info(f"ℹ️ Match ID {match_id} status is '{fixture_status_short}', not 'FT'. Will re-check if still past expected FT.")
-            if fixture_status_short in ("PST", "CANC", "ABD", "AWD", "WO"): 
-                logger.info(f"Match ID {match_id} has permanently finished with non-FT status '{fixture_status_short}'. Removing from FT tracking.")
-                del tracked_matches[match_id]
-            continue
+            match_details = finished_by_id[match_id]
+            await _post_ft_from_data(bot, match_details)
+            del tracked_matches[match_id]
 
-        home_team = match_details.get('teams', {}).get('home', {}).get('name', 'Home Team')
-        away_team = match_details.get('teams', {}).get('away', {}).get('name', 'Away Team')
-        goals = match_details.get('goals', {'home': '?', 'away': '?'})
-        events = match_details.get('events', [])
+    else:
+        # ── API-Football fallback path ─────────────────────────────────────────
+        from utils.api_client import fetch_fixture_by_id
 
-        detail_lines = []
-        for e_event in events:
-            minute = e_event.get('time', {}).get('elapsed', '?')
-            player_info = e_event.get('player', {})
-            player_name = player_info.get('name', 'N/A') if player_info else 'N/A'
-            team_name_event = e_event.get('team', {}).get('name')
+        for match_id, info in list(tracked_matches.items()):
+            if current_time < info["exp_ft"]:
+                continue
 
-            side_tag = ""
-            if team_name_event == home_team: side_tag = "(H)"
-            elif team_name_event == away_team: side_tag = "(A)"
-            
-            event_type = e_event.get('type')
-            event_detail_str = e_event.get('detail')
+            logger.info(f"🔍 [Fallback] Checking FT status for match ID {match_id}")
 
-            if event_type == "Goal":
-                extra_info = f" ({event_detail_str})" if event_detail_str and event_detail_str != "Normal Goal" else ""
-                detail_lines.append(f"{minute}' – {player_name}{extra_info} {side_tag}")
-            elif event_type == "Card" and event_detail_str == "Red Card":
-                detail_lines.append(f"{minute}' – {player_name} {side_tag} (Red Card)")
+            payload = await fetch_fixture_by_id(bot.http_session, match_id)
+            if not payload:
+                logger.warning(f"⚠️ No payload for FT check of match ID {match_id}. Retrying next cycle.")
+                continue
 
-        ft_message_content = f"FT: {home_team} {goals.get('home', '?')} – {goals.get('away', '?')} {away_team}"
-        if detail_lines:
-            ft_message_content += f" ({'; '.join(detail_lines)})"
+            api_response_list = payload.get("response")
+            if not isinstance(api_response_list, list) or not api_response_list:
+                logger.warning(f"⚠️ Empty or invalid response for FT check of match ID {match_id}.")
+                continue
 
-        logger.info(f"📢 Preparing to post FT result via DiscordPoster: {ft_message_content}")
-        # MODIFIED: Call discord_poster to send the message
-        await post_new_general_message(bot, CHANNEL_ID, content=ft_message_content)
-        
-        del tracked_matches[match_id]
+            match_details_raw = api_response_list[0]
+            fixture_status_short = match_details_raw.get("fixture", {}).get("status", {}).get("short")
 
+            if fixture_status_short != "FT":
+                logger.info(f"ℹ️ Match ID {match_id} status is '{fixture_status_short}', not FT yet.")
+                if fixture_status_short in ("PST", "CANC", "ABD", "AWD", "WO"):
+                    logger.info(f"Match ID {match_id} permanently finished as '{fixture_status_short}'. Dropping.")
+                    del tracked_matches[match_id]
+                continue
+
+            # Convert raw API-Football response to normalized format for _post_ft_from_data
+            home_team = match_details_raw.get("teams", {}).get("home", {}).get("name", "Home Team")
+            away_team = match_details_raw.get("teams", {}).get("away", {}).get("name", "Away Team")
+            raw_events = match_details_raw.get("events", [])
+
+            normalized_events = []
+            for e in raw_events:
+                normalized_events.append({
+                    "time": {"elapsed": e.get("time", {}).get("elapsed", "?")},
+                    "player": {"name": e.get("player", {}).get("name", "N/A")},
+                    "team": {"name": e.get("team", {}).get("name")},
+                    "type": e.get("type"),
+                    "detail": e.get("detail"),
+                })
+
+            normalized = {
+                "teams": {"home": {"name": home_team}, "away": {"name": away_team}},
+                "goals": match_details_raw.get("goals", {"home": "?", "away": "?"}),
+                "events": normalized_events,
+            }
+            await _post_ft_from_data(bot, normalized)
+            del tracked_matches[match_id]
+
+
+# ── Initial FT check on startup ───────────────────────────────────────────────
 
 async def post_initial_fts(fixtures_list: list, bot: discord.Client):
-    """
-    On startup/daily fetch, posts results for any games in the list that are already at FT.
-    Uses discord_poster to send messages.
-    This version attempts to use data directly from fixtures_list to save API calls.
-    """
+    """Post FT results for matches already finished when the bot fetches today's fixtures."""
     logger.info(f"🔎 Checking {len(fixtures_list)} fetched fixtures for initial FT posts.")
     ft_posted_count = 0
-    for initial_match_data in fixtures_list: # This is 'm' from scheduler.py
-        fixture_details = initial_match_data.get('fixture', {})
-        status_short = fixture_details.get('status', {}).get('short')
 
-        if status_short != "FT":
+    for match_data in fixtures_list:
+        fixture_details = match_data.get("fixture", {})
+        if fixture_details.get("status", {}).get("short") != "FT":
             continue
-        
-        match_id = fixture_details.get('id')
+
+        match_id = fixture_details.get("id")
         if not match_id:
-            logger.warning("⚠️ Found a fixture marked FT in initial list but without an ID. Skipping.")
+            logger.warning("⚠️ Found a fixture marked FT but without an ID. Skipping.")
             continue
 
-        # Check if this FT match was already processed by the main fetch_and_post_ft loop
-        # (e.g., if schedule_day was called multiple times or bot restarted quickly)
-        # This is a simple check; a more robust solution might involve a set of posted_initial_ft_ids.
-        if match_id not in tracked_matches: # If it's still in tracked_matches, fetch_and_post_ft will handle it.
-                                            # If not, it means it was either never tracked or already processed by fetch_and_post_ft.
-                                            # We only want to post here if it's genuinely an *initial* FT not yet handled.
-                                            # However, if a match finished *while bot was down* and wasn't live when bot restarted,
-                                            # it wouldn't be in tracked_matches. This is the primary case this function handles.
-            pass # Proceed to post
+        ft_posted_count += 1
+        logger.info(f"Found match ID {match_id} already FT in initial list. Posting...")
 
+        if not match_data.get("events"):
+            logger.warning(f"ℹ️ Match ID {match_id} (initial FT) has no event data. Result will have no scorer details.")
 
-        ft_posted_count +=1
-        logger.info(f"Found match ID {match_id} already FT in initial list. Preparing to post details directly from fetched data...")
-
-        # --- Use data directly from initial_match_data ---
-        data_to_use = initial_match_data 
-        
-        home_team = data_to_use.get('teams', {}).get('home', {}).get('name', 'Home Team')
-        away_team = data_to_use.get('teams', {}).get('away', {}).get('name', 'Away Team')
-        goals = data_to_use.get('goals', {'home': '?', 'away': '?'})
-        # IMPORTANT: Check if 'events' are typically present and detailed enough in the 
-        # `fetch_day_fixtures` response for already FT games.
-        events = data_to_use.get('events', []) 
-
-        if not events: # If events are missing in the summary, this FT post might be less detailed.
-            logger.warning(f"ℹ️ Match ID {match_id} (FT in initial list) has no 'events' data in the summary. FT post will not include event details.")
-
-
-        detail_lines = []
-        for e_event in events:
-            minute = e_event.get('time', {}).get('elapsed', '?')
-            player_info = e_event.get('player', {})
-            player_name = player_info.get('name', 'N/A') if player_info else 'N/A'
-            team_name_event = e_event.get('team', {}).get('name')
-
-            side_tag = ""
-            if team_name_event == home_team: side_tag = "(H)"
-            elif team_name_event == away_team: side_tag = "(A)"
-            
-            event_type = e_event.get('type')
-            event_detail_str = e_event.get('detail')
-
-            if event_type == "Goal":
-                extra_info = f" ({event_detail_str})" if event_detail_str and event_detail_str != "Normal Goal" else ""
-                detail_lines.append(f"{minute}' – {player_name}{extra_info} {side_tag}")
-            elif event_type == "Card" and event_detail_str == "Red Card":
-                detail_lines.append(f"{minute}' – {player_name} {side_tag} (Red Card)")
-
-        initial_ft_message_content = f"FT: {home_team} {goals.get('home', '?')} – {goals.get('away', '?')} {away_team}"
-        if detail_lines:
-            initial_ft_message_content += f" ({'; '.join(detail_lines)})"
-        
-        logger.info(f"📢 Preparing to post initial FT result via DiscordPoster: {initial_ft_message_content}")
-        # MODIFIED: Call discord_poster to send the message
-        await post_new_general_message(bot, CHANNEL_ID, content=initial_ft_message_content)
+        await _post_ft_from_data(bot, match_data)
 
     if ft_posted_count == 0:
         logger.info("✅ No matches were already FT from the fetched list for initial posting.")

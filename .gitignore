@@ -1,5 +1,7 @@
 # Environment variables
-.env*
+.env
+.env.local
+.env.*.local
 
 # Python cache and compiled files
 __pycache__/
