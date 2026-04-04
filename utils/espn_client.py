@@ -195,47 +195,57 @@ async def fetch_next_team_fixture_espn(
     slugs: list[str],
 ) -> dict | None:
     """
-    Find the next upcoming fixture for a team across a list of league slugs.
-    Returns a normalised match dict (same shape as fetch_all_leagues) or None.
+    Find the next upcoming fixture for a team by scanning scoreboards for the
+    next 14 days across all provided league slugs.
+
+    The team schedule endpoint only returns past matches, so we scan the
+    scoreboard by date instead and filter for events involving espn_team_id.
+    Returns a normalised match dict or None.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
+    team_id_str = str(espn_team_id)
 
-    async def _fetch_schedule(slug: str) -> list[dict]:
-        url = f"{ESPN_BASE}/{slug}/teams/{espn_team_id}/schedule"
-        try:
-            async with session.get(url, timeout=ESPN_TIMEOUT) as resp:
-                if resp.status != 200:
-                    return []
-                data = await resp.json(content_type=None)
-                return data.get("events", [])
-        except Exception as e:
-            logger.warning(f"espn_client: schedule fetch failed for {slug}: {e}")
-            return []
-
-    tasks = [_fetch_schedule(slug) for slug in slugs]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    upcoming: list[tuple] = []  # (datetime, event_dict, league_id)
-    slug_to_league = {}  # built lazily — we only need it for normalization
-
-    # Build reverse slug→league_id map from LEAGUE_SLUG_MAP if available
+    # Build reverse slug→league_id map
+    slug_to_league: dict = {}
     try:
         from config import LEAGUE_SLUG_MAP
         slug_to_league = {v: k for k, v in LEAGUE_SLUG_MAP.items()}
     except ImportError:
         pass
 
-    for slug, events in zip(slugs, results):
-        if isinstance(events, Exception) or not events:
+    # Dates to scan: today through +13 days
+    dates = [(now + timedelta(days=d)).strftime("%Y%m%d") for d in range(14)]
+
+    async def _fetch(slug: str, date_str: str) -> tuple:
+        return slug, await fetch_scoreboard(session, slug, date_str)
+
+    tasks = [_fetch(slug, d) for slug in slugs for d in dates]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    upcoming: list[tuple] = []  # (datetime, event_dict, league_id)
+
+    for result in results:
+        if isinstance(result, Exception):
             continue
+        slug, events = result
         league_id = slug_to_league.get(slug, 0)
         for event in events:
-            date_str = event.get("date", "")
-            if not date_str:
+            # Filter: must involve our team
+            competitions = event.get("competitions", [])
+            if not competitions:
+                continue
+            competitors = competitions[0].get("competitors", [])
+            team_ids = {c.get("team", {}).get("id") for c in competitors}
+            if team_id_str not in team_ids:
+                continue
+
+            # Must be a future pre-match
+            date_str_event = event.get("date", "")
+            if not date_str_event:
                 continue
             try:
-                event_dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                event_dt = datetime.fromisoformat(date_str_event.replace("Z", "+00:00"))
             except ValueError:
                 continue
             status_state = event.get("status", {}).get("type", {}).get("state", "pre")
