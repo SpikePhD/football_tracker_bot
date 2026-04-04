@@ -46,12 +46,12 @@ async def run_live_loop(bot):
         home = match['teams']['home']['name']
         away = match['teams']['away']['name']
         score = match['goals']
-        key = f"{match_id}_{score['home']}-{score['away']}"
+        events = match.get('events', [])
+        key = f"{match_id}_{score['home']}-{score['away']}_{len(events)}"
 
         if key in already_posted:
             continue
 
-        events = match.get('events', [])
         event_strings = []
 
         for e in events:
