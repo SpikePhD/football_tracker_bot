@@ -10,6 +10,7 @@ import aiohttp
 logger = logging.getLogger(__name__)
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
+ESPN_SEARCH_BASE = "https://site.api.espn.com/apis/common/v3/search"
 ESPN_TIMEOUT = aiohttp.ClientTimeout(total=10)
 
 
@@ -185,6 +186,37 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
     except Exception as e:
         logger.warning(f"espn_client: Failed to normalize event {espn_event.get('id', '?')}: {e}")
         return None
+
+
+# ── Team search ───────────────────────────────────────────────────────────────
+
+async def search_team_espn(
+    session: aiohttp.ClientSession,
+    team_name: str,
+    tracked_slugs: set,
+) -> tuple | None:
+    """
+    Search ESPN for a soccer team by name.
+    Returns (espn_team_id: str, primary_league_slug: str) for the first result
+    whose defaultLeagueSlug is in tracked_slugs, or None if not found.
+    """
+    params = {"query": team_name, "sport": "soccer", "limit": 5}
+    try:
+        async with session.get(ESPN_SEARCH_BASE, params=params, timeout=ESPN_TIMEOUT) as resp:
+            if resp.status != 200:
+                logger.warning(f"espn_client: search HTTP {resp.status} for '{team_name}'")
+                return None
+            data = await resp.json(content_type=None)
+    except Exception as e:
+        logger.warning(f"espn_client: search failed for '{team_name}': {e}")
+        return None
+
+    for item in data.get("items", []):
+        slug = item.get("defaultLeagueSlug", "")
+        if slug in tracked_slugs:
+            return str(item["id"]), slug
+
+    return None
 
 
 # ── Team schedule ─────────────────────────────────────────────────────────────

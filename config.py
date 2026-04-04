@@ -72,6 +72,19 @@ LEAGUE_NAME_MAP = {
     4:    "UEFA EURO",
 }
 
+# ─ Slug groups for !next command: domestic competitions per primary league + shared internationals
+INTERNATIONAL_SLUGS = [
+    "uefa.champions", "uefa.europa", "uefa.europa.conf",
+    "uefa.super_cup", "fifa.cwc", "fifa.intercontinental_cup",
+    "fifa.world", "uefa.euro",
+]
+
+DOMESTIC_SLUG_GROUPS = {
+    "ita.1": ["ita.1", "ita.coppa_italia", "ita.super_cup"],
+    "eng.1": ["eng.1", "eng.fa", "eng.league_cup", "eng.charity"],
+    "esp.1": ["esp.1", "esp.copa_del_rey", "esp.super_cup"],
+}
+
 # ─ ESPN league slugs (maps API-Football league ID → ESPN URL slug)
 LEAGUE_SLUG_MAP = {
     135:  "ita.1",               # Serie A
