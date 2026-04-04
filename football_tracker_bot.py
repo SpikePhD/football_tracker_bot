@@ -26,6 +26,7 @@ from utils.personality import greet_message, get_greeting
 from modules.power_manager import setup_power_management
 from modules.scheduler import schedule_day
 from modules import api_provider
+from modules.bot_mode import is_silent
 from cogs.matches import build_matches_message
 import subprocess, pathlib
 
@@ -107,7 +108,10 @@ async def launch_daily_operations_manager(bot_instance: commands.Bot):
 
 @tasks.loop(time=time(hour=6, minute=30, tzinfo=italy_tz))
 async def six_thirty_morning_trigger():
-    logger.info("🌅 06:30 AM (Europe/Rome) – Sending morning fixture broadcast.")
+    logger.info("🌅 06:30 AM (Europe/Rome) – Morning trigger fired.")
+    if is_silent():
+        logger.info("🔇 Silent mode active — skipping morning broadcast.")
+        return
     await ensure_http_session(bot)
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
@@ -136,15 +140,18 @@ async def on_ready():
 
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
-        try:
-            fixtures = await api_provider.fetch_day(bot.http_session)
-            fixtures.sort(key=lambda m: m['fixture']['date'])
-            content = f"{greet_message()}\n\n{build_matches_message(fixtures)}"
-            await channel.send(content)
-        except discord.Forbidden:
-            logger.error(f"❌ Missing permissions to send greeting message to channel ID: {CHANNEL_ID}.")
-        except Exception as e:
-            logger.error(f"❌ Failed to send greeting message: {e}", exc_info=True)
+        if is_silent():
+            logger.info("🔇 Silent mode active — skipping startup broadcast.")
+        else:
+            try:
+                fixtures = await api_provider.fetch_day(bot.http_session)
+                fixtures.sort(key=lambda m: m['fixture']['date'])
+                content = f"{greet_message()}\n\n{build_matches_message(fixtures)}"
+                await channel.send(content)
+            except discord.Forbidden:
+                logger.error(f"❌ Missing permissions to send greeting message to channel ID: {CHANNEL_ID}.")
+            except Exception as e:
+                logger.error(f"❌ Failed to send greeting message: {e}", exc_info=True)
     else:
         logger.error(f"❌ Could not find channel with ID: {CHANNEL_ID}. Greeting and updates will not be sent.")
 
