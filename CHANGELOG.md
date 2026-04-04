@@ -1,3 +1,35 @@
+**Football Tracker Bot v3.0.0**
+Author: SpikePhD
+ESPN Integration & Major Reliability Overhaul:
+
+• ESPN as Primary Data Source:
+  • Replaced API-Football as primary polling source with the ESPN public API (no auth, no rate limits).
+  • Bot now polls all 18 tracked leagues simultaneously every 60 seconds via concurrent requests.
+  • API-Football retained as automatic fallback if ESPN becomes unavailable.
+• Automatic Provider Fallback:
+  • After 3 consecutive ESPN failures, bot silently switches to API-Football (polling every 480 seconds).
+  • Retry window of 10 minutes before probing ESPN again; switches back transparently on recovery.
+  • All provider transitions are logged loudly for easy diagnosis.
+• New `!api` Command:
+  • Shows the currently active data provider (ESPN or API-Football fallback).
+  • Displays poll interval, consecutive failure count, and ESPN retry time when in fallback mode.
+  • Aliases: `!apistatus`, `!provider`.
+• Full-Time Detection Improvements:
+  • In ESPN mode, FT results are detected directly from the cached scoreboard — no extra API call per match.
+  • Shared FT posting logic extracted to eliminate duplication between ESPN and fallback paths.
+• Bug Fixes:
+  • Fixed `command_name` NameError in discord_poster.py (variable defined inside try block but referenced in except).
+  • Fixed `aiohttp.ClientTimeout` being passed as a plain int in api_client.py.
+  • Fixed bot lifecycle using fragile `bot.close` monkey-patch; replaced with `asyncio.run(main())` pattern.
+  • Fixed home/away team detection in `!milan` command to use team ID instead of fragile string matching.
+  • Removed dead `modules/track_leagues.py` (never called).
+• Documentation:
+  • Added README.md with full setup, deployment, and configuration reference.
+  • Added AGENTS.md as an AI assistant guide covering architecture, conventions, and extension patterns.
+  • Added .env.example template.
+• Dependency Update:
+  • Bumped aiohttp from 3.9.5 to 3.13.5, resolving 20 CVE security alerts.
+
 **Football Tracker Bot v2.0.0**
 Major Core Logic Enhancements & Bug Fixes:
 
