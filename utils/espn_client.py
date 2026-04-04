@@ -59,7 +59,7 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
         etype = detail.get("type", {}).get("text", "")
         athletes = detail.get("athletesInvolved", [])
         player_name = athletes[0].get("fullName", "N/A") if athletes else "N/A"
-        clock_val = int(detail.get("clock", {}).get("value", 0))
+        clock_val = int(detail.get("clock", {}).get("value", 0)) // 60
         team_id = detail.get("team", {}).get("id")
         team_name = team_id_to_name.get(team_id, "Unknown")
 
