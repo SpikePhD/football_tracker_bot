@@ -16,10 +16,31 @@ logger = logging.getLogger(__name__)
 # keep track of which live scores we've already posted this session
 already_posted = set()
 
+_LIVE_STATUSES = {"1H", "HT", "2H", "ET", "PEN"}
+
 def clear_already_posted_today():
     global already_posted
     logger.info("🔄 Clearing 'already_posted' set for the new day.")
     already_posted.clear()
+
+def seed_already_posted(fixtures: list) -> None:
+    """
+    Pre-populate already_posted with the current snapshot of any in-progress
+    matches from today's fixture list. Prevents the first run_live_loop call
+    after startup from re-posting updates already shown in the startup message.
+    """
+    count = 0
+    for match in fixtures:
+        if match.get("fixture", {}).get("status", {}).get("short") not in _LIVE_STATUSES:
+            continue
+        match_id = match["fixture"]["id"]
+        score = match.get("goals", {})
+        events = match.get("events", [])
+        key = f"{match_id}_{score.get('home')}-{score.get('away')}_{len(events)}"
+        already_posted.add(key)
+        count += 1
+    if count:
+        logger.info(f"🌱 Seeded {count} in-progress match snapshot(s) into already_posted.")
 
 async def run_live_loop(bot):
     """
@@ -36,12 +57,6 @@ async def run_live_loop(bot):
     if not matches:
         logger.info(f"[{now.strftime('%H:%M')}] 😕 No live fixtures returned or error in fetch.")
         return
-
-    # The channel object itself is not strictly needed here anymore,
-    # as discord_poster.py will get it using CHANNEL_ID and the bot object.
-    # However, having a check here can be an early exit if the CHANNEL_ID is misconfigured.
-    # Let's keep a lightweight check or rely on discord_poster's error handling.
-    # For now, we'll pass CHANNEL_ID and let discord_poster resolve it.
 
     for match in matches:
         match_id = match['fixture']['id']

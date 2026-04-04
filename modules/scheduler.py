@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from modules import api_provider
 from utils.time_utils import italy_now, parse_utc_to_italy
-from modules.live_loop import run_live_loop, clear_already_posted_today
+from modules.live_loop import run_live_loop, clear_already_posted_today, seed_already_posted
 from modules.ft_handler import fetch_and_post_ft, clear_tracked_matches_today, seed_already_announced_ft
 
 logger = logging.getLogger(__name__)
@@ -27,8 +27,9 @@ async def schedule_day(bot):
         logger.info("📅 No tracked league fixtures found for today or API error. Scheduling will not proceed for this cycle.")
         return
 
-    # Pre-seed FT set so already-finished matches don't get re-announced
+    # Pre-seed sets so already-finished/in-progress matches aren't re-announced on startup
     seed_already_announced_ft(fixtures)
+    seed_already_posted(fixtures)
 
     tracked_for_ko_timing = [
         m for m in fixtures
