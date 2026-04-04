@@ -17,7 +17,7 @@ mkdir -p bot_memory
 # Existing files are never overwritten.
 
 if [ ! -f bot_memory/state.json ]; then
-    echo '{"silent": false}' > bot_memory/state.json
+    echo '{"mode": "verbose"}' > bot_memory/state.json
     echo "  ✔ Created bot_memory/state.json"
 else
     echo "  ✔ bot_memory/state.json already exists — keeping Pi state"

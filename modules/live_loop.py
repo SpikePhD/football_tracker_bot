@@ -5,6 +5,7 @@ import logging
 # 'discord' import is also removed as this module no longer sends directly.
 from config import CHANNEL_ID
 from modules import api_provider
+from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
 from modules.ft_handler import track_match_for_ft
 from modules.discord_poster import post_live_update
@@ -24,6 +25,9 @@ async def run_live_loop(bot):
     Polls /fixtures?live=all, prepares update strings, and tells discord_poster
     to handle the posting/editing of live updates. Also registers matches for FT checking.
     """
+    if is_silent():
+        return
+
     now = italy_now()
     logger.info(f"[{now.strftime('%H:%M')}] 🌐 Querying live endpoint…")
 

@@ -1,23 +1,31 @@
 # modules/bot_mode.py
-# Persistent silent/verbose flag, backed by bot_memory/state.json.
-# Silent mode suppresses automatic broadcasts (startup message, morning fixture list)
-# but never affects live match updates or command responses.
+# Three-mode broadcast system, persisted in bot_memory/state.json.
+#
+# verbose — everything: startup message, morning broadcast, live updates, FT results, commands
+# normal  — match updates only: live events, FT results, commands (no startup/morning broadcasts)
+# silent  — commands only: bot never posts automatically
 
 from modules.storage import load, save
 
 _STATE_FILE = "state.json"
-_DEFAULTS = {"silent": False}
+_DEFAULTS = {"mode": "verbose"}
+_VALID_MODES = ("verbose", "normal", "silent")
 
 
-def _load() -> dict:
-    return load(_STATE_FILE, _DEFAULTS)
+def get_mode() -> str:
+    return load(_STATE_FILE, _DEFAULTS).get("mode", "verbose")
+
+
+def set_mode(mode: str) -> None:
+    assert mode in _VALID_MODES, f"Invalid mode: {mode}"
+    state = load(_STATE_FILE, _DEFAULTS)
+    state["mode"] = mode
+    save(_STATE_FILE, state)
+
+
+def is_verbose() -> bool:
+    return get_mode() == "verbose"
 
 
 def is_silent() -> bool:
-    return _load().get("silent", False)
-
-
-def set_silent(value: bool) -> None:
-    state = _load()
-    state["silent"] = value
-    save(_STATE_FILE, state)
+    return get_mode() == "silent"

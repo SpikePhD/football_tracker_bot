@@ -5,6 +5,7 @@ import discord
 from datetime import datetime, timedelta
 
 from config import CHANNEL_ID
+from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
 from modules.discord_poster import post_new_general_message
 
@@ -93,6 +94,9 @@ async def fetch_and_post_ft(bot: discord.Client):
     ESPN mode (primary): reads finished matches from the cached scoreboard — no extra API call.
     Fallback mode: calls API-Football per tracked match after expected FT time.
     """
+    if is_silent():
+        return
+
     from modules import api_provider  # late import to avoid circular dependency
 
     current_time = italy_now()

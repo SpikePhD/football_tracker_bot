@@ -26,7 +26,7 @@ from utils.personality import greet_message, get_greeting
 from modules.power_manager import setup_power_management
 from modules.scheduler import schedule_day
 from modules import api_provider
-from modules.bot_mode import is_silent
+from modules.bot_mode import is_verbose, get_mode
 from cogs.matches import build_matches_message
 import subprocess, pathlib
 
@@ -109,8 +109,8 @@ async def launch_daily_operations_manager(bot_instance: commands.Bot):
 @tasks.loop(time=time(hour=6, minute=30, tzinfo=italy_tz))
 async def six_thirty_morning_trigger():
     logger.info("🌅 06:30 AM (Europe/Rome) – Morning trigger fired.")
-    if is_silent():
-        logger.info("🔇 Silent mode active — skipping morning broadcast.")
+    if not is_verbose():
+        logger.info(f"📢 Morning broadcast skipped (mode: {get_mode()}).")
         return
     await ensure_http_session(bot)
     channel = bot.get_channel(CHANNEL_ID)
@@ -140,8 +140,8 @@ async def on_ready():
 
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
-        if is_silent():
-            logger.info("🔇 Silent mode active — skipping startup broadcast.")
+        if not is_verbose():
+            logger.info(f"📢 Startup broadcast skipped (mode: {get_mode()}).")
         else:
             try:
                 fixtures = await api_provider.fetch_day(bot.http_session)
