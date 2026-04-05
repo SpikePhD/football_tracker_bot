@@ -27,13 +27,16 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 |---|---|---|
 | `!matches` | — | Today's tracked fixtures grouped by competition, with live minutes and scorers |
 | `!competitions` | — | Lists all tracked competitions |
-| `!milan` | `!nextmilan`, `!acmilan` | AC Milan's next scheduled match |
+| `!next <team name>` | — | Any team's next scheduled match (e.g. `!next AC Milan`, `!next Arsenal`) |
 | `!hi` | `!hello` | Alive check / random greeting |
 | `!changelog` | — | Displays the version changelog |
-| `!version` | — | Shows the current bot version |
+| `!version` | `!ver`, `!commit` | Shows the current bot version and last commit |
 | `!api` | `!apistatus`, `!provider` | Shows active data provider (ESPN or API-Football fallback) |
-| `!silent` | `!Silent`, `!SILENT` | Pause automatic broadcasts (startup, morning message) |
-| `!verbose` | `!Verbose`, `!VERBOSE` | Resume automatic broadcasts |
+| `!mode` | — | Show the current broadcast mode |
+| `!verbose` | — | Enable verbose mode: startup message, morning broadcast, live updates, FT results |
+| `!normal` | — | Enable normal mode: live updates and FT results only, no broadcasts |
+| `!silent` | — | Enable silent mode: commands only, no automatic posts |
+| `!commands` | `!cmds`, `!help` | List all available commands |
 
 ---
 
@@ -164,12 +167,13 @@ football_tracker_bot/
 ├── cogs/                     # Discord command extensions (loaded dynamically at startup)
 │   ├── matches.py            # !matches — grouped fixture list with scorers
 │   ├── competitions.py       # !competitions
-│   ├── milan_command.py      # !milan / !nextmilan
+│   ├── next_command.py       # !next <team> — any team's next fixture
 │   ├── hello.py              # !hi / !hello
 │   ├── changelog.py          # !changelog
 │   ├── version.py            # !version
 │   ├── api_status.py         # !api — live provider status
-│   └── mode.py               # !silent / !verbose — broadcast mode toggle
+│   ├── mode.py               # !verbose / !normal / !silent — broadcast mode
+│   └── commands_list.py      # !commands — list all available commands
 │
 ├── modules/                  # Core bot logic
 │   ├── scheduler.py          # Daily cycle: fetch → sleep until KO → poll loop
@@ -250,4 +254,6 @@ Non-secret config lives in `config.py`:
 | `TRACKED_LEAGUE_IDS` | List of API-Football league IDs to monitor |
 | `LEAGUE_NAME_MAP` | Maps league ID → human-readable name (shared by all cogs) |
 | `LEAGUE_SLUG_MAP` | Maps league ID → ESPN URL slug |
-| `AC_MILAN_TEAM_ID` | Team ID used by `!milan` command (default: 489) |
+| `DOMESTIC_SLUG_GROUPS` | Maps a primary league slug → all domestic cup slugs for that country |
+| `INTERNATIONAL_SLUGS` | ESPN slugs for European and international competitions |
+| `build_league_slugs(slug)` | Returns the full slug list for a team's country + all international competitions |

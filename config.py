@@ -41,10 +41,6 @@ TRACKED_LEAGUE_IDS = [
     4     # EURO
 ]
 
-# - Tracked individual teams
-AC_MILAN_TEAM_ID = 489        # API-Football team ID
-AC_MILAN_ESPN_TEAM_ID = 103   # ESPN team ID
-
 # ─ Human-readable league names (shared by matches and competitions cogs)
 LEAGUE_NAME_MAP = {
     135:  "Serie A",

@@ -1,3 +1,25 @@
+**Football Tracker Bot v3.2.0**
+Author: SpikePhD
+Commands Cleanup & Code Quality:
+
+• Removed `!milan` / `!nextmilan` / `!acmilan`:
+  • Functionally identical to `!next AC Milan` — use that instead.
+  • `AC_MILAN_TEAM_ID` and `AC_MILAN_ESPN_TEAM_ID` constants removed from config.py.
+• New `!commands` command (aliases: `!cmds`, `!help`):
+  • Dynamically lists every registered bot command with its aliases and description.
+  • Replaces discord.py's built-in `!help` (which is now disabled).
+• Code quality (no behaviour changes):
+  • Extracted shared event-formatting logic into utils/event_formatter.py — eliminates
+    duplicate goal/red-card rendering across matches.py, live_loop.py, ft_handler.py.
+  • Fixed en-dash vs hyphen inconsistency in FT result messages.
+  • bot_mode.set_mode() now raises ValueError instead of using assert.
+  • get_current_season_year() uses italy_now() instead of naive datetime.now().
+  • Removed ~200 lines of dead code and stale comments throughout.
+• Bug Fix:
+  • Fixed duplicate live updates posted on bot restart: in-progress matches are now
+    pre-seeded into already_posted so the first poll after startup doesn't re-post
+    scores already shown in the startup message.
+
 **Football Tracker Bot v3.1.0**
 Author: SpikePhD
 UX Polish, Persistent Memory & Deployment Improvements:

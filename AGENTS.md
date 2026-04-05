@@ -48,7 +48,7 @@ Bot state reads/writes → modules/storage.py → bot_memory/state.json
 | File | Responsibility |
 |---|---|
 | `football_tracker_bot.py` | Bot lifecycle, task loops (morning + 11am), HTTP session, cog loading |
-| `config.py` | All config: secrets, `TRACKED_LEAGUE_IDS`, `LEAGUE_NAME_MAP`, `LEAGUE_SLUG_MAP`, `AC_MILAN_TEAM_ID` |
+| `config.py` | All config: secrets, `TRACKED_LEAGUE_IDS`, `LEAGUE_NAME_MAP`, `LEAGUE_SLUG_MAP`, `build_league_slugs()` |
 | `modules/scheduler.py` | Daily orchestration: fetch fixtures → sleep until KO → poll loop until midnight |
 | `modules/live_loop.py` | Live polling: builds score updates, deduplicates by `{match_id}_{score}_{event_count}` |
 | `modules/ft_handler.py` | Tracks live matches for FT check; posts final results (dual ESPN/fallback path) |
@@ -63,12 +63,14 @@ Bot state reads/writes → modules/storage.py → bot_memory/state.json
 | `utils/personality.py` | Greeting message variants |
 | `cogs/matches.py` | `!matches` command; also exports `build_matches_message()` used by startup and morning trigger |
 | `cogs/competitions.py` | `!competitions` command |
-| `cogs/milan_command.py` | `!milan` command |
+| `cogs/next_command.py` | `!next <team>` command — any team's next fixture via ESPN search |
 | `cogs/hello.py` | `!hi` / `!hello` command |
 | `cogs/changelog.py` | `!changelog` command |
 | `cogs/version.py` | `!version` command |
 | `cogs/api_status.py` | `!api` command — shows active provider, interval, failure count |
-| `cogs/mode.py` | `!silent` / `!verbose` commands — toggle automatic broadcast mode |
+| `cogs/mode.py` | `!verbose` / `!normal` / `!silent` / `!mode` commands |
+| `cogs/commands_list.py` | `!commands` command — dynamically lists all registered commands |
+| `utils/event_formatter.py` | `format_match_events()` — shared event formatting (goals, red cards) |
 
 ---
 
@@ -139,10 +141,10 @@ details. A follow-up post is triggered when new events appear for the same score
 - Use `storage.load` / `storage.save` for any new runtime state that should survive restarts.
 - `inject_memory/` files are read-only from the bot's perspective — the bot reads them, we write them.
 
-### Silent mode
-- `modules/bot_mode.py` exposes `is_silent()` and `set_silent(value)`.
-- Check `is_silent()` before any automatic broadcast (startup message, morning trigger).
-- Live match updates and FT results are **always** posted regardless of mode.
+### Broadcast mode
+- `modules/bot_mode.py` exposes `get_mode()`, `set_mode(mode)`, `is_verbose()`, `is_silent()`.
+- Valid modes: `"verbose"` (all broadcasts), `"normal"` (live + FT only), `"silent"` (commands only).
+- Check `is_verbose()` before startup/morning broadcasts; check `is_silent()` before live/FT posts.
 - Command responses are **always** sent regardless of mode.
 
 ---

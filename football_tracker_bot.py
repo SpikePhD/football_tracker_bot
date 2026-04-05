@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # --- Intents & bot setup ---
 intents = discord.Intents.default()
 intents.message_content = True # Ensure this is enabled if you use message content
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 current_day_scheduler_task: asyncio.Task | None = None
 
 # --- HTTP Session Management ---
