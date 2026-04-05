@@ -5,7 +5,7 @@ from discord.ext import commands
 from config import LEAGUE_NAME_MAP
 from modules import api_provider
 from utils.time_utils import parse_utc_to_italy, italy_now
-from utils.event_formatter import format_match_events
+from utils.event_formatter import format_match_events, event_completeness_note
 from modules.discord_poster import post_new_message_to_context
 
 logger = logging.getLogger(__name__)
@@ -51,12 +51,14 @@ def build_matches_message(fixtures: list) -> str:
                 time_str = ko_dt.strftime("%H:%M")
                 lines.append(f"• {time_str} — {home} vs {away}")
             elif status == "FT":
-                ft_event_parts = format_match_events(m.get('events', []), home, away)
+                events = m.get('events', [])
+                ft_event_parts = format_match_events(events, home, away)
                 score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
+                note = event_completeness_note(goals, events)
                 if ft_event_parts:
-                    lines.append(f"• FT: {score_str} ({'; '.join(ft_event_parts)})")
+                    lines.append(f"• FT: {score_str} ({'; '.join(ft_event_parts)}){note}")
                 else:
-                    lines.append(f"• FT: {score_str}")
+                    lines.append(f"• FT: {score_str}{note}")
             else:
                 elapsed = m.get('fixture', {}).get('status', {}).get('elapsed')
                 if status == "HT":
@@ -66,12 +68,14 @@ def build_matches_message(fixtures: list) -> str:
                 else:
                     minute_str = status
 
-                event_parts = format_match_events(m.get('events', []), home, away)
+                events = m.get('events', [])
+                event_parts = format_match_events(events, home, away)
                 score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
+                note = event_completeness_note(goals, events)
                 if event_parts:
-                    lines.append(f"• LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)})")
+                    lines.append(f"• LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)}){note}")
                 else:
-                    lines.append(f"• LIVE [{minute_str}]: {score_str}")
+                    lines.append(f"• LIVE [{minute_str}]: {score_str}{note}")
 
     return "\n".join(lines)
 

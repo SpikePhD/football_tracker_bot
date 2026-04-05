@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from config import CHANNEL_ID
 from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
-from utils.event_formatter import format_match_events
+from utils.event_formatter import format_match_events, event_completeness_note
 from modules.discord_poster import post_new_general_message
 
 logger = logging.getLogger(__name__)
@@ -83,19 +83,14 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     if detail_lines:
         ft_message += f" ({'; '.join(detail_lines)})"
 
-    # Warn when ESPN's event details don't account for all goals in the score.
-    try:
-        total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
-        goal_events = sum(1 for e in events if e.get("type") == "Goal")
-        if goal_events < total_goals:
-            missing = total_goals - goal_events
-            ft_message += f" ⚠️ {missing} goal(s) missing from event data"
-            logger.warning(
-                f"⚠️ FT event mismatch for {home_team} vs {away_team}: "
-                f"score={total_goals} goals, events={goal_events} goals recorded."
-            )
-    except (TypeError, ValueError):
-        pass
+    note = event_completeness_note(goals, events)
+    if note:
+        ft_message += note
+        logger.warning(
+            f"⚠️ FT event mismatch for {home_team} vs {away_team}: "
+            f"score total={int(goals.get('home',0) or 0) + int(goals.get('away',0) or 0)}, "
+            f"goal events={sum(1 for e in events if e.get('type') == 'Goal')}."
+        )
 
     logger.info(f"📢 Posting FT result: {ft_message}")
     await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
