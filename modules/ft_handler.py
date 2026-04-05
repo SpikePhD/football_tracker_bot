@@ -83,6 +83,20 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     if detail_lines:
         ft_message += f" ({'; '.join(detail_lines)})"
 
+    # Warn when ESPN's event details don't account for all goals in the score.
+    try:
+        total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
+        goal_events = sum(1 for e in events if e.get("type") == "Goal")
+        if goal_events < total_goals:
+            missing = total_goals - goal_events
+            ft_message += f" ⚠️ {missing} goal(s) missing from event data"
+            logger.warning(
+                f"⚠️ FT event mismatch for {home_team} vs {away_team}: "
+                f"score={total_goals} goals, events={goal_events} goals recorded."
+            )
+    except (TypeError, ValueError):
+        pass
+
     logger.info(f"📢 Posting FT result: {ft_message}")
     await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
 
