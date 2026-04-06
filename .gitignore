@@ -3,6 +3,9 @@ bot_memory/
 
 # Environment variables
 .env
+
+# Deployment config (machine-specific, created by install.sh)
+.bot_config
 .env.local
 .env.*.local
 

@@ -2,8 +2,16 @@
 set -Eeuo pipefail
 
 # --- Configuration ---
-# Absolute path to the directory where your bot's code is cloned
-BOT_DIR="/home/lucac/football_tracker_bot"
+# Derive the bot directory from the location of this script (portable, no hardcoded paths)
+BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Load deployment config (SERVICE_NAME) — created by install.sh
+if [ ! -f "$BOT_DIR/.bot_config" ]; then
+    echo "ERROR: $BOT_DIR/.bot_config not found. Run install.sh first or copy .bot_config.example." >&2
+    exit 1
+fi
+# shellcheck source=.bot_config.example
+source "$BOT_DIR/.bot_config"
 
 # Path to the python executable WITHIN your virtual environment
 VENV_PYTHON_PATH="$BOT_DIR/.venv/bin/python"
@@ -14,8 +22,8 @@ VENV_PIP_PATH="$BOT_DIR/.venv/bin/pip"
 # The Git branch you want to pull updates from (usually "main" or "master")
 GIT_BRANCH="main"
 
-# The name of your systemd service for the bot
-SYSTEMD_SERVICE_NAME="marco_van_botten"
+# The name of your systemd service for the bot (read from .bot_config)
+SYSTEMD_SERVICE_NAME="$SERVICE_NAME"
 
 # Log file for this update script
 LOG_FILE="$BOT_DIR/auto_update.log"
