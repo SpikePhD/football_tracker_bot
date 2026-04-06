@@ -7,10 +7,13 @@ from datetime import datetime, timedelta
 
 import aiohttp
 
+import asyncio
+
 from config import LEAGUE_SLUG_MAP
 from utils import espn_client
 from utils import api_client
 from utils.time_utils import italy_now, get_italy_date_string
+from utils.event_formatter import normalize_api_football_events
 
 logger = logging.getLogger(__name__)
 
@@ -217,4 +220,58 @@ async def fetch_fixture(session: aiohttp.ClientSession, fixture_id) -> dict | No
     Delegates to API-Football (ESPN doesn't have a per-event endpoint we use here).
     """
     return await api_client.fetch_fixture_by_id(session, fixture_id)
+
+
+async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> dict:
+    """
+    If ESPN event data is incomplete (goal count < score total), fetch the fixture
+    from API-Football and return a copy of the match with complete events.
+    Returns the original match unchanged if data is complete or on any error.
+    """
+    goals = match.get("goals", {})
+    events = match.get("events", [])
+
+    try:
+        total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
+        goal_events = sum(1 for e in events if e.get("type") == "Goal")
+        if goal_events >= total_goals:
+            return match
+        missing = total_goals - goal_events
+    except (TypeError, ValueError):
+        return match
+
+    fixture_id = match.get("fixture", {}).get("id")
+    if not fixture_id:
+        return match
+
+    logger.info(
+        f"🔍 [Enrich] Fetching API-Football events for fixture {fixture_id} "
+        f"({missing} missing goal(s) in ESPN data)"
+    )
+    try:
+        payload = await fetch_fixture(session, fixture_id)
+        if not payload:
+            return match
+        response = payload.get("response", [])
+        if not response:
+            return match
+        enriched_events = normalize_api_football_events(response[0].get("events", []))
+        logger.info(
+            f"✅ [Enrich] Fixture {fixture_id}: replaced {len(events)} ESPN events "
+            f"with {len(enriched_events)} API-Football events."
+        )
+        return {**match, "events": enriched_events}
+    except Exception as e:
+        logger.warning(f"⚠️ [Enrich] Failed to enrich fixture {fixture_id}: {e}")
+        return match
+
+
+async def enrich_fixtures(session: aiohttp.ClientSession, fixtures: list) -> list:
+    """
+    Batch-enrich a list of fixtures concurrently.
+    Only makes API-Football calls for fixtures where ESPN event data is incomplete.
+    """
+    return list(await asyncio.gather(
+        *(enrich_fixture_events(session, m) for m in fixtures)
+    ))
 

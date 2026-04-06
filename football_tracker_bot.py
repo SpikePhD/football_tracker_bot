@@ -97,6 +97,7 @@ async def six_thirty_morning_trigger():
         logger.error(f"❌ Morning trigger: could not find channel ID {CHANNEL_ID}.")
         return
     fixtures = await api_provider.fetch_day(bot.http_session)
+    fixtures = await api_provider.enrich_fixtures(bot.http_session, fixtures)
     fixtures.sort(key=lambda m: m['fixture']['date'])
     content = f"{get_greeting()}\n\n{build_matches_message(fixtures)}"
     try:
@@ -129,6 +130,7 @@ async def on_ready():
         else:
             try:
                 fixtures = await api_provider.fetch_day(bot.http_session)
+                fixtures = await api_provider.enrich_fixtures(bot.http_session, fixtures)
                 fixtures.sort(key=lambda m: m['fixture']['date'])
                 content = f"{greet_message()}\n\n{build_matches_message(fixtures)}"
                 await channel.send(content)

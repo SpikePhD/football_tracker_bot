@@ -69,6 +69,8 @@ async def run_live_loop(bot):
         if key in already_posted:
             continue
 
+        enriched = await api_provider.enrich_fixture_events(bot.http_session, match)
+        events = enriched.get('events', [])
         event_strings = format_match_events(events, home, away)
 
         already_posted.add(key)

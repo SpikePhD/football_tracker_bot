@@ -92,6 +92,7 @@ class Matches(commands.Cog):
     )
     async def matches(self, ctx: commands.Context):
         fixtures = await api_provider.fetch_day(self.bot.http_session)
+        fixtures = await api_provider.enrich_fixtures(self.bot.http_session, fixtures)
         fixtures.sort(key=lambda m: m['fixture']['date'])
         await post_new_message_to_context(ctx, content=build_matches_message(fixtures))
 

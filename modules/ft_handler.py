@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from config import CHANNEL_ID
 from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
-from utils.event_formatter import format_match_events, event_completeness_note
+from utils.event_formatter import format_match_events, event_completeness_note, normalize_api_football_events
 from modules.discord_poster import post_new_general_message
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,9 @@ def track_match_for_ft(match_data: dict):
 
 async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     """Build and send the FT result message from a normalized match dict."""
+    from modules import api_provider  # late import to avoid circular dependency
+    match_details = await api_provider.enrich_fixture_events(bot.http_session, match_details)
+
     home_team = match_details.get("teams", {}).get("home", {}).get("name", "Home Team")
     away_team = match_details.get("teams", {}).get("away", {}).get("name", "Away Team")
     goals = match_details.get("goals", {"home": "?", "away": "?"})
@@ -182,15 +185,7 @@ async def fetch_and_post_ft(bot: discord.Client):
             away_team = match_details_raw.get("teams", {}).get("away", {}).get("name", "Away Team")
             raw_events = match_details_raw.get("events", [])
 
-            normalized_events = []
-            for e in raw_events:
-                normalized_events.append({
-                    "time": {"elapsed": e.get("time", {}).get("elapsed", "?")},
-                    "player": {"name": e.get("player", {}).get("name", "N/A")},
-                    "team": {"name": e.get("team", {}).get("name")},
-                    "type": e.get("type"),
-                    "detail": e.get("detail"),
-                })
+            normalized_events = normalize_api_football_events(raw_events)
 
             normalized = {
                 "teams": {"home": {"name": home_team}, "away": {"name": away_team}},

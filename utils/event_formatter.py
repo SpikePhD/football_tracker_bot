@@ -20,6 +20,22 @@ def event_completeness_note(goals: dict, events: list) -> str:
     return ""
 
 
+def normalize_api_football_events(raw_events: list) -> list:
+    """
+    Convert raw API-Football event dicts to the normalized format used across the bot.
+    """
+    return [
+        {
+            "time": {"elapsed": e.get("time", {}).get("elapsed", "?")},
+            "player": {"name": e.get("player", {}).get("name", "N/A")},
+            "team": {"name": e.get("team", {}).get("name")},
+            "type": e.get("type"),
+            "detail": e.get("detail"),
+        }
+        for e in raw_events
+    ]
+
+
 def format_match_events(events: list, home: str, away: str) -> list[str]:
     """
     Convert a list of match event dicts into human-readable strings.
