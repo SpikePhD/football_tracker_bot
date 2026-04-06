@@ -256,9 +256,16 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
         if not response:
             return match
         enriched_events = normalize_api_football_events(response[0].get("events", []))
+        af_goals = sum(1 for e in enriched_events if e.get("type") == "Goal")
+        if af_goals <= goal_events:
+            logger.info(
+                f"ℹ️ [Enrich] Fixture {fixture_id}: API-Football also has incomplete data "
+                f"({af_goals} goal events vs ESPN's {goal_events}). Keeping ESPN events."
+            )
+            return match
         logger.info(
             f"✅ [Enrich] Fixture {fixture_id}: replaced {len(events)} ESPN events "
-            f"with {len(enriched_events)} API-Football events."
+            f"with {len(enriched_events)} API-Football events ({af_goals}/{total_goals} goals)."
         )
         return {**match, "events": enriched_events}
     except Exception as e:
