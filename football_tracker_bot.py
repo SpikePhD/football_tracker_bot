@@ -21,7 +21,7 @@ from discord.ext import commands, tasks
 import aiohttp # Make sure aiohttp is imported
 
 from config import BOT_TOKEN, CHANNEL_ID
-from utils.personality import greet_message, get_greeting
+from utils.personality import greet_message
 from modules.power_manager import setup_power_management
 from modules.scheduler import schedule_day
 from modules import api_provider
@@ -85,26 +85,6 @@ async def launch_daily_operations_manager(bot_instance: commands.Bot):
     except Exception as e:
         logger.error(f"💥 Daily operations schedule task failed: {e}", exc_info=True) # Added exc_info
 
-@tasks.loop(time=time(hour=6, minute=30, tzinfo=italy_tz))
-async def six_thirty_morning_trigger():
-    logger.info("🌅 06:30 AM (Europe/Rome) – Morning trigger fired.")
-    if not is_verbose():
-        logger.info(f"📢 Morning broadcast skipped (mode: {get_mode()}).")
-        return
-    await ensure_http_session(bot)
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
-        logger.error(f"❌ Morning trigger: could not find channel ID {CHANNEL_ID}.")
-        return
-    fixtures = await api_provider.fetch_day(bot.http_session)
-    fixtures = await api_provider.enrich_fixtures(bot.http_session, fixtures)
-    fixtures.sort(key=lambda m: m['fixture']['date'])
-    content = f"{get_greeting()}\n\n{build_matches_message(fixtures)}"
-    try:
-        await channel.send(content)
-    except Exception as e:
-        logger.error(f"❌ Morning trigger: failed to send message: {e}", exc_info=True)
-
 @tasks.loop(time=time(hour=0, minute=1, tzinfo=italy_tz))
 async def midnight_trigger():
     logger.info("🌙 00:01 AM (Europe/Rome) – Midnight trigger: restarting daily operations for new day.")
@@ -160,13 +140,6 @@ async def on_ready():
     logger.info("🚀 Bot ready. Kicking off initial daily operations schedule manager.")
     asyncio.create_task(launch_daily_operations_manager(bot))
 
-    if not six_thirty_morning_trigger.is_running():
-        try:
-            six_thirty_morning_trigger.start()
-            logger.info("Task loop 'six_thirty_morning_trigger' has been started.")
-        except RuntimeError as e:
-            logger.error(f"❌ Failed to start 'six_thirty_morning_trigger': {e}.", exc_info=True)
-
     if not midnight_trigger.is_running():
         try:
             midnight_trigger.start()
@@ -202,9 +175,6 @@ async def main():
             await bot.start(BOT_TOKEN)
     finally:
         logger.info("🛑 Shutting down. Cleaning up tasks and sessions...")
-        if six_thirty_morning_trigger.is_running():
-            six_thirty_morning_trigger.cancel()
-            logger.info("Task loop 'six_thirty_morning_trigger' cancelled.")
         if midnight_trigger.is_running():
             midnight_trigger.cancel()
             logger.info("Task loop 'midnight_trigger' cancelled.")
