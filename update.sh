@@ -7,9 +7,11 @@ set -e
 cd "$(dirname "$0")"
 
 # Load deployment config (SERVICE_NAME) — created by install.sh
+# Auto-bootstrap from .bot_config.example on first run after an update.
 if [ ! -f .bot_config ]; then
-    echo "ERROR: .bot_config not found. Run install.sh first or copy .bot_config.example." >&2
-    exit 1
+    echo "⚠️  .bot_config not found — creating from .bot_config.example"
+    cp .bot_config.example .bot_config
+    echo "  ✔ Created .bot_config (edit it if your service name differs from marco_van_botten)"
 fi
 # shellcheck source=.bot_config.example
 source .bot_config

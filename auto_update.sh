@@ -6,9 +6,10 @@ set -Eeuo pipefail
 BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load deployment config (SERVICE_NAME) — created by install.sh
+# Auto-bootstrap from .bot_config.example on first run after an update.
 if [ ! -f "$BOT_DIR/.bot_config" ]; then
-    echo "ERROR: $BOT_DIR/.bot_config not found. Run install.sh first or copy .bot_config.example." >&2
-    exit 1
+    echo "WARNING: $BOT_DIR/.bot_config not found — creating from .bot_config.example" >&2
+    cp "$BOT_DIR/.bot_config.example" "$BOT_DIR/.bot_config"
 fi
 # shellcheck source=.bot_config.example
 source "$BOT_DIR/.bot_config"
