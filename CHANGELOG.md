@@ -1,3 +1,23 @@
+**Football Tracker Bot v3.3.0**
+Author: SpikePhD
+Local LLM Integration (`!ask`):
+
+• New `!ask <question>` command:
+  • Routes questions through a local LLM running on the Raspberry Pi via ollama.
+  • Supports tool calling — the LLM can invoke tools to answer questions it can't answer
+    from training data alone.
+  • Three built-in tools: web search (DuckDuckGo), today's live fixtures, and next match
+    for any team (reuses ESPN client functions already used by `!next`).
+  • Discord shows a "typing…" indicator while the LLM processes the request.
+  • Gracefully returns an error message if ollama is unavailable.
+• Fully configurable via `.env` — no code changes needed to customise the bot:
+  • `BOT_NAME` — the bot's display name used in the default persona prompt.
+  • `OLLAMA_MODEL` — the ollama model to use (default: `qwen2.5:3b`).
+  • `OLLAMA_URL` — ollama server URL (default: `http://localhost:11434`).
+  • `OLLAMA_SYSTEM_PROMPT` — full system prompt / persona for the LLM.
+• New dependency: `ddgs` — DuckDuckGo search library (no API key required).
+• Recommended model: `qwen2.5:3b` — best tool-calling quality at ~2 GB on ARM64.
+
 **Football Tracker Bot v3.2.0**
 Author: SpikePhD
 Commands Cleanup & Code Quality:

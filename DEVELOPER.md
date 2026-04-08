@@ -175,6 +175,7 @@ Environment variables (`BOT_TOKEN`, `API_KEY`, `CHANNEL_ID`) are loaded here via
 | `competitions.py` | `!competitions` |
 | `hello.py` | `!hi` / `!hello` |
 | `commands_list.py` | `!commands` / `!cmds` / `!help` |
+| `ask.py` | `!ask <question>` — routes to local LLM (ollama) with tool calling |
 
 ---
 
@@ -344,6 +345,44 @@ async def setup(bot: commands.Bot):
 
 > Always use `post_new_message_to_context()` from `modules/discord_poster.py` rather than calling `ctx.send()` directly.
 
+### Add a new tool to `!ask`
+
+The `!ask` command (`cogs/ask.py`) uses a tool-calling loop: the LLM decides which tool to call, the bot executes it, and the result is fed back before the LLM writes its final response. Up to 5 rounds of tool calls are allowed per question.
+
+To expose a new tool to the LLM:
+
+1. Add an entry to the `TOOLS` list in `cogs/ask.py`:
+
+```python
+{
+    "type": "function",
+    "function": {
+        "name": "my_tool",
+        "description": "One clear sentence describing what this tool does and when to use it.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "my_param": {"type": "string", "description": "What this param is for"}
+            },
+            "required": ["my_param"]
+        }
+    }
+}
+```
+
+2. Add a handler branch in `_execute_tool()`:
+
+```python
+if name == "my_tool":
+    try:
+        result = do_something(args.get("my_param", ""))
+        return str(result)
+    except Exception as e:
+        return f"Tool failed: {e}"
+```
+
+The description field is critical — the LLM decides when to call a tool based on it. Be specific.
+
 ### Add persistent runtime state
 
 1. Decide on a new key in `bot_memory/state.json`, e.g. `"my_setting": true`.
@@ -403,4 +442,6 @@ Never use `datetime.now()` (naive local time) in bot logic.
 
 All fixture data comes through `modules/api_provider.py`. **Do not import from `utils/espn_client.py` or `utils/api_client.py` directly** in modules or cogs — the provider handles caching, failover, and health state.
 
-The only exception is `cogs/next_command.py`, which uses `espn_client.search_team_espn()` and `fetch_next_team_fixture_espn()` directly because those are ESPN-specific search operations with no fallback equivalent.
+The only exceptions are:
+- `cogs/next_command.py` — uses `espn_client.search_team_espn()` and `fetch_next_team_fixture_espn()` directly (ESPN-specific search, no fallback equivalent).
+- `cogs/ask.py` — uses `espn_client.fetch_all_leagues()`, `search_team_espn()`, and `fetch_next_team_fixture_espn()` directly as LLM tool implementations. These are intentional direct calls, not part of the live polling path.

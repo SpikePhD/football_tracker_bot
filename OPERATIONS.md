@@ -12,8 +12,9 @@ Day-to-day maintenance guide for the bot running on a Raspberry Pi (or any Linux
 4. [Updating the Bot](#4-updating-the-bot)
 5. [Broadcast Mode](#5-broadcast-mode)
 6. [API Status](#6-api-status)
-7. [File Locations on the Pi](#7-file-locations-on-the-pi)
-8. [Troubleshooting](#8-troubleshooting)
+7. [LLM Configuration (`!ask`)](#7-llm-configuration-ask)
+8. [File Locations on the Pi](#8-file-locations-on-the-pi)
+9. [Troubleshooting](#9-troubleshooting)
 
 ---
 
@@ -266,7 +267,74 @@ In this case a `⚠️ N goal(s) missing from event data` warning appears in the
 
 ---
 
-## 7. File Locations on the Pi
+## 7. LLM Configuration (`!ask`)
+
+The `!ask` command routes questions through a local LLM running on the Pi via [ollama](https://ollama.com/). All configuration is in `~/football_tracker_bot/.env`.
+
+### Configure the persona
+
+```bash
+nano ~/football_tracker_bot/.env
+```
+
+Key variables:
+
+| Variable | Description | Default |
+|---|---|---|
+| `BOT_NAME` | Bot's name used in the default persona prompt | `Marco` |
+| `OLLAMA_MODEL` | Model to use — must be pulled first | `qwen2.5:3b` |
+| `OLLAMA_URL` | ollama server address | `http://localhost:11434` |
+| `OLLAMA_SYSTEM_PROMPT` | Full persona/system prompt. Overrides the default entirely | *(see below)* |
+
+Example:
+
+```env
+BOT_NAME=Marco Van Botten
+OLLAMA_SYSTEM_PROMPT=You are Marco Van Botten, a die-hard AC Milan supporter. You provide football information when asked, with deep passion for AC Milan. You can be dramatic, give banter, and are not afraid to show your bias. Keep replies concise. When you need current information — scores, fixtures, news — use the tools available to you.
+```
+
+After editing `.env`, restart the bot:
+
+```bash
+sudo systemctl restart marco_van_botten
+```
+
+### Pull a different model
+
+```bash
+ollama pull llama3.2:3b        # alternative to qwen2.5:3b
+ollama list                    # see all downloaded models
+```
+
+Then update `OLLAMA_MODEL` in `.env` and restart.
+
+### Check ollama is running
+
+```bash
+systemctl status ollama
+```
+
+If it's not running:
+
+```bash
+sudo systemctl start ollama
+sudo systemctl enable ollama   # auto-start on boot
+```
+
+### Install a new Python dependency into the bot's venv
+
+If `requirements.txt` gains a new package (e.g. after a `git pull`):
+
+```bash
+/home/lucac/football_tracker_bot/.venv/bin/pip install -r ~/football_tracker_bot/requirements.txt
+sudo systemctl restart marco_van_botten
+```
+
+> `auto_update.sh` handles this automatically. Only needed for manual updates via `update.sh`.
+
+---
+
+## 8. File Locations on the Pi
 
 ```
 ~/football_tracker_bot/
@@ -303,7 +371,7 @@ In this case a `⚠️ N goal(s) missing from event data` warning appears in the
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 ### Bot is not posting anything
 
@@ -369,6 +437,53 @@ cat ~/football_tracker_bot/bot_memory/state.json
 ```
 
 `update.sh` and `install.sh` only create this file if it doesn't exist — they never overwrite it. If it keeps resetting, check that your git repo doesn't have a `bot_memory/state.json` tracked (it should be gitignored).
+
+### `!ask` does not respond
+
+**1. Check the cog loaded:**
+
+```bash
+sudo journalctl -u marco_van_botten -n 50 --no-pager | grep ask
+```
+
+If you see `Failed to load cog cogs.ask`, the import failed. Most likely `ddgs` is not installed in the venv:
+
+```bash
+/home/lucac/football_tracker_bot/.venv/bin/pip install ddgs
+sudo systemctl restart marco_van_botten
+```
+
+**2. Check ollama is running:**
+
+```bash
+systemctl status ollama
+```
+
+If it's stopped:
+
+```bash
+sudo systemctl start ollama
+```
+
+**3. Check the model is downloaded:**
+
+```bash
+ollama list
+```
+
+If `qwen2.5:3b` (or your configured model) is missing:
+
+```bash
+ollama pull qwen2.5:3b
+```
+
+**4. Test ollama directly:**
+
+```bash
+ollama run qwen2.5:3b "Forza Milan?"
+```
+
+If this fails, ollama itself has a problem — check `journalctl -u ollama -n 30`.
 
 ### Checking the Discord bot token / channel ID
 

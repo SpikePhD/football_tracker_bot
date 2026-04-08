@@ -10,6 +10,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 
 ## Features
 
+- **`!ask` command** — ask the bot any football question, answered by a local LLM (ollama) running on the Pi. The LLM can search the web via DuckDuckGo and query live fixture data in real time. Fully configurable persona via `.env`.
 - Live score updates every **60 seconds** via ESPN (goals, red cards, current minute)
 - Full-time results with complete scorer and event details
 - **Grouped by competition** — `!matches` shows fixtures under bold league headers
@@ -36,6 +37,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 | `!verbose` | — | Enable verbose mode: startup message, morning broadcast, live updates, FT results |
 | `!normal` | — | Enable normal mode: live updates and FT results only, no broadcasts |
 | `!silent` | — | Enable silent mode: commands only, no automatic posts |
+| `!ask <question>` | — | Ask the local LLM a question. Can search the web and query live fixtures |
 | `!commands` | `!cmds`, `!help` | List all available commands |
 
 ---
@@ -46,6 +48,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - An API-Football API key ([api-football.com](https://www.api-football.com/)) — used as fallback only
 - A Discord channel ID where the bot will post updates
+- **For `!ask`:** [ollama](https://ollama.com/) installed on the host, with a model pulled (e.g. `ollama pull qwen2.5:3b`)
 
 ---
 
@@ -84,6 +87,11 @@ Edit `.env`:
 BOT_TOKEN=your_discord_bot_token_here
 API_KEY=your_api_football_key_here
 CHANNEL_ID=123456789012345678
+
+# Optional — LLM persona for !ask (defaults shown)
+BOT_NAME=Marco Van Botten
+OLLAMA_MODEL=qwen2.5:3b
+OLLAMA_SYSTEM_PROMPT=You are Marco Van Botten, a die-hard AC Milan supporter...
 ```
 
 ### 5. Run the bot
@@ -173,7 +181,8 @@ football_tracker_bot/
 │   ├── version.py            # !version
 │   ├── api_status.py         # !api — live provider status
 │   ├── mode.py               # !verbose / !normal / !silent — broadcast mode
-│   └── commands_list.py      # !commands — list all available commands
+│   ├── commands_list.py      # !commands — list all available commands
+│   └── ask.py                # !ask — local LLM via ollama with tool calling
 │
 ├── modules/                  # Core bot logic
 │   ├── scheduler.py          # Daily cycle: fetch → sleep until KO → poll loop
@@ -246,6 +255,10 @@ Secrets are loaded from `.env` via `python-dotenv`. The bot raises a clear `Runt
 | `BOT_TOKEN` | Yes | Discord bot token |
 | `API_KEY` | Yes | API-Football (v3) key (fallback only) |
 | `CHANNEL_ID` | Yes | Discord channel ID for all updates |
+| `OLLAMA_URL` | No | ollama server URL (default: `http://localhost:11434`) |
+| `OLLAMA_MODEL` | No | ollama model to use (default: `qwen2.5:3b`) |
+| `BOT_NAME` | No | Bot display name used in the default LLM persona (default: `Marco`) |
+| `OLLAMA_SYSTEM_PROMPT` | No | Full system prompt for the LLM. Overrides the default persona entirely |
 
 Non-secret config lives in `config.py`:
 
