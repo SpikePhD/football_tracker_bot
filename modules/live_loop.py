@@ -7,7 +7,7 @@ from config import CHANNEL_ID
 from modules import api_provider
 from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
-from utils.event_formatter import format_match_events
+from utils.event_formatter import format_match_events, event_completeness_note
 from modules.ft_handler import track_match_for_ft
 from modules.discord_poster import post_live_update
 
@@ -76,9 +76,12 @@ async def run_live_loop(bot):
         already_posted.add(key)
         track_match_for_ft(match)
 
+        completeness = event_completeness_note(score, events)
         line_content = f"{home} {score['home']} - {score['away']} {away}"
         if event_strings:
             line_content += " (" + "; ".join(event_strings) + ")"
+        if completeness:
+            line_content += completeness
 
         logger.info(f"📢 Posting live update: {line_content}")
         await post_live_update(bot, CHANNEL_ID, content=line_content)
