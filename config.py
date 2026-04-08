@@ -77,6 +77,18 @@ DOMESTIC_SLUG_GROUPS = {
 }
 
 
+# ── Local LLM (ollama) ────────────────────────────────────────────────────────
+OLLAMA_URL    = os.getenv("OLLAMA_URL",   "http://localhost:11434")
+OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+BOT_NAME      = os.getenv("BOT_NAME",     "Marco")
+OLLAMA_SYSTEM_PROMPT = os.getenv(
+    "OLLAMA_SYSTEM_PROMPT",
+    f"You are {BOT_NAME}, a passionate and knowledgeable football supporter. "
+    "Answer questions about football concisely and with personality. "
+    "When you need current information — recent scores, news, fixtures — use the tools available to you."
+)
+
+
 def build_league_slugs(primary_slug: str) -> list:
     """
     Return the full list of ESPN league slugs to search for a team's next fixture.
