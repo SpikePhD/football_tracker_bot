@@ -75,6 +75,17 @@ class Ask(commands.Cog):
         ]
         try:
             async with aiohttp.ClientSession() as session:
+                # Health check — fast ping to catch ollama being down before the long request
+                try:
+                    async with session.get(
+                        f"{OLLAMA_URL}/api/tags",
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as ping:
+                        if ping.status != 200:
+                            return f"⚠️ ollama is not responding (HTTP {ping.status}). Is it running? `sudo systemctl start ollama`"
+                except Exception:
+                    return "⚠️ Cannot reach ollama. Is it running? Try: `sudo systemctl start ollama`"
+
                 for _ in range(5):  # max 5 tool-call rounds to prevent infinite loops
                     payload = {
                         "model": OLLAMA_MODEL,
@@ -103,9 +114,12 @@ class Ask(commands.Cog):
                         messages.append({"role": "tool", "content": result})
 
             return "⚠️ Too many tool calls — try rephrasing your question."
+        except aiohttp.ServerTimeoutError:
+            logger.warning("ask: LLM request timed out after 120s")
+            return "⚠️ The LLM took too long to respond (>120s). The Pi may be under load — try again in a moment."
         except Exception as e:
-            logger.warning(f"ask: LLM error: {e}")
-            return f"⚠️ LLM unavailable: {e}"
+            logger.warning(f"ask: LLM error: {type(e).__name__}: {e}")
+            return f"⚠️ LLM error ({type(e).__name__}): {e or 'no details — check `sudo journalctl -u marco_van_botten -n 20`'}"
 
     async def _execute_tool(self, session: aiohttp.ClientSession, name: str, args: dict) -> str:
         if name == "web_search":
