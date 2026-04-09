@@ -7,6 +7,7 @@ from ddgs import DDGS
 
 from config import (LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, OLLAMA_MODEL,
                     OLLAMA_SYSTEM_PROMPT, OLLAMA_URL, build_league_slugs)
+from utils.time_utils import parse_utc_to_italy
 from modules.discord_poster import post_new_message_to_context
 from utils.espn_client import (fetch_all_leagues, fetch_next_team_fixture_espn,
                                 search_team_espn)
@@ -161,9 +162,10 @@ class Ask(commands.Cog):
                     return f"No upcoming fixture found for {team}."
                 home = fixture["teams"]["home"]["name"]
                 away = fixture["teams"]["away"]["name"]
-                date = fixture["fixture"]["date"]
+                date_utc = fixture["fixture"]["date"]
+                date_italy = parse_utc_to_italy(date_utc).strftime("%A, %B %d, %Y at %H:%M (Italy Time)")
                 league = LEAGUE_NAME_MAP.get(fixture["league"]["id"], "Unknown")
-                return f"{home} vs {away} — {date} ({league})"
+                return f"{home} vs {away} — {date_italy} ({league})"
             except Exception as e:
                 return f"Next match fetch failed: {e}"
 
