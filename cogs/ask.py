@@ -101,7 +101,25 @@ class Ask(commands.Cog):
                     ) as resp:
                         data = await resp.json()
 
-                    msg = data["message"]
+                    if "error" in data:
+                        err = data["error"]
+                        if "tool" in err.lower() or "function" in err.lower():
+                            # Model doesn't support tool calling — retry once without tools
+                            logger.warning(f"ask: model does not support tools ({err}), retrying without tools")
+                            payload.pop("tools", None)
+                            async with session.post(
+                                f"{OLLAMA_URL}/api/chat",
+                                json=payload,
+                                timeout=aiohttp.ClientTimeout(total=120),
+                            ) as resp2:
+                                data = await resp2.json()
+                        else:
+                            return f"⚠️ ollama error: {err}"
+
+                    msg = data.get("message")
+                    if not msg:
+                        return f"⚠️ Unexpected response from ollama — model may not support this request. Try `OLLAMA_MODEL=qwen2.5:1.5b` in your .env."
+
                     if not msg.get("tool_calls"):
                         return msg["content"]  # final answer — no more tool calls
 
