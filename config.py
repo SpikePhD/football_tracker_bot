@@ -77,15 +77,15 @@ DOMESTIC_SLUG_GROUPS = {
 }
 
 
-# ── Local LLM (ollama) ────────────────────────────────────────────────────────
-OLLAMA_URL    = os.getenv("OLLAMA_URL",   "http://localhost:11434")
-OLLAMA_MODEL  = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
-BOT_NAME      = os.getenv("BOT_NAME",     "Marco")
-OLLAMA_SYSTEM_PROMPT = os.getenv(
-    "OLLAMA_SYSTEM_PROMPT",
-    f"You are {BOT_NAME}, a passionate and knowledgeable football supporter. "
-    "Answer questions about football concisely and with personality. "
-    "When you need current information — recent scores, news, fixtures — use the tools available to you."
+# ── Mistral cloud LLM ────────────────────────────────────────────────────────
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
+MISTRAL_MODEL   = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+LLM_SYSTEM_PROMPT = os.getenv(
+    "LLM_SYSTEM_PROMPT",
+    "You are Marco Van Botten, a die-hard AC Milan supporter and passionate football expert. "
+    "You answer questions about football with deep love for AC Milan and Italian football culture. "
+    "Be concise, punchy, and occasionally dramatic. When you need current information — "
+    "recent scores, news, fixtures — use the tools available to you."
 )
 
 

@@ -1,12 +1,13 @@
 # cogs/ask.py
+import json
 import logging
 
 import aiohttp
 from discord.ext import commands
 from ddgs import DDGS
 
-from config import (LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, OLLAMA_MODEL,
-                    OLLAMA_SYSTEM_PROMPT, OLLAMA_URL, build_league_slugs)
+from config import (LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, MISTRAL_API_KEY,
+                    MISTRAL_MODEL, LLM_SYSTEM_PROMPT, build_league_slugs)
 from utils.time_utils import parse_utc_to_italy
 from modules.discord_poster import post_new_message_to_context
 from utils.espn_client import (fetch_all_leagues, fetch_next_team_fixture_espn,
@@ -70,75 +71,64 @@ class Ask(commands.Cog):
         await post_new_message_to_context(ctx, content=reply)
 
     async def _run_llm(self, question: str) -> str:
+        if not MISTRAL_API_KEY:
+            return "⚠️ MISTRAL_API_KEY is not set. Add it to your .env file."
+
         messages = [
-            {"role": "system", "content": OLLAMA_SYSTEM_PROMPT},
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
             {"role": "user",   "content": question},
         ]
+        headers = {
+            "Authorization": f"Bearer {MISTRAL_API_KEY}",
+            "Content-Type": "application/json",
+        }
+
         try:
             async with aiohttp.ClientSession() as session:
-                # Health check — fast ping to catch ollama being down before the long request
-                try:
-                    async with session.get(
-                        f"{OLLAMA_URL}/api/tags",
-                        timeout=aiohttp.ClientTimeout(total=5),
-                    ) as ping:
-                        if ping.status != 200:
-                            return f"⚠️ ollama is not responding (HTTP {ping.status}). Is it running? `sudo systemctl start ollama`"
-                except Exception:
-                    return "⚠️ Cannot reach ollama. Is it running? Try: `sudo systemctl start ollama`"
-
                 for _ in range(5):  # max 5 tool-call rounds to prevent infinite loops
                     payload = {
-                        "model": OLLAMA_MODEL,
-                        "stream": False,
+                        "model": MISTRAL_MODEL,
                         "messages": messages,
                         "tools": TOOLS,
                     }
                     async with session.post(
-                        f"{OLLAMA_URL}/api/chat",
+                        "https://api.mistral.ai/v1/chat/completions",
                         json=payload,
-                        timeout=aiohttp.ClientTimeout(total=120),
+                        headers=headers,
+                        timeout=aiohttp.ClientTimeout(total=60),
                     ) as resp:
+                        if resp.status == 401:
+                            return "⚠️ Mistral API key is invalid. Check MISTRAL_API_KEY in your .env."
+                        if resp.status == 429:
+                            return "⚠️ Mistral rate limit hit. Try again in a moment."
+                        if resp.status != 200:
+                            text = await resp.text()
+                            return f"⚠️ Mistral API error (HTTP {resp.status}): {text[:200]}"
                         data = await resp.json()
 
-                    if "error" in data:
-                        err = data["error"]
-                        if "tool" in err.lower() or "function" in err.lower():
-                            # Model doesn't support tool calling — retry once without tools
-                            logger.warning(f"ask: model does not support tools ({err}), retrying without tools")
-                            payload.pop("tools", None)
-                            async with session.post(
-                                f"{OLLAMA_URL}/api/chat",
-                                json=payload,
-                                timeout=aiohttp.ClientTimeout(total=120),
-                            ) as resp2:
-                                data = await resp2.json()
-                        else:
-                            return f"⚠️ ollama error: {err}"
-
-                    msg = data.get("message")
-                    if not msg:
-                        return f"⚠️ Unexpected response from ollama — model may not support this request. Try `OLLAMA_MODEL=qwen2.5:1.5b` in your .env."
-
+                    msg = data["choices"][0]["message"]
                     if not msg.get("tool_calls"):
                         return msg["content"]  # final answer — no more tool calls
 
                     messages.append(msg)
                     for tc in msg["tool_calls"]:
-                        result = await self._execute_tool(
-                            session,
-                            tc["function"]["name"],
-                            tc["function"].get("arguments", {}),
-                        )
-                        messages.append({"role": "tool", "content": result})
+                        args = tc["function"].get("arguments", "{}")
+                        if isinstance(args, str):
+                            args = json.loads(args)
+                        result = await self._execute_tool(session, tc["function"]["name"], args)
+                        messages.append({
+                            "role": "tool",
+                            "content": result,
+                            "tool_call_id": tc["id"],
+                        })
 
             return "⚠️ Too many tool calls — try rephrasing your question."
         except aiohttp.ServerTimeoutError:
-            logger.warning("ask: LLM request timed out after 120s")
-            return "⚠️ The LLM took too long to respond (>120s). The Pi may be under load — try again in a moment."
+            logger.warning("ask: Mistral API timed out after 60s")
+            return "⚠️ Mistral API timed out (>60s). Try again."
         except Exception as e:
             logger.warning(f"ask: LLM error: {type(e).__name__}: {e}")
-            return f"⚠️ LLM error ({type(e).__name__}): {e or 'no details — check `sudo journalctl -u marco_van_botten -n 20`'}"
+            return f"⚠️ LLM error ({type(e).__name__}): {e or 'check logs'}"
 
     async def _execute_tool(self, session: aiohttp.ClientSession, name: str, args: dict) -> str:
         if name == "web_search":

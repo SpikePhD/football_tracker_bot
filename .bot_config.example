@@ -1,9 +1,0 @@
-# .bot_config — deployment configuration
-# Copy this file to .bot_config and fill in your values.
-# This file is created automatically by install.sh.
-#
-# .bot_config is gitignored so it stays local to each deployment.
-
-# The name of the systemd service unit for this bot.
-# Must match the filename at /etc/systemd/system/<SERVICE_NAME>.service
-SERVICE_NAME=marco_van_botten
