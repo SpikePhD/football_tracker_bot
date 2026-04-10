@@ -86,11 +86,12 @@ class Ask(commands.Cog):
 
         try:
             async with aiohttp.ClientSession() as session:
-                for _ in range(5):  # max 5 tool-call rounds to prevent infinite loops
+                for round_num in range(5):  # max 5 tool-call rounds to prevent infinite loops
                     payload = {
                         "model": LLM_MODEL,
                         "messages": messages,
-                        "tools": TOOLS,
+                        # On the last round, omit tools so the model is forced to give a text answer
+                        **({"tools": TOOLS} if round_num < 4 else {}),
                     }
                     async with session.post(
                         f"{LLM_BASE_URL}/chat/completions",
