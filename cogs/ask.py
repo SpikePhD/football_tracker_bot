@@ -1,6 +1,7 @@
 # cogs/ask.py
 import json
 import logging
+import re
 
 import aiohttp
 from discord.ext import commands
@@ -111,6 +112,8 @@ class Ask(commands.Cog):
                         content = msg["content"]
                         if isinstance(content, list):
                             content = "\n".join(b["text"] for b in content if b.get("type") == "text")
+                        # Strip bare JSON tool-call artifacts Mistral occasionally leaks into responses
+                        content = re.sub(r'\s*\{["\w][^{}]*\}\.?', '', content).strip()
                         return content
 
                     messages.append(msg)
