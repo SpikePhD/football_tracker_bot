@@ -77,9 +77,10 @@ DOMESTIC_SLUG_GROUPS = {
 }
 
 
-# ── Mistral cloud LLM ────────────────────────────────────────────────────────
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
-MISTRAL_MODEL   = os.getenv("MISTRAL_MODEL", "mistral-small-latest")
+# ── Cloud LLM — used by !ask (OpenAI-compatible API) ─────────────────────────
+LLM_API_KEY   = os.getenv("LLM_API_KEY",   "")
+LLM_BASE_URL  = os.getenv("LLM_BASE_URL",  "https://api.mistral.ai/v1")
+LLM_MODEL     = os.getenv("LLM_MODEL",     "mistral-small-latest")
 LLM_SYSTEM_PROMPT = os.getenv(
     "LLM_SYSTEM_PROMPT",
     "You are Marco Van Botten, a die-hard AC Milan supporter and passionate football expert. "

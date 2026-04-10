@@ -6,8 +6,8 @@ import aiohttp
 from discord.ext import commands
 from ddgs import DDGS
 
-from config import (LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, MISTRAL_API_KEY,
-                    MISTRAL_MODEL, LLM_SYSTEM_PROMPT, build_league_slugs)
+from config import (LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, LLM_API_KEY,
+                    LLM_BASE_URL, LLM_MODEL, LLM_SYSTEM_PROMPT, build_league_slugs)
 from utils.time_utils import parse_utc_to_italy
 from modules.discord_poster import post_new_message_to_context
 from utils.espn_client import (fetch_all_leagues, fetch_next_team_fixture_espn,
@@ -71,15 +71,15 @@ class Ask(commands.Cog):
         await post_new_message_to_context(ctx, content=reply)
 
     async def _run_llm(self, question: str) -> str:
-        if not MISTRAL_API_KEY:
-            return "⚠️ MISTRAL_API_KEY is not set. Add it to your .env file."
+        if not LLM_API_KEY:
+            return "⚠️ LLM_API_KEY is not set. Add it to your .env file."
 
         messages = [
             {"role": "system", "content": LLM_SYSTEM_PROMPT},
             {"role": "user",   "content": question},
         ]
         headers = {
-            "Authorization": f"Bearer {MISTRAL_API_KEY}",
+            "Authorization": f"Bearer {LLM_API_KEY}",
             "Content-Type": "application/json",
         }
 
@@ -87,23 +87,23 @@ class Ask(commands.Cog):
             async with aiohttp.ClientSession() as session:
                 for _ in range(5):  # max 5 tool-call rounds to prevent infinite loops
                     payload = {
-                        "model": MISTRAL_MODEL,
+                        "model": LLM_MODEL,
                         "messages": messages,
                         "tools": TOOLS,
                     }
                     async with session.post(
-                        "https://api.mistral.ai/v1/chat/completions",
+                        f"{LLM_BASE_URL}/chat/completions",
                         json=payload,
                         headers=headers,
                         timeout=aiohttp.ClientTimeout(total=60),
                     ) as resp:
                         if resp.status == 401:
-                            return "⚠️ Mistral API key is invalid. Check MISTRAL_API_KEY in your .env."
+                            return "⚠️ LLM API key is invalid. Check LLM_API_KEY in your .env."
                         if resp.status == 429:
-                            return "⚠️ Mistral rate limit hit. Try again in a moment."
+                            return "⚠️ LLM rate limit hit. Try again in a moment."
                         if resp.status != 200:
                             text = await resp.text()
-                            return f"⚠️ Mistral API error (HTTP {resp.status}): {text[:200]}"
+                            return f"⚠️ LLM API error (HTTP {resp.status}): {text[:200]}"
                         data = await resp.json()
 
                     msg = data["choices"][0]["message"]
