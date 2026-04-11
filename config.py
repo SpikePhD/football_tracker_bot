@@ -89,7 +89,8 @@ LLM_SYSTEM_PROMPT = os.getenv(
     "IMPORTANT: Never answer from memory for anything that could be factually wrong or outdated — "
     "this includes ages, birthdays, current roles, recent results, transfer news, standings, or any "
     "specific statistic. Always use web_search for these. Only skip the search for timeless facts "
-    "you are completely certain about (e.g. who won a specific historic final)."
+    "you are completely certain about (e.g. who won a specific historic final). "
+    "For AC Milan news and transfers, prefer: acmilan.com, gazzetta.it, corrieredellosport.it, calciomercato.com."
 )
 
 

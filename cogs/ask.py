@@ -2,6 +2,8 @@
 import json
 import logging
 import re
+from collections import deque
+from datetime import datetime
 
 import aiohttp
 from discord.ext import commands
@@ -18,12 +20,18 @@ logger = logging.getLogger(__name__)
 
 _TRACKED_SLUGS = set(LEAGUE_SLUG_MAP.values())
 
+# Max messages kept per channel (10 = 5 exchanges)
+_HISTORY_MAXLEN = 10
+
 TOOLS = [
     {
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for up-to-date football news, scores, or any current information.",
+            "description": (
+                "Search the web for up-to-date football news, scores, or any current information. "
+                "For AC Milan news prefer: acmilan.com, gazzetta.it, corrieredellosport.it, calciomercato.com."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -61,22 +69,32 @@ TOOLS = [
 class Ask(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Per-channel conversation history: channel_id → deque of {role, content} dicts
+        self._history: dict[int, deque] = {}
 
     @commands.command(
         name="ask",
         help="Ask the bot a question. The LLM can search the web and check fixtures.",
     )
     async def ask(self, ctx: commands.Context, *, question: str):
+        history = self._history.setdefault(ctx.channel.id, deque(maxlen=_HISTORY_MAXLEN))
         async with ctx.typing():
-            reply = await self._run_llm(question)
+            reply = await self._run_llm(question, history)
+        # Store the exchange so future questions have context
+        history.append({"role": "user",      "content": question})
+        history.append({"role": "assistant", "content": reply})
         await post_new_message_to_context(ctx, content=reply)
 
-    async def _run_llm(self, question: str) -> str:
+    async def _run_llm(self, question: str, history: deque) -> str:
         if not LLM_API_KEY:
             return "⚠️ LLM_API_KEY is not set. Add it to your .env file."
 
+        today = datetime.now().strftime("%A, %B %d, %Y")
+        system_content = f"{LLM_SYSTEM_PROMPT}\nToday's date is {today}."
+
         messages = [
-            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "system", "content": system_content},
+            *list(history),                        # previous exchanges in this channel
             {"role": "user",   "content": question},
         ]
         headers = {
@@ -131,8 +149,8 @@ class Ask(commands.Cog):
 
             return "⚠️ Too many tool calls — try rephrasing your question."
         except aiohttp.ServerTimeoutError:
-            logger.warning("ask: Mistral API timed out after 60s")
-            return "⚠️ Mistral API timed out (>60s). Try again."
+            logger.warning("ask: LLM API timed out after 60s")
+            return "⚠️ LLM API timed out (>60s). Try again."
         except Exception as e:
             logger.warning(f"ask: LLM error: {type(e).__name__}: {e}")
             return f"⚠️ LLM error ({type(e).__name__}): {e or 'check logs'}"
