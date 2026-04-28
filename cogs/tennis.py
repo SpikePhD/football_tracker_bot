@@ -1,8 +1,10 @@
 ﻿# cogs/tennis.py
 import logging
+from datetime import datetime
 
 from discord.ext import commands
 
+from config import TENNIS_UPCOMING_DAYS
 from modules import api_provider
 from modules.discord_poster import post_new_message_to_context
 from utils.tennis_formatter import (
@@ -22,30 +24,61 @@ class Tennis(commands.Cog):
 
     @commands.command(
         name="tennis",
-        help="List today's tracked tennis matches for configured players.",
+        help="Show tracked tennis: live now, upcoming, and today's finished matches.",
     )
     async def tennis(self, ctx: commands.Context):
-        matches = await api_provider.fetch_tennis_day(self.bot.http_session)
-        if not matches:
-            await post_new_message_to_context(ctx, content="No tracked tennis matches found today.")
+        live_matches = await api_provider.fetch_tennis_live(self.bot.http_session)
+        upcoming_matches = await api_provider.fetch_tennis_upcoming(
+            self.bot.http_session,
+            horizon_days=TENNIS_UPCOMING_DAYS,
+        )
+        finished_today = await api_provider.fetch_tennis_finished_today(self.bot.http_session)
+
+        live_sorted = sorted(live_matches, key=_sort_key_asc)
+        upcoming_sorted = sorted(upcoming_matches, key=_sort_key_asc)
+        finished_sorted = sorted(finished_today, key=_sort_key_desc, reverse=True)
+
+        if not (live_sorted or upcoming_sorted or finished_sorted):
+            await post_new_message_to_context(
+                ctx,
+                content="No tracked tennis matches live, upcoming, or finished today.",
+            )
             return
 
-        lines = ["**Tracked tennis matches today:**"]
-        for match in matches:
-            status = match.get("status", {}).get("short")
-            if status == "NS":
-                lines.append("\n" + format_tennis_pre_message(match))
-            elif status == "LIVE":
+        lines: list[str] = ["**Tracked tennis matches**"]
+
+        if live_sorted:
+            lines.append("\n**LIVE now**")
+            for match in live_sorted:
                 lines.append("\n" + format_tennis_live_message(match))
-            elif status == "FT":
+
+        if upcoming_sorted:
+            lines.append(f"\n**Upcoming (next {TENNIS_UPCOMING_DAYS} days)**")
+            for match in upcoming_sorted:
+                lines.append("\n" + format_tennis_pre_message(match))
+
+        if finished_sorted:
+            lines.append("\n**Finished today**")
+            for match in finished_sorted:
                 lines.append("\n" + format_tennis_final_message(match))
-            else:
-                lines.append(
-                    f"\n🎾 {match.get('player_a')} vs {match.get('player_b')} "
-                    f"({match.get('event_name')} - {match.get('tour')}) [{status}]"
-                )
 
         await post_new_message_to_context(ctx, content="\n".join(lines))
+
+
+def _parse_start_time(match: dict) -> datetime:
+    start = match.get("start_time") or ""
+    try:
+        return datetime.fromisoformat(start.replace("Z", "+00:00"))
+    except Exception:
+        return datetime.min
+
+
+def _sort_key_asc(match: dict) -> datetime:
+    return _parse_start_time(match)
+
+
+def _sort_key_desc(match: dict) -> datetime:
+    return _parse_start_time(match)
 
 
 async def setup(bot: commands.Bot):

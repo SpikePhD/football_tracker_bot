@@ -9,11 +9,11 @@ import aiohttp
 
 import asyncio
 
-from config import LEAGUE_SLUG_MAP, TENNIS_CACHE_TTL_SEC
+from config import LEAGUE_SLUG_MAP, TENNIS_CACHE_TTL_SEC, TENNIS_UPCOMING_DAYS
 from utils import espn_client
 from utils import espn_tennis_client
 from utils import api_client
-from utils.time_utils import italy_now, get_italy_date_string
+from utils.time_utils import italy_now, get_italy_date_string, parse_utc_to_italy
 from utils.event_formatter import normalize_api_football_events
 
 logger = logging.getLogger(__name__)
@@ -334,5 +334,40 @@ async def fetch_tennis_live(session: aiohttp.ClientSession) -> list[dict]:
 async def fetch_tennis_finished_today(session: aiohttp.ClientSession) -> list[dict]:
     """Tracked tennis matches that reached final status today."""
     matches = await _get_cached_tennis_scoreboard(session)
-    return [m for m in matches if m.get("status", {}).get("short") == "FT"]
+    return [m for m in matches if m.get("status", {}).get("short") == "FT" and _is_today(m.get("start_time"))]
+
+
+def _match_dt_italy(start_time: str | None):
+    if not start_time:
+        return None
+    try:
+        return parse_utc_to_italy(start_time)
+    except Exception:
+        return None
+
+
+def _is_today(start_time: str | None) -> bool:
+    dt = _match_dt_italy(start_time)
+    return bool(dt and dt.date() == italy_now().date())
+
+
+def _is_future(start_time: str | None, horizon_days: int = TENNIS_UPCOMING_DAYS) -> bool:
+    dt = _match_dt_italy(start_time)
+    if not dt:
+        return False
+    now = italy_now()
+    return now < dt <= now + timedelta(days=horizon_days)
+
+
+def _is_past(start_time: str | None) -> bool:
+    dt = _match_dt_italy(start_time)
+    if not dt:
+        return False
+    return dt < italy_now()
+
+
+async def fetch_tennis_upcoming(session: aiohttp.ClientSession, horizon_days: int = TENNIS_UPCOMING_DAYS) -> list[dict]:
+    """Tracked tennis matches upcoming within horizon_days."""
+    matches = await _get_cached_tennis_scoreboard(session)
+    return [m for m in matches if _is_future(m.get("start_time"), horizon_days)]
 

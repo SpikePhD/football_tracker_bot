@@ -114,6 +114,41 @@ def _competition_to_match(event: dict, competition: dict, tour: str) -> dict | N
     }
 
 
+def _dedup_key(match: dict) -> str:
+    """
+    Canonical dedup key independent of ATP/WTA feed label.
+    Uses normalized sorted player pair + competition date + event name.
+    """
+    players = sorted([
+        _normalize_name(match.get("player_a", "")),
+        _normalize_name(match.get("player_b", "")),
+    ])
+    start_time = match.get("start_time") or ""
+    date_part = ""
+    if start_time:
+        try:
+            date_part = datetime.fromisoformat(start_time.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            date_part = start_time[:10]
+    event_name = _normalize_name(match.get("event_name", ""))
+    return f"{players[0]}|{players[1]}|{date_part}|{event_name}"
+
+
+def _match_richness_score(match: dict) -> tuple:
+    """
+    Prefer records with richer score/status metadata when duplicates collide.
+    """
+    sets = match.get("sets") or []
+    status = match.get("status") or {}
+    round_text = match.get("round") or ""
+    return (
+        len(sets),
+        1 if status.get("detail") else 0,
+        1 if round_text else 0,
+        1 if match.get("winner") else 0,
+    )
+
+
 async def _fetch_tour_scoreboard(session: aiohttp.ClientSession, tour: str, date_str: str | None = None) -> dict:
     url = f"{ESPN_TENNIS_BASE}/{tour}/scoreboard"
     if date_str:
@@ -159,5 +194,13 @@ async def fetch_tracked_tennis_matches(
                     if match:
                         matches.append(match)
 
-    matches.sort(key=lambda m: m.get("start_time") or "")
-    return matches
+    deduped: dict[str, dict] = {}
+    for match in matches:
+        key = _dedup_key(match)
+        existing = deduped.get(key)
+        if existing is None or _match_richness_score(match) > _match_richness_score(existing):
+            deduped[key] = match
+
+    final_matches = list(deduped.values())
+    final_matches.sort(key=lambda m: m.get("start_time") or "")
+    return final_matches

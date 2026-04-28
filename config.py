@@ -27,6 +27,7 @@ TRACKED_TENNIS_PLAYERS = [
 
 # Tennis polling/caching settings (v1 uses ESPN only).
 TENNIS_CACHE_TTL_SEC = 55
+TENNIS_UPCOMING_DAYS = 7
 # â”€ Tracked Leagues
 TRACKED_LEAGUE_IDS = [
     135,  # Serie A
