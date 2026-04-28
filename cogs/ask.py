@@ -96,6 +96,7 @@ class Ask(commands.Cog):
         history = self._history.setdefault(ctx.channel.id, deque(maxlen=_HISTORY_MAXLEN))
         async with ctx.typing():
             reply = await self._run_llm(question, history)
+        reply = self._suppress_preview_links(reply)
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": reply})
         await post_new_message_to_context(ctx, content=reply)
@@ -242,6 +243,26 @@ class Ask(commands.Cog):
         if "Sources:" in base:
             return base
         return f"{base}\n\nSources: " + " | ".join(source_tokens)
+
+    def _suppress_preview_links(self, text: str) -> str:
+        """
+        Wrap raw http(s) links as <...> so Discord does not generate embeds.
+        Leaves links already wrapped in angle brackets unchanged.
+        """
+        if not text:
+            return text
+
+        pattern = re.compile(r'(?<!<)(https?://[^\s<>]+)')
+
+        def repl(match):
+            url = match.group(1)
+            trailing = ""
+            while url and url[-1] in ".,);!?":
+                trailing = url[-1] + trailing
+                url = url[:-1]
+            return f"<{url}>{trailing}"
+
+        return pattern.sub(repl, text)
 
     def _normalize_search_results(self, results) -> list[dict]:
         normalized = []

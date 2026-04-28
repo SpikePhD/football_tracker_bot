@@ -80,13 +80,13 @@ async def upsert_live_message(
         if message_id is not None:
             try:
                 existing = await channel.fetch_message(message_id)
-                await existing.edit(content=content)
+                await existing.edit(content=content, suppress=True)
                 logger.info(f"DiscordPoster: Edited live message {message_id} in #{channel.name}")
                 return existing
             except discord.NotFound:
                 logger.warning(f"DiscordPoster: Live message {message_id} not found in #{channel.name}; sending new message.")
 
-        created = await channel.send(content=content)
+        created = await channel.send(content=content, suppress_embeds=True)
         logger.info(f"DiscordPoster: Created new live message {created.id} in #{channel.name}")
         return created
     except discord.Forbidden:
@@ -129,6 +129,7 @@ async def post_new_general_message(
                 content=chunk,
                 embed=embed if include_payloads else None,
                 files=current_attachments if include_payloads else None,
+                suppress_embeds=True,
             )
         return new_message
     except discord.Forbidden:
@@ -164,6 +165,7 @@ async def post_new_message_to_context(
                 content=chunk,
                 embed=embed if include_payloads else None,
                 files=current_attachments if include_payloads else None,
+                suppress_embeds=True,
             )
         return new_message
     except discord.Forbidden:
