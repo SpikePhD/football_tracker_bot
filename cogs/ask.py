@@ -231,9 +231,9 @@ class Ask(commands.Cog):
 
         source_tokens = []
         for src in unique:
-            href = src.get("href")
+            href = (src.get("href") or "").strip()
             domain = src.get("domain") or "source"
-            source_tokens.append(f"{domain}: {href}" if href else domain)
+            source_tokens.append(f"{domain}: <{href}>" if href else domain)
 
         if not source_tokens:
             return content
