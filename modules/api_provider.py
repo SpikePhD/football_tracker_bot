@@ -9,8 +9,9 @@ import aiohttp
 
 import asyncio
 
-from config import LEAGUE_SLUG_MAP
+from config import LEAGUE_SLUG_MAP, TENNIS_CACHE_TTL_SEC
 from utils import espn_client
+from utils import espn_tennis_client
 from utils import api_client
 from utils.time_utils import italy_now, get_italy_date_string
 from utils.event_formatter import normalize_api_football_events
@@ -36,6 +37,11 @@ _cache: list[dict] = []
 _cache_date: str | None = None  # Italy date string (YYYY-MM-DD) the cache covers
 _cache_ts: datetime | None = None
 CACHE_TTL_SEC = 55   # expire just before the next 60s poll
+
+# Tennis cache
+_tennis_cache: list[dict] = []
+_tennis_cache_date: str | None = None
+_tennis_cache_ts: datetime | None = None
 
 
 # ── Health management ─────────────────────────────────────────────────────────
@@ -281,4 +287,52 @@ async def enrich_fixtures(session: aiohttp.ClientSession, fixtures: list) -> lis
     return list(await asyncio.gather(
         *(enrich_fixture_events(session, m) for m in fixtures)
     ))
+
+
+async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
+    """
+    Returns today's tracked tennis matches from ESPN ATP/WTA scoreboards.
+    Cached for TENNIS_CACHE_TTL_SEC seconds; invalidated at Italy midnight.
+    """
+    global _tennis_cache, _tennis_cache_date, _tennis_cache_ts
+
+    today = get_italy_date_string()
+    now = italy_now()
+
+    if (
+        _tennis_cache_date == today
+        and _tennis_cache_ts is not None
+        and (now - _tennis_cache_ts).total_seconds() < TENNIS_CACHE_TTL_SEC
+    ):
+        return _tennis_cache
+
+    date_str = today.replace("-", "")
+    try:
+        matches = await espn_tennis_client.fetch_tracked_tennis_matches(session, date_str)
+    except Exception as e:
+        logger.warning(f"[APIProvider] Tennis fetch error: {e}", exc_info=True)
+        matches = []
+
+    _tennis_cache = matches
+    _tennis_cache_date = today
+    _tennis_cache_ts = now
+    logger.info(f"[APIProvider] Tennis scoreboard fetched: {len(matches)} tracked match(es).")
+    return _tennis_cache
+
+
+async def fetch_tennis_day(session: aiohttp.ClientSession) -> list[dict]:
+    """All tracked tennis matches for today from ESPN ATP/WTA scoreboards."""
+    return await _get_cached_tennis_scoreboard(session)
+
+
+async def fetch_tennis_live(session: aiohttp.ClientSession) -> list[dict]:
+    """Tracked tennis matches currently live."""
+    matches = await _get_cached_tennis_scoreboard(session)
+    return [m for m in matches if m.get("status", {}).get("short") == "LIVE"]
+
+
+async def fetch_tennis_finished_today(session: aiohttp.ClientSession) -> list[dict]:
+    """Tracked tennis matches that reached final status today."""
+    matches = await _get_cached_tennis_scoreboard(session)
+    return [m for m in matches if m.get("status", {}).get("short") == "FT"]
 

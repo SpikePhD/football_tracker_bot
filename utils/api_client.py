@@ -2,12 +2,11 @@
 import asyncio
 import aiohttp
 import logging
-import pytz
-from datetime import datetime
-from .time_utils import get_current_season_year, parse_utc_to_italy
+from datetime import datetime, timezone
+from .time_utils import get_current_season_year
 
 from config import API_KEY, TRACKED_LEAGUE_IDS
-from utils.time_utils import get_italy_date_string
+from utils.time_utils import get_italy_date_string, italy_now
 
 logger = logging.getLogger(__name__)
 
@@ -108,7 +107,7 @@ async def fetch_next_team_fixture(session: aiohttp.ClientSession, team_id: int) 
         # The API might already return them sorted, but explicit sort is safer.
         fixtures.sort(key=lambda f: f.get('fixture', {}).get('date', ''))
 
-        now_utc = datetime.utcnow().replace(tzinfo=pytz.utc)
+        now_utc = italy_now().astimezone(timezone.utc)
 
         for fixture_details in fixtures:
             fixture_obj = fixture_details.get('fixture', {})

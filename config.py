@@ -1,11 +1,11 @@
-# config.py
+﻿# config.py
 import os
 from dotenv import load_dotenv
 
-# ─ load your .env
+# â”€ load your .env
 load_dotenv()
 
-# ─ Discord / API credentials
+# â”€ Discord / API credentials
 API_KEY   = os.getenv("API_KEY")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 _channel  = os.getenv("CHANNEL_ID")
@@ -19,7 +19,15 @@ if not _channel:
 
 CHANNEL_ID = int(_channel)
 
-# ─ Tracked Leagues
+# Tennis tracking by player name (normalized lowercase).
+TRACKED_TENNIS_PLAYERS = [
+    "jannik sinner",
+    "lorenzo musetti",
+]
+
+# Tennis polling/caching settings (v1 uses ESPN only).
+TENNIS_CACHE_TTL_SEC = 55
+# â”€ Tracked Leagues
 TRACKED_LEAGUE_IDS = [
     135,  # Serie A
     137,  # Coppa Italia
@@ -41,7 +49,7 @@ TRACKED_LEAGUE_IDS = [
     4     # EURO
 ]
 
-# ─ Human-readable league names (shared by matches and competitions cogs)
+# â”€ Human-readable league names (shared by matches and competitions cogs)
 LEAGUE_NAME_MAP = {
     135:  "Serie A",
     137:  "Coppa Italia",
@@ -52,7 +60,7 @@ LEAGUE_NAME_MAP = {
     528:  "Community Shield",
     140:  "La Liga",
     143:  "Copa del Rey",
-    556:  "Supercopa de España",
+    556:  "Supercopa de EspaÃ±a",
     2:    "Champions League",
     3:    "Europa League",
     848:  "Conference League",
@@ -63,7 +71,7 @@ LEAGUE_NAME_MAP = {
     4:    "UEFA EURO",
 }
 
-# ─ Slug groups for !next command: domestic competitions per primary league + shared internationals
+# â”€ Slug groups for !next command: domestic competitions per primary league + shared internationals
 INTERNATIONAL_SLUGS = [
     "uefa.champions", "uefa.europa", "uefa.europa.conf",
     "uefa.super_cup", "fifa.cwc", "fifa.intercontinental_cup",
@@ -77,7 +85,7 @@ DOMESTIC_SLUG_GROUPS = {
 }
 
 
-# ── Cloud LLM — used by !ask (OpenAI-compatible API) ─────────────────────────
+# â”€â”€ Cloud LLM â€” used by !ask (OpenAI-compatible API) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 LLM_API_KEY   = os.getenv("LLM_API_KEY",   "")
 LLM_BASE_URL  = os.getenv("LLM_BASE_URL",  "https://api.mistral.ai/v1")
 LLM_MODEL     = os.getenv("LLM_MODEL",     "mistral-small-latest")
@@ -86,12 +94,24 @@ LLM_SYSTEM_PROMPT = os.getenv(
     "You are Marco Van Botten, a die-hard AC Milan supporter and passionate football expert. "
     "You answer questions about football with deep love for AC Milan and Italian football culture. "
     "Be concise, punchy, and occasionally dramatic. "
-    "IMPORTANT: Never answer from memory for anything that could be factually wrong or outdated — "
+    "IMPORTANT: Never answer from memory for anything that could be factually wrong or outdated â€” "
     "this includes ages, birthdays, current roles, recent results, transfer news, standings, or any "
     "specific statistic. Always use web_search for these. Only skip the search for timeless facts "
     "you are completely certain about (e.g. who won a specific historic final). "
     "For AC Milan news and transfers, prefer: acmilan.com, gazzetta.it, corrieredellosport.it, calciomercato.com."
 )
+
+# Trusted-source search settings for !ask web_search tool.
+_trusted_domains_raw = os.getenv(
+    "TRUSTED_SPORT_DOMAINS",
+    "acmilan.com,gazzetta.it,corrieredellosport.it,calciomercato.com,espn.com,bbc.com,skysports.com,theathletic.com,uefa.com,fifa.com,legaseriea.it",
+)
+TRUSTED_SPORT_DOMAINS = [
+    d.strip().lower()
+    for d in _trusted_domains_raw.split(",")
+    if d.strip()
+]
+WEB_SEARCH_MIN_TRUSTED_RESULTS = int(os.getenv("WEB_SEARCH_MIN_TRUSTED_RESULTS", "2"))
 
 
 def build_league_slugs(primary_slug: str) -> list:
@@ -102,7 +122,7 @@ def build_league_slugs(primary_slug: str) -> list:
     domestic = DOMESTIC_SLUG_GROUPS.get(primary_slug, [primary_slug])
     return list(dict.fromkeys(domestic + INTERNATIONAL_SLUGS))
 
-# ─ ESPN league slugs (maps API-Football league ID → ESPN URL slug)
+# â”€ ESPN league slugs (maps API-Football league ID â†’ ESPN URL slug)
 LEAGUE_SLUG_MAP = {
     135:  "ita.1",               # Serie A
     137:  "ita.coppa_italia",    # Coppa Italia
@@ -113,7 +133,7 @@ LEAGUE_SLUG_MAP = {
     528:  "eng.charity",         # Community Shield
     140:  "esp.1",               # La Liga
     143:  "esp.copa_del_rey",    # Copa del Rey
-    556:  "esp.super_cup",       # Supercopa de España
+    556:  "esp.super_cup",       # Supercopa de EspaÃ±a
     2:    "uefa.champions",      # Champions League
     3:    "uefa.europa",         # Europa League
     848:  "uefa.europa.conf",    # Conference League
@@ -123,3 +143,4 @@ LEAGUE_SLUG_MAP = {
     1:    "fifa.world",          # World Cup
     4:    "uefa.euro",           # EURO
 }
+
