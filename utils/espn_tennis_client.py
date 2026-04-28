@@ -23,13 +23,28 @@ def _is_tracked_player(name: str) -> bool:
     return normalized in TRACKED_TENNIS_PLAYERS
 
 
-def _map_status_short(state: str) -> str:
+def _map_status_short(status_type: dict, competitors: list[dict]) -> str:
+    """
+    Map ESPN tennis status to simplified NS/LIVE/FT with extra heuristics.
+    ESPN tennis can be inconsistent across feeds, so we also inspect
+    name/detail/completed/winner signals.
+    """
+    state = (status_type or {}).get("state", "pre")
+    name = ((status_type or {}).get("name") or "").upper()
+    detail = (
+        (status_type or {}).get("detail")
+        or (status_type or {}).get("description")
+        or ""
+    ).lower()
+    completed = bool((status_type or {}).get("completed"))
+    has_winner = any(c.get("winner") is True for c in (competitors or []))
+
+    if state == "in" or "IN_PROGRESS" in name or "live" in detail:
+        return "LIVE"
+    if state == "post" or completed or "FINAL" in name or has_winner:
+        return "FT"
     if state == "pre":
         return "NS"
-    if state == "in":
-        return "LIVE"
-    if state == "post":
-        return "FT"
     return "NS"
 
 
@@ -80,7 +95,7 @@ def _competition_to_match(event: dict, competition: dict, tour: str) -> dict | N
 
     status_type = (competition.get("status") or {}).get("type") or {}
     state = status_type.get("state", "pre")
-    status_short = _map_status_short(state)
+    status_short = _map_status_short(status_type, competitors)
 
     comp_id = competition.get("id")
     event_id = event.get("id")

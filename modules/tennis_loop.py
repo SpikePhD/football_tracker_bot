@@ -74,7 +74,12 @@ async def run_tennis_loop(bot) -> None:
             )
             if msg is not None:
                 live_message_ids[match_id] = msg.id
+                old_key = live_state_keys.get(match_id)
                 live_state_keys[match_id] = state_key
+                if old_key:
+                    logger.info(f"Tennis live state changed for {match_id}: {old_key} -> {state_key}")
+                else:
+                    logger.info(f"Tennis live tracking started for {match_id}: {state_key}")
             continue
 
         if status_short == "FT":
