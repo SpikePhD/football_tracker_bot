@@ -134,7 +134,6 @@ class Ask(commands.Cog):
             "Content-Type": "application/json",
         }
 
-        search_performed = False
         collected_sources: list[dict] = []
 
         try:
@@ -164,45 +163,14 @@ class Ask(commands.Cog):
                 tool_calls = msg.get("tool_calls") or []
 
                 if not tool_calls:
-                    if not search_performed:
-                        forced = await self._execute_tool(
-                            session,
-                            "web_search",
-                            {"query": question, "domain_mode": "trusted_first"},
-                        )
-                        search_performed = True
-                        collected_sources.extend(forced.get("sources", []))
-                        messages.append({
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [{
-                                "id": "forced_web_search_1",
-                                "type": "function",
-                                "function": {
-                                    "name": "web_search",
-                                    "arguments": json.dumps({"query": question, "domain_mode": "trusted_first"}),
-                                },
-                            }],
-                        })
-                        messages.append({
-                            "role": "tool",
-                            "content": forced["content"],
-                            "tool_call_id": "forced_web_search_1",
-                        })
-                        continue
-
                     content = msg.get("content", "")
                     if isinstance(content, list):
                         content = "\n".join(b["text"] for b in content if b.get("type") == "text")
                     content = re.sub(r'\s*\{["\w][^{}]*\}\.?', '', (content or "")).strip()
 
-                    if not collected_sources:
-                        return (
-                            "⚠️ I couldn't verify this with web sources right now, "
-                            "so I prefer not to give potentially inaccurate information."
-                        )
-
-                    return self._attach_sources(content, collected_sources)
+                    if collected_sources:
+                        return self._attach_sources(content, collected_sources)
+                    return content
 
                 messages.append(msg)
                 for tc in tool_calls:
@@ -211,7 +179,6 @@ class Ask(commands.Cog):
                         args = json.loads(args)
                     result = await self._execute_tool(session, tc["function"]["name"], args)
                     if tc["function"]["name"] == "web_search":
-                        search_performed = True
                         collected_sources.extend(result.get("sources", []))
                     messages.append({
                         "role": "tool",
@@ -228,6 +195,20 @@ class Ask(commands.Cog):
             return f"⚠️ LLM error ({type(e).__name__}): {e or 'check logs'}"
 
     def _attach_sources(self, content: str, sources: list[dict]) -> str:
+        # Don't attach sources for jokes, personal advice, or opinions
+        content_lower = (content or "").strip().lower()
+        
+        # Skip sources for non-factual content
+        skip_patterns = [
+            "scherzi", "scherzo",  # jokes
+            "dai",  # casual "come on"
+            "secondo me", "penso che", "credere",  # opinions
+            "consiglio", "aiuto",  # advice
+        ]
+        
+        if any(pattern in content_lower for pattern in skip_patterns):
+            return content
+        
         unique = []
         seen = set()
         for src in sources:
