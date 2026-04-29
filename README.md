@@ -14,9 +14,9 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 - Live score updates every **60 seconds** via ESPN (goals, red cards, current minute)
 - Full-time results with complete scorer and event details
 - **Grouped by competition** — `!matches` shows fixtures under bold league headers
-- **Morning broadcast** at 06:30 AM (Italy time) — greeting + today's grouped fixture list
+- **Configurable morning broadcast** at Europe/Rome time — greeting + today's grouped fixture list
 - **Startup snapshot** — on restart, immediately posts the day's fixture status
-- Daily schedule: scheduler kicks off at 11:00 AM (Italy time), sleeps until first kick-off, polls until midnight
+- Daily schedule: scheduler starts immediately, polls football/tennis until midnight, and restarts daily
 - Automatic fallback to API-Football if ESPN is unavailable (3-strike threshold, 10-minute retry)
 - Silent/verbose mode to suppress automatic broadcasts without stopping live updates
 - Persistent bot memory — state survives restarts and code updates
@@ -33,6 +33,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 | `!changelog` | — | Displays the version changelog |
 | `!version` | `!ver`, `!commit` | Shows the current bot version and last commit |
 | `!api` | `!apistatus`, `!provider` | Shows active data provider (ESPN or API-Football fallback) |
+| `!goodmorning` | `!gm` | Show or configure the morning broadcast time in Europe/Rome |
 | `!mode` | — | Show the current broadcast mode |
 | `!verbose` | — | Enable verbose mode: startup message, morning broadcast, live updates, FT results |
 | `!normal` | — | Enable normal mode: live updates and FT results only, no broadcasts |
@@ -210,17 +211,16 @@ football_tracker_bot.py
     └── on_ready()
             ├── loads all cogs/ dynamically
             ├── posts startup message (greeting + grouped fixture list)  [verbose mode only]
-            ├── starts six_thirty_morning_trigger (tasks.loop @ 06:30)   [verbose mode only]
             ├── starts eleven_am_daily_trigger (tasks.loop @ 11:00)
             └── calls launch_daily_operations_manager()
                     └── schedule_day()                       ← modules/scheduler.py
                             ├── api_provider.fetch_day()     ← modules/api_provider.py
                             │       ├── espn_client (primary, 60s poll)
                             │       └── api_client  (fallback, 480s poll)
-                            ├── [sleep until first KO]
                             └── loop every 60s (ESPN) / 480s (fallback):
                                     ├── run_live_loop()      ← modules/live_loop.py
-                                    └── fetch_and_post_ft()  ← modules/ft_handler.py
+                                    ├── fetch_and_post_ft()  ← modules/ft_handler.py
+                                    └── run_tennis_loop()    ← modules/tennis_loop.py
 
 All Discord sends → modules/discord_poster.py
 Bot memory reads/writes → modules/storage.py → bot_memory/state.json

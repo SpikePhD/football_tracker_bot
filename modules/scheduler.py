@@ -12,7 +12,7 @@ from modules.ft_handler import (
 )
 from modules.live_loop import clear_already_posted_today, run_live_loop, seed_already_posted
 from modules.tennis_loop import clear_tennis_state_today, run_tennis_loop
-from utils.time_utils import italy_now, parse_utc_to_italy
+from utils.time_utils import italy_now
 
 logger = logging.getLogger(__name__)
 
@@ -37,49 +37,14 @@ async def schedule_day(bot):
         seed_already_announced_ft(fixtures)
         seed_already_posted(fixtures)
 
-    tracked_for_ko_timing = [
-        m for m in fixtures
-        if m.get("fixture", {}).get("status", {}).get("short") in ("NS", "TBD")
-    ]
-
-    if not tracked_for_ko_timing:
-        logger.info("No NS/TBD football matches today. Running immediate football live check...")
+    # Start polling immediately. Football live checks are cheap/cache-backed, and
+    # tennis must not wait behind the first football kickoff.
+    try:
         await run_live_loop(bot)
-    else:
-        tracked_for_ko_timing.sort(key=lambda m: m["fixture"]["date"])
-
-        logger.info("--- Upcoming football matches (NS/TBD) ---")
-        for m_ko in tracked_for_ko_timing:
-            ko_local = parse_utc_to_italy(m_ko["fixture"]["date"]).strftime("%H:%M")
-            home = m_ko["teams"]["home"]["name"]
-            away = m_ko["teams"]["away"]["name"]
-            logger.info(f"{ko_local} - {home} vs {away} (ID: {m_ko['fixture']['id']})")
-        logger.info("----------------------------------------")
-
-        first_ko_details = tracked_for_ko_timing[0]
-        first_ko_time = parse_utc_to_italy(first_ko_details["fixture"]["date"])
-        current_italy_time = italy_now()
-
-        if current_italy_time >= first_ko_time:
-            logger.info(
-                f"First KO ({first_ko_time:%H:%M}) for {first_ko_details['fixture']['id']} is past/now. "
-                "Launching football live loop immediately."
-            )
-            await run_live_loop(bot)
-        else:
-            delta_sec = (first_ko_time - current_italy_time).total_seconds()
-            if delta_sec > 0:
-                h, remainder = divmod(int(delta_sec), 3600)
-                m_val = remainder // 60
-                logger.info(
-                    f"Sleeping {h}h{m_val}m until first KO at {first_ko_time:%H:%M} "
-                    f"for match ID {first_ko_details['fixture']['id']}."
-                )
-                await asyncio.sleep(delta_sec)
-            await run_live_loop(bot)
-
-    # Run tennis once at schedule start.
-    await run_tennis_loop(bot)
+        await fetch_and_post_ft(bot)
+        await run_tennis_loop(bot)
+    except Exception as e:
+        logger.error(f"[Scheduler] Unexpected error in initial polling cycle: {e}", exc_info=True)
 
     current_day_date_italy = italy_now().date()
     end_of_day = datetime.combine(current_day_date_italy, datetime.max.time()).replace(

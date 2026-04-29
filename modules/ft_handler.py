@@ -35,7 +35,7 @@ def seed_already_announced_ft(fixtures: list) -> None:
         if match.get("fixture", {}).get("status", {}).get("short") == "FT":
             mid = match["fixture"].get("id")
             if mid:
-                _already_announced_ft.add(mid)
+                _already_announced_ft.add(str(mid))
                 count += 1
     if count:
         logger.info(f"🌱 Seeded {count} already-FT match IDs (will not re-announce).")
@@ -44,7 +44,10 @@ def seed_already_announced_ft(fixtures: list) -> None:
 def track_match_for_ft(match_data: dict):
     """Register a live match to be checked for Full-Time status."""
     try:
-        match_id = match_data["fixture"]["id"]
+        match_id = str(match_data["fixture"]["id"])
+        if match_id in tracked_matches:
+            return
+
         kickoff_utc = match_data["fixture"]["date"]
 
         kickoff = datetime.fromisoformat(kickoff_utc.replace("Z", "+00:00"))
@@ -66,6 +69,10 @@ def track_match_for_ft(match_data: dict):
         logger.error(f"Error tracking match for FT: Missing key {e} in match_data. Data: {str(match_data)[:200]}", exc_info=True)
     except Exception as e:
         logger.error(f"Unexpected error in track_match_for_ft: {e}", exc_info=True)
+
+
+def is_tracked_for_ft(match_id) -> bool:
+    return str(match_id) in tracked_matches
 
 
 # ── Shared FT posting logic ───────────────────────────────────────────────────
@@ -118,7 +125,7 @@ async def fetch_and_post_ft(bot: discord.Client):
     if api_provider.is_espn_healthy():
         # ── ESPN path ──────────────────────────────────────────────────────────
         finished = await api_provider.fetch_finished_today(bot.http_session)
-        finished_by_id = {m["fixture"]["id"]: m for m in finished}
+        finished_by_id = {str(m["fixture"]["id"]): m for m in finished}
 
         for match_id, info in list(tracked_matches.items()):
             if current_time < info["exp_ft"]:
@@ -143,7 +150,7 @@ async def fetch_and_post_ft(bot: discord.Client):
         # Orphan FT detection: matches that reached FT without being seen as LIVE
         # (e.g. bot was offline, or match finished before scheduler started polling).
         for match in finished:
-            mid = match["fixture"]["id"]
+            mid = str(match["fixture"]["id"])
             if mid in tracked_matches or mid in _already_announced_ft:
                 continue
             logger.info(f"🆕 [Orphan FT] Announcing untracked FT match {mid}.")
@@ -152,15 +159,13 @@ async def fetch_and_post_ft(bot: discord.Client):
 
     else:
         # ── API-Football fallback path ─────────────────────────────────────────
-        from utils.api_client import fetch_fixture_by_id
-
         for match_id, info in list(tracked_matches.items()):
             if current_time < info["exp_ft"]:
                 continue
 
             logger.info(f"🔍 [Fallback] Checking FT status for match ID {match_id}")
 
-            payload = await fetch_fixture_by_id(bot.http_session, match_id)
+            payload = await api_provider.fetch_fixture(bot.http_session, match_id)
             if not payload:
                 logger.warning(f"⚠️ No payload for FT check of match ID {match_id}. Retrying next cycle.")
                 continue

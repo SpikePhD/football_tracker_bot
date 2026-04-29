@@ -92,13 +92,13 @@ The bot is structured in four layers:
 on_ready()
   ├── ensure_http_session()          shared aiohttp.ClientSession on bot.http_session
   ├── setup_power_management()       disables OS sleep
-  ├── channel.send(startup message)  only in verbose mode
+  ├── post_new_general_message(startup message)  only in verbose mode
   ├── load all cogs from cogs/
   └── launch_daily_operations_manager()
         └── schedule_day()           the main daily loop (runs as background Task)
 
 Background loops (always running):
-  ├── six_thirty_morning_trigger()   06:30 Italy — morning broadcast
+  ├── cogs.goodmorning.morning_check() configurable Europe/Rome morning broadcast
   ├── midnight_trigger()             00:01 Italy — restart schedule_day for new day
   └── eleven_am_daily_trigger()      11:00 Italy — secondary daily restart
 ```
@@ -110,10 +110,11 @@ schedule_day()
   ├── Clear per-day state (already_posted, tracked_matches, _already_announced_ft)
   ├── Fetch today's fixtures
   ├── Seed dedup sets (so restart doesn't re-post existing data)
-  ├── Sleep until first kickoff
+  ├── Run one immediate poll cycle
   └── Poll loop (runs until Italy midnight):
         ├── run_live_loop()          post live score changes
-        └── fetch_and_post_ft()     post full-time results
+        ├── fetch_and_post_ft()      post full-time results
+        └── run_tennis_loop()        post tracked tennis updates
         (wait 60s ESPN / 480s fallback)
 ```
 

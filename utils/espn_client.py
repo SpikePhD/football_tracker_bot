@@ -241,8 +241,9 @@ async def fetch_next_team_fixture_espn(
     scoreboard by date instead and filter for events involving espn_team_id.
     Returns a normalised match dict or None.
     """
-    from datetime import datetime, timezone, timedelta
-    now = datetime.now(timezone.utc)
+    from datetime import timedelta, timezone
+    from utils.time_utils import italy_now
+    now = italy_now().astimezone(timezone.utc)
     team_id_str = str(espn_team_id)
 
     # Build reverse slug→league_id map

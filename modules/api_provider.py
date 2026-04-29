@@ -291,7 +291,7 @@ async def enrich_fixtures(session: aiohttp.ClientSession, fixtures: list) -> lis
 
 async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
     """
-    Returns today's tracked tennis matches from ESPN ATP/WTA scoreboards.
+    Returns tracked tennis matches from a rolling window around today.
     Cached for TENNIS_CACHE_TTL_SEC seconds; invalidated at Italy midnight.
     """
     global _tennis_cache, _tennis_cache_date, _tennis_cache_ts
@@ -306,22 +306,46 @@ async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[
     ):
         return _tennis_cache
 
-    date_str = today.replace("-", "")
+    base_day = italy_now().date()
+    date_params = [
+        (base_day - timedelta(days=1)).strftime("%Y%m%d"),
+        base_day.strftime("%Y%m%d"),
+        (base_day + timedelta(days=1)).strftime("%Y%m%d"),
+    ]
+
     try:
-        matches = await espn_tennis_client.fetch_tracked_tennis_matches(session, date_str)
+        day_batches = await asyncio.gather(
+            *(espn_tennis_client.fetch_tracked_tennis_matches(session, ds) for ds in date_params),
+            return_exceptions=True,
+        )
     except Exception as e:
         logger.warning(f"[APIProvider] Tennis fetch error: {e}", exc_info=True)
-        matches = []
+        day_batches = []
+
+    deduped: dict[str, dict] = {}
+    for batch in day_batches:
+        if isinstance(batch, Exception) or not isinstance(batch, list):
+            continue
+        for match in batch:
+            match_id = match.get("match_id")
+            if not match_id:
+                continue
+            deduped[match_id] = match
+
+    matches = sorted(deduped.values(), key=lambda m: m.get("start_time") or "")
 
     _tennis_cache = matches
     _tennis_cache_date = today
     _tennis_cache_ts = now
-    logger.info(f"[APIProvider] Tennis scoreboard fetched: {len(matches)} tracked match(es).")
+    logger.info(
+        f"[APIProvider] Tennis scoreboard fetched: {len(matches)} tracked match(es) "
+        f"across {len(date_params)} day(s)."
+    )
     return _tennis_cache
 
 
 async def fetch_tennis_day(session: aiohttp.ClientSession) -> list[dict]:
-    """All tracked tennis matches for today from ESPN ATP/WTA scoreboards."""
+    """Tracked tennis matches from the rolling ESPN ATP/WTA scoreboard window."""
     return await _get_cached_tennis_scoreboard(session)
 
 

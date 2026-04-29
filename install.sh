@@ -170,6 +170,13 @@ fi
 
 # ── Step 5: Systemd service ───────────────────────────────────────────────────
 
+if [ -f "$BOT_DIR/bot_memory/goodmorning.json" ]; then
+    ok "bot_memory/goodmorning.json already exists - keeping existing state"
+else
+    echo '{"enabled": true, "hour": 6, "minute": 30, "timezone": "Europe/Rome"}' > "$BOT_DIR/bot_memory/goodmorning.json"
+    ok "bot_memory/goodmorning.json created"
+fi
+
 section "Step 5: Systemd service"
 
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"

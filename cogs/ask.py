@@ -2,6 +2,7 @@
 import json
 import logging
 import re
+import asyncio
 from collections import deque
 from urllib.parse import urlparse
 
@@ -21,9 +22,9 @@ from config import (
     build_league_slugs,
 )
 from utils.time_utils import italy_now, parse_utc_to_italy
+from modules import api_provider
 from modules.discord_poster import post_new_message_to_context
 from utils.espn_client import (
-    fetch_all_leagues,
     fetch_next_team_fixture_espn,
     search_team_espn,
 )
@@ -92,6 +93,7 @@ class Ask(commands.Cog):
         name="ask",
         help="Ask the bot a question. The LLM uses web search and includes sources.",
     )
+    @commands.cooldown(3, 60, commands.BucketType.user)
     async def ask(self, ctx: commands.Context, *, question: str):
         history = self._history.setdefault(ctx.channel.id, deque(maxlen=_HISTORY_MAXLEN))
         async with ctx.typing():
@@ -100,6 +102,15 @@ class Ask(commands.Cog):
         history.append({"role": "user", "content": question})
         history.append({"role": "assistant", "content": reply})
         await post_new_message_to_context(ctx, content=reply)
+
+    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
+        if isinstance(error, commands.CommandOnCooldown):
+            await post_new_message_to_context(
+                ctx,
+                content=f"`!ask` is on cooldown. Try again in {error.retry_after:.0f}s.",
+            )
+            return
+        raise error
 
     async def _run_llm(self, question: str, history: deque) -> str:
         if not LLM_API_KEY:
@@ -332,13 +343,14 @@ class Ask(commands.Cog):
                 domain_mode = args.get("domain_mode", "trusted_first")
                 if not query.strip():
                     return {"content": "No query provided for web search.", "sources": []}
-                return self._web_search(query, domain_mode)
+                return await asyncio.to_thread(self._web_search, query, domain_mode)
             except Exception as e:
                 return {"content": f"Search failed: {e}", "sources": []}
 
         if name == "get_todays_fixtures":
             try:
-                matches = await fetch_all_leagues(session, LEAGUE_SLUG_MAP)
+                matches = await api_provider.fetch_day(session)
+                matches = await api_provider.enrich_fixtures(session, matches)
                 if not matches:
                     return {"content": "No fixtures found for today.", "sources": []}
                 lines = []

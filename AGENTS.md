@@ -25,17 +25,16 @@ football_tracker_bot.py
     └── on_ready()
             ├── loads all cogs/ dynamically
             ├── posts startup message (greeting + grouped fixture list)  [verbose mode only]
-            ├── starts six_thirty_morning_trigger (tasks.loop @ 06:30)   [verbose mode only]
             ├── starts eleven_am_daily_trigger (tasks.loop @ 11:00)
             └── calls launch_daily_operations_manager()
                     └── schedule_day()                       ← modules/scheduler.py
                             ├── api_provider.fetch_day()     ← modules/api_provider.py
                             │       ├── espn_client (primary)
                             │       └── api_client  (fallback)
-                            ├── [sleep until first KO]
                             └── loop every 60s (ESPN) / 480s (fallback):
                                     ├── run_live_loop()      ← modules/live_loop.py
-                                    └── fetch_and_post_ft()  ← modules/ft_handler.py
+                                    ├── fetch_and_post_ft()  ← modules/ft_handler.py
+                                    └── run_tennis_loop()    ← modules/tennis_loop.py
 
 All Discord sends → modules/discord_poster.py
 Bot state reads/writes → modules/storage.py → bot_memory/state.json
@@ -61,7 +60,8 @@ Bot state reads/writes → modules/storage.py → bot_memory/state.json
 | `utils/api_client.py` | API-Football client; used as fallback by `api_provider` |
 | `utils/time_utils.py` | Italy timezone helpers (`italy_now`, `parse_utc_to_italy`) |
 | `utils/personality.py` | Greeting message variants |
-| `cogs/matches.py` | `!matches` command; also exports `build_matches_message()` used by startup and morning trigger |
+| `cogs/matches.py` | `!matches` command; also exports `build_matches_message()` used by startup and morning broadcasts |
+| `cogs/goodmorning.py` | `!goodmorning` / `!gm` command and configurable Europe/Rome morning broadcast |
 | `cogs/competitions.py` | `!competitions` command |
 | `cogs/next_command.py` | `!next <team>` command — any team's next fixture via ESPN search |
 | `cogs/hello.py` | `!hi` / `!hello` command |
@@ -102,9 +102,9 @@ overwrites existing files. Add new default files to the initialisation block in 
 - `post_new_general_message(bot, channel_id, content=...)` — FT results, announcements
 - `post_new_message_to_context(ctx, content=...)` — responses to user commands (cogs)
 
-Never import `discord` and call `channel.send()` directly from `modules/` or `cogs/`.
-Exception: `football_tracker_bot.py` may call `channel.send()` directly for lifecycle messages
-(startup greeting, morning trigger) since they originate in the main bot file.
+Never import `discord` and call `channel.send()` directly from `modules/`, `cogs/`,
+or the main bot file. Use `modules/discord_poster.py` for lifecycle, live, FT,
+announcement, and command messages.
 
 ### HTTP session
 - The bot holds a single `aiohttp.ClientSession` at `bot.http_session`.

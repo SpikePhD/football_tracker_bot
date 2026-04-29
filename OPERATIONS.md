@@ -187,7 +187,7 @@ The bot supports three broadcast modes that control what it posts automatically.
 
 | Mode | What the bot posts automatically |
 |------|----------------------------------|
-| `verbose` | Startup message, 06:30 morning broadcast, live score updates, FT results |
+| `verbose` | Startup message, configured morning broadcast, live score updates, FT results |
 | `normal` | Live score updates and FT results only (no startup or morning broadcast) |
 | `silent` | Nothing — only responds to commands |
 

@@ -7,7 +7,7 @@ from modules import api_provider
 from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
 from utils.event_formatter import format_match_events, event_completeness_note
-from modules.ft_handler import track_match_for_ft
+from modules.ft_handler import is_tracked_for_ft, track_match_for_ft
 from modules.discord_poster import upsert_live_message
 
 logger = logging.getLogger(__name__)
@@ -66,6 +66,8 @@ async def run_live_loop(bot):
     for match in matches:
         match_id = str(match["fixture"]["id"])
         seen_live_ids.add(match_id)
+        if not is_tracked_for_ft(match_id):
+            track_match_for_ft(match)
 
         # Enrich first so dedup key and outgoing message reflect final data.
         enriched = await api_provider.enrich_fixture_events(bot.http_session, match)
@@ -79,9 +81,6 @@ async def run_live_loop(bot):
         previous_state = live_state_keys.get(match_id)
         if previous_state == state_key:
             continue
-
-        if previous_state is None:
-            track_match_for_ft(match)
 
         event_strings = format_match_events(events, home, away)
         completeness = event_completeness_note(score, events)

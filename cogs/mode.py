@@ -18,6 +18,7 @@ class Mode(commands.Cog):
         aliases=["Verbose", "VERBOSE"],
         help="Enable verbose mode: startup message, morning broadcast, live updates, FT results."
     )
+    @commands.has_permissions(manage_guild=True)
     async def verbose(self, ctx: commands.Context):
         set_mode("verbose")
         logger.info("🔔 Verbose mode enabled.")
@@ -31,6 +32,7 @@ class Mode(commands.Cog):
         aliases=["Normal", "NORMAL"],
         help="Enable normal mode: live match updates and FT results only. No startup or morning broadcasts."
     )
+    @commands.has_permissions(manage_guild=True)
     async def normal(self, ctx: commands.Context):
         set_mode("normal")
         logger.info("⚽ Normal mode enabled.")
@@ -44,6 +46,7 @@ class Mode(commands.Cog):
         aliases=["Silent", "SILENT"],
         help="Enable silent mode: bot never posts automatically. Commands still work."
     )
+    @commands.has_permissions(manage_guild=True)
     async def silent(self, ctx: commands.Context):
         set_mode("silent")
         logger.info("🔇 Silent mode enabled.")
@@ -64,6 +67,15 @@ class Mode(commands.Cog):
             "silent":  "🔇 **Silent** — commands only, no automatic posts",
         }
         await post_new_message_to_context(ctx, content=f"Current mode: {descriptions[current]}")
+
+    async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
+        if isinstance(error, commands.MissingPermissions):
+            await post_new_message_to_context(
+                ctx,
+                content="You need the `Manage Server` permission to change broadcast mode.",
+            )
+            return
+        raise error
 
 
 async def setup(bot: commands.Bot):

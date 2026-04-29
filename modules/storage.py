@@ -5,6 +5,7 @@
 import json
 import logging
 import pathlib
+from copy import deepcopy
 
 logger = logging.getLogger(__name__)
 
@@ -23,10 +24,10 @@ def load(filename: str, default: dict) -> dict:
             return json.load(f)
     except FileNotFoundError:
         logger.warning(f"storage: {filename} not found, using defaults.")
-        return default
+        return deepcopy(default)
     except json.JSONDecodeError as e:
         logger.error(f"storage: {filename} is corrupt ({e}), using defaults.")
-        return default
+        return deepcopy(default)
 
 
 def save(filename: str, data: dict) -> None:

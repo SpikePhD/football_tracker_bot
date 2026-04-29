@@ -26,6 +26,7 @@ from modules.power_manager import setup_power_management
 from modules.scheduler import schedule_day
 from modules import api_provider
 from modules.bot_mode import is_verbose, get_mode
+from modules.discord_poster import post_new_general_message
 from cogs.matches import build_matches_message
 from cogs.version import get_version_info
 from utils.time_utils import italy_tz
@@ -113,7 +114,7 @@ async def on_ready():
                 fixtures = await api_provider.enrich_fixtures(bot.http_session, fixtures)
                 fixtures.sort(key=lambda m: m['fixture']['date'])
                 content = f"{greet_message()}\n\n{build_matches_message(fixtures)}"
-                await channel.send(content)
+                await post_new_general_message(bot, CHANNEL_ID, content=content)
             except discord.Forbidden:
                 logger.error(f"❌ Missing permissions to send greeting message to channel ID: {CHANNEL_ID}.")
             except Exception as e:
