@@ -5,6 +5,8 @@ import discord
 from discord.ext import commands # For commands.Context
 from typing import Sequence
 
+from config import LIVE_UPDATE_EDIT_WINDOW_MESSAGES
+
 logger = logging.getLogger(__name__)
 
 _DISCORD_CONTENT_LIMIT = 1900
@@ -47,6 +49,21 @@ def _split_content(content: str, max_len: int = _DISCORD_CONTENT_LIMIT) -> list[
     return chunks if chunks else [content[:max_len]]
 
 
+async def _find_recent_message(
+    channel: discord.TextChannel,
+    message_id: int,
+    limit: int,
+) -> discord.Message | None:
+    """Return message_id only when it is within the latest limit channel messages."""
+    if limit <= 0:
+        return None
+
+    async for message in channel.history(limit=limit):
+        if message.id == message_id:
+            return message
+    return None
+
+
 async def post_live_update(
     bot: discord.Client,
     channel_id: int,
@@ -65,7 +82,8 @@ async def upsert_live_message(
 ) -> discord.Message | None:
     """
     Upsert a live match message.
-    If message_id is valid, edit that message; otherwise send a new message.
+    Edit only if message_id is still within the latest configured channel messages;
+    otherwise send a new message so buried live updates become visible again.
     """
     if not content:
         logger.warning("DiscordPoster: upsert_live_message called with empty content.")
@@ -79,12 +97,30 @@ async def upsert_live_message(
     try:
         if message_id is not None:
             try:
-                existing = await channel.fetch_message(message_id)
+                existing = await _find_recent_message(channel, message_id, LIVE_UPDATE_EDIT_WINDOW_MESSAGES)
+            except discord.Forbidden:
+                logger.warning(
+                    f"DiscordPoster: Cannot read recent channel history in #{channel.name}; sending new live message.",
+                    exc_info=True,
+                )
+                existing = None
+            except Exception:
+                logger.warning(
+                    f"DiscordPoster: Failed to inspect recent channel history in #{channel.name}; "
+                    "sending new live message.",
+                    exc_info=True,
+                )
+                existing = None
+
+            if existing is not None:
                 await existing.edit(content=content, suppress=True)
                 logger.info(f"DiscordPoster: Edited live message {message_id} in #{channel.name}")
                 return existing
-            except discord.NotFound:
-                logger.warning(f"DiscordPoster: Live message {message_id} not found in #{channel.name}; sending new message.")
+
+            logger.info(
+                f"DiscordPoster: Live message {message_id} is not within the last "
+                f"{LIVE_UPDATE_EDIT_WINDOW_MESSAGES} messages in #{channel.name}; sending new message."
+            )
 
         created = await channel.send(content=content, suppress_embeds=True)
         logger.info(f"DiscordPoster: Created new live message {created.id} in #{channel.name}")

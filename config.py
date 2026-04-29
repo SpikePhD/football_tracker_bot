@@ -28,6 +28,10 @@ TRACKED_TENNIS_PLAYERS = [
 # Tennis polling/caching settings (v1 uses ESPN only).
 TENNIS_CACHE_TTL_SEC = 55
 TENNIS_UPCOMING_DAYS = 7
+
+# Live updates edit an existing game message only if it is among the last N
+# channel messages. Set to 0 to always post fresh live updates.
+LIVE_UPDATE_EDIT_WINDOW_MESSAGES = 2
 # â”€ Tracked Leagues
 TRACKED_LEAGUE_IDS = [
     135,  # Serie A
