@@ -1,25 +1,25 @@
 # cogs/matches.py
 import logging
 from collections import defaultdict
+from datetime import timedelta
 from discord.ext import commands
-from config import LEAGUE_NAME_MAP
+from config import LEAGUE_NAME_MAP, TENNIS_UPCOMING_DAYS
 from modules import api_provider
 from utils.time_utils import parse_utc_to_italy, italy_now
 from utils.event_formatter import format_match_events, event_completeness_note
 from modules.discord_poster import post_new_message_to_context
+from utils.tennis_formatter import format_tennis_snapshot_line
 
 logger = logging.getLogger(__name__)
 
 
-def build_matches_message(fixtures: list) -> str:
+def build_football_section(fixtures: list) -> str:
     """
-    Format a list of fixture dicts into a grouped-by-competition Discord message.
+    Format football fixtures into a grouped-by-competition Discord section.
     Returns the full message string (without a trailing newline).
     """
-    current_time = italy_now()
-
     if not fixtures:
-        return f"**Today's tracked matches ({current_time.strftime('%Y-%m-%d')}):**\nNo tracked matches today."
+        return "**⚽ Football**\nNo tracked football matches today."
 
     # Group by league ID
     groups: dict[int, list] = defaultdict(list)
@@ -33,7 +33,7 @@ def build_matches_message(fixtures: list) -> str:
 
     sorted_league_ids = sorted(groups.keys(), key=group_sort_key)
 
-    lines = [f"**Today's tracked matches ({current_time.strftime('%Y-%m-%d')}):**"]
+    lines = ["**⚽ Football**"]
 
     for league_id in sorted_league_ids:
         league_name = LEAGUE_NAME_MAP.get(league_id, f"League {league_id}")
@@ -80,6 +80,98 @@ def build_matches_message(fixtures: list) -> str:
     return "\n".join(lines)
 
 
+def build_tennis_section(matches: list) -> str:
+    lines = ["**🎾 Tennis**"]
+    if not matches:
+        lines.append("No tracked tennis matches live, upcoming, or finished today.")
+        return "\n".join(lines)
+
+    live = sorted(
+        [m for m in matches if m.get("status", {}).get("short") == "LIVE"],
+        key=lambda m: m.get("start_time") or "",
+    )
+    upcoming = sorted(
+        [
+            m for m in matches
+            if m.get("status", {}).get("short") == "NS"
+            and _is_tennis_upcoming(m, TENNIS_UPCOMING_DAYS)
+        ],
+        key=lambda m: m.get("start_time") or "",
+    )
+    finished_today = sorted(
+        [
+            m for m in matches
+            if m.get("status", {}).get("short") == "FT"
+            and _is_tennis_today(m)
+        ],
+        key=lambda m: m.get("start_time") or "",
+        reverse=True,
+    )
+
+    if not (live or upcoming or finished_today):
+        lines.append("No tracked tennis matches live, upcoming, or finished today.")
+        return "\n".join(lines)
+
+    for match in live:
+        lines.append(format_tennis_snapshot_line(match))
+    for match in upcoming:
+        lines.append(format_tennis_snapshot_line(match))
+    for match in finished_today:
+        lines.append(format_tennis_snapshot_line(match))
+
+    return "\n".join(lines)
+
+
+def build_combined_matches_message(football_fixtures: list, tennis_matches: list) -> str:
+    current_time = italy_now()
+    return "\n\n".join([
+        f"**Today's tracked sports ({current_time.strftime('%Y-%m-%d')}):**",
+        build_football_section(football_fixtures),
+        build_tennis_section(tennis_matches),
+    ])
+
+
+async def build_combined_matches_message_from_api(session) -> str:
+    football_fixtures = []
+    tennis_matches = []
+
+    try:
+        football_fixtures = await api_provider.fetch_day(session)
+        football_fixtures = await api_provider.enrich_fixtures(session, football_fixtures)
+        football_fixtures.sort(key=lambda m: m["fixture"]["date"])
+    except Exception as e:
+        logger.error(f"Failed to fetch football snapshot: {e}", exc_info=True)
+
+    try:
+        tennis_matches = await api_provider.fetch_tennis_day(session)
+    except Exception as e:
+        logger.error(f"Failed to fetch tennis snapshot: {e}", exc_info=True)
+
+    return build_combined_matches_message(football_fixtures, tennis_matches)
+
+
+def _is_tennis_today(match: dict) -> bool:
+    start = match.get("start_time")
+    if not start:
+        return False
+    try:
+        return parse_utc_to_italy(start).date() == italy_now().date()
+    except Exception:
+        return False
+
+
+def _is_tennis_upcoming(match: dict, horizon_days: int) -> bool:
+    start = match.get("start_time")
+    if not start:
+        return False
+    try:
+        dt = parse_utc_to_italy(start)
+    except Exception:
+        return False
+    now = italy_now()
+    return now < dt <= now + timedelta(days=horizon_days)
+
+
 class Matches(commands.Cog):
     """Show today's tracked fixtures, grouped by competition."""
 
@@ -88,13 +180,11 @@ class Matches(commands.Cog):
 
     @commands.command(
         name="matches",
-        help="List today's tracked fixtures grouped by competition."
+        help="List today's tracked football and tennis events."
     )
     async def matches(self, ctx: commands.Context):
-        fixtures = await api_provider.fetch_day(self.bot.http_session)
-        fixtures = await api_provider.enrich_fixtures(self.bot.http_session, fixtures)
-        fixtures.sort(key=lambda m: m['fixture']['date'])
-        await post_new_message_to_context(ctx, content=build_matches_message(fixtures))
+        content = await build_combined_matches_message_from_api(self.bot.http_session)
+        await post_new_message_to_context(ctx, content=content)
 
 
 async def setup(bot: commands.Bot):

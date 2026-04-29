@@ -85,7 +85,7 @@ async def run_live_loop(bot):
         event_strings = format_match_events(events, home, away)
         completeness = event_completeness_note(score, events)
 
-        line_content = f"{home} {score['home']} - {score['away']} {away}"
+        line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
         if event_strings:
             line_content += " (" + "; ".join(event_strings) + ")"
         if completeness:

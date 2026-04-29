@@ -7,8 +7,8 @@ Read it before making changes. It describes the architecture, conventions, and w
 
 ## What This Project Is
 
-A Discord bot that tracks live football matches and posts score updates, goal events, red cards,
-and full-time results to a single Discord channel. It runs as a `systemd` service on a Raspberry Pi.
+A Discord bot that tracks live football matches and selected tennis players, then posts live
+updates and full-time/final results to a single Discord channel. It runs as a `systemd` service on a Raspberry Pi.
 
 Primary focus: AC Milan + major Italian and European competitions.
 
@@ -24,17 +24,17 @@ Primary focus: AC Milan + major Italian and European competitions.
 football_tracker_bot.py
     └── on_ready()
             ├── loads all cogs/ dynamically
-            ├── posts startup message (greeting + grouped fixture list)  [verbose mode only]
+            ├── posts startup message (greeting + grouped football/tennis snapshot)  [verbose mode only]
             ├── starts eleven_am_daily_trigger (tasks.loop @ 11:00)
             └── calls launch_daily_operations_manager()
                     └── schedule_day()                       ← modules/scheduler.py
                             ├── api_provider.fetch_day()     ← modules/api_provider.py
                             │       ├── espn_client (primary)
                             │       └── api_client  (fallback)
-                            └── loop every 60s (ESPN) / 480s (fallback):
+                            └── football and tennis polling loop until midnight:
                                     ├── run_live_loop()      ← modules/live_loop.py
                                     ├── fetch_and_post_ft()  ← modules/ft_handler.py
-                                    └── run_tennis_loop()    ← modules/tennis_loop.py
+                                    └── run_tennis_loop()    ← modules/tennis_loop.py (every 60s)
 
 All Discord sends → modules/discord_poster.py
 Bot state reads/writes → modules/storage.py → bot_memory/state.json
@@ -48,7 +48,7 @@ Bot state reads/writes → modules/storage.py → bot_memory/state.json
 |---|---|
 | `football_tracker_bot.py` | Bot lifecycle, task loops (morning + 11am), HTTP session, cog loading |
 | `config.py` | All config: secrets, `TRACKED_LEAGUE_IDS`, `LEAGUE_NAME_MAP`, `LEAGUE_SLUG_MAP`, `build_league_slugs()` |
-| `modules/scheduler.py` | Daily orchestration: fetch fixtures → sleep until KO → poll loop until midnight |
+| `modules/scheduler.py` | Daily orchestration: seed football state → poll football and tennis until midnight |
 | `modules/live_loop.py` | Live polling: builds score updates, deduplicates by `{match_id}_{score}_{event_count}` |
 | `modules/ft_handler.py` | Tracks live matches for FT check; posts final results (dual ESPN/fallback path) |
 | `modules/api_provider.py` | Provider layer: ESPN primary + API-Football fallback, health state, 55s cache |
@@ -60,7 +60,7 @@ Bot state reads/writes → modules/storage.py → bot_memory/state.json
 | `utils/api_client.py` | API-Football client; used as fallback by `api_provider` |
 | `utils/time_utils.py` | Italy timezone helpers (`italy_now`, `parse_utc_to_italy`) |
 | `utils/personality.py` | Greeting message variants |
-| `cogs/matches.py` | `!matches` command; also exports `build_matches_message()` used by startup and morning broadcasts |
+| `cogs/matches.py` | `!matches` command; exports combined football/tennis snapshot builder for startup and morning broadcasts |
 | `cogs/goodmorning.py` | `!goodmorning` / `!gm` command and configurable Europe/Rome morning broadcast |
 | `cogs/competitions.py` | `!competitions` command |
 | `cogs/next_command.py` | `!next <team>` command — any team's next fixture via ESPN search |

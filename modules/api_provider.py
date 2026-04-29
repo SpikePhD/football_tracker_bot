@@ -307,7 +307,8 @@ async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[
         return _tennis_cache
 
     base_day = italy_now().date()
-    date_params = [
+    date_params: list[str | None] = [
+        None,
         (base_day - timedelta(days=1)).strftime("%Y%m%d"),
         base_day.strftime("%Y%m%d"),
         (base_day + timedelta(days=1)).strftime("%Y%m%d"),
@@ -334,12 +335,19 @@ async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[
 
     matches = sorted(deduped.values(), key=lambda m: m.get("start_time") or "")
 
+    if not matches and _tennis_cache_date == today and _tennis_cache:
+        logger.warning(
+            "[APIProvider] Tennis refresh returned 0 tracked matches; keeping previous same-day cache."
+        )
+        _tennis_cache_ts = now
+        return _tennis_cache
+
     _tennis_cache = matches
     _tennis_cache_date = today
     _tennis_cache_ts = now
     logger.info(
         f"[APIProvider] Tennis scoreboard fetched: {len(matches)} tracked match(es) "
-        f"across {len(date_params)} day(s)."
+        f"across default scoreboard plus {len(date_params) - 1} dated day(s)."
     )
     return _tennis_cache
 

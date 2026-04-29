@@ -115,7 +115,7 @@ schedule_day()
         ├── run_live_loop()          post live score changes
         ├── fetch_and_post_ft()      post full-time results
         └── run_tennis_loop()        post tracked tennis updates
-        (wait 60s ESPN / 480s fallback)
+        (football waits 60s ESPN / 480s fallback; tennis waits 60s)
 ```
 
 ---
@@ -144,7 +144,7 @@ Environment variables (`BOT_TOKEN`, `API_KEY`, `CHANNEL_ID`) are loaded here via
 
 | Module | Responsibility |
 |--------|---------------|
-| `scheduler.py` | Orchestrates the daily cycle: sleeps until KO, drives the poll loop, clears daily state |
+| `scheduler.py` | Orchestrates the daily cycle: seeds football state, drives independent football/tennis polling, clears daily state |
 | `live_loop.py` | Polls live fixtures, deduplicates by `{id}_{score}_{event_count}`, posts updates |
 | `ft_handler.py` | Tracks matches for full-time, detects FT via ESPN cache or API-Football fallback, posts results |
 | `api_provider.py` | **Single entry point for all fixture data.** ESPN primary with 55s cache; switches to API-Football after 3 failures; enriches incomplete ESPN events on demand |
@@ -167,7 +167,7 @@ Environment variables (`BOT_TOKEN`, `API_KEY`, `CHANNEL_ID`) are loaded here via
 
 | Cog | Commands |
 |-----|---------|
-| `matches.py` | `!matches` — today's fixtures grouped by competition |
+| `matches.py` | `!matches` — today's tracked football and tennis events grouped by sport |
 | `next_command.py` | `!next <team>` — next fixture for any team |
 | `mode.py` | `!verbose`, `!normal`, `!silent`, `!mode` |
 | `api_status.py` | `!api` / `!apistatus` / `!provider` |

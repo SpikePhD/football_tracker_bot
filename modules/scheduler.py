@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from modules import api_provider
 from modules.ft_handler import (
@@ -27,7 +27,11 @@ async def schedule_day(bot):
     logger.info("Daily states cleared.")
 
     logger.info("Fetching football fixtures for today...")
-    fixtures = await api_provider.fetch_day(bot.http_session)
+    try:
+        fixtures = await api_provider.fetch_day(bot.http_session)
+    except Exception as e:
+        logger.error(f"[Scheduler] Failed to fetch initial football fixtures: {e}", exc_info=True)
+        fixtures = []
 
     if not fixtures:
         logger.info("No tracked football fixtures found or API error. Continuing with tennis checks.")
@@ -37,55 +41,70 @@ async def schedule_day(bot):
         seed_already_announced_ft(fixtures)
         seed_already_posted(fixtures)
 
-    # Start polling immediately. Football live checks are cheap/cache-backed, and
-    # tennis must not wait behind the first football kickoff.
+    # Start both sports immediately, with isolated error handling.
     try:
         await run_live_loop(bot)
         await fetch_and_post_ft(bot)
+    except Exception as e:
+        logger.error(f"[Scheduler] Unexpected error in initial football cycle: {e}", exc_info=True)
+
+    try:
         await run_tennis_loop(bot)
     except Exception as e:
-        logger.error(f"[Scheduler] Unexpected error in initial polling cycle: {e}", exc_info=True)
+        logger.error(f"[Scheduler] Unexpected error in initial tennis cycle: {e}", exc_info=True)
 
     current_day_date_italy = italy_now().date()
     end_of_day = datetime.combine(current_day_date_italy, datetime.max.time()).replace(
         tzinfo=italy_now().tzinfo
     )
 
-    interval = api_provider.get_poll_interval()
+    football_interval = api_provider.get_poll_interval()
+    tennis_interval = 60
     logger.info(
-        f"Polling active. Every {interval}s "
+        f"Polling active. Football every {football_interval}s "
         f"({'ESPN' if api_provider.is_espn_healthy() else 'API-Football fallback'}) "
+        f"and tennis every {tennis_interval}s "
         f"until {end_of_day:%H:%M:%S} (Italy Time)."
     )
 
     counter = 1
     now_ref = italy_now()
-    approx_total_cycles = max(1, (end_of_day - now_ref).total_seconds() / interval) if now_ref < end_of_day else 0
+    approx_total_cycles = max(1, (end_of_day - now_ref).total_seconds() / tennis_interval) if now_ref < end_of_day else 0
+    next_football_due = now_ref + timedelta(seconds=football_interval)
+    next_tennis_due = now_ref + timedelta(seconds=tennis_interval)
 
     while italy_now() < end_of_day:
-        interval = api_provider.get_poll_interval()
-
-        current_time_for_loop = italy_now()
+        now = italy_now()
         approx_remaining_cycles = 0
-        if current_time_for_loop < end_of_day:
-            remaining_seconds = (end_of_day - current_time_for_loop).total_seconds()
+        if now < end_of_day:
+            remaining_seconds = (end_of_day - now).total_seconds()
             if remaining_seconds > 0:
-                approx_remaining_cycles = max(0, remaining_seconds / interval)
+                approx_remaining_cycles = max(0, remaining_seconds / tennis_interval)
 
         provider_label = "ESPN" if api_provider.is_espn_healthy() else "FALLBACK"
         logger.info(
             f"[{counter} / ~{approx_total_cycles:.0f} | Rem: ~{approx_remaining_cycles:.0f} | {provider_label}] "
-            "Live/FT/Tennis cycle"
+            "Polling scheduler tick"
         )
 
-        try:
-            await run_live_loop(bot)
-            await fetch_and_post_ft(bot)
-            await run_tennis_loop(bot)
-        except Exception as e:
-            logger.error(f"[Scheduler] Unexpected error in polling cycle {counter}: {e}", exc_info=True)
+        if now >= next_football_due:
+            try:
+                await run_live_loop(bot)
+                await fetch_and_post_ft(bot)
+            except Exception as e:
+                logger.error(f"[Scheduler] Unexpected error in football cycle {counter}: {e}", exc_info=True)
+            football_interval = api_provider.get_poll_interval()
+            next_football_due = italy_now() + timedelta(seconds=football_interval)
+
+        if now >= next_tennis_due:
+            try:
+                await run_tennis_loop(bot)
+            except Exception as e:
+                logger.error(f"[Scheduler] Unexpected error in tennis cycle {counter}: {e}", exc_info=True)
+            next_tennis_due = italy_now() + timedelta(seconds=tennis_interval)
 
         counter += 1
-        await asyncio.sleep(interval)
+        next_due = min(next_football_due, next_tennis_due, end_of_day)
+        await asyncio.sleep(max(1, (next_due - italy_now()).total_seconds()))
 
     logger.info(f"End of day ({current_day_date_italy}) reached. Polling stopped.")

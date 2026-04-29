@@ -107,7 +107,14 @@ def _competition_to_match(event: dict, competition: dict, tour: str) -> dict | N
     elif b.get("winner") is True:
         winner = b_name
 
-    round_name = status_type.get("shortDetail") or status_type.get("detail") or status_type.get("description") or ""
+    round_obj = competition.get("round") or {}
+    round_name = (
+        round_obj.get("displayName")
+        or status_type.get("shortDetail")
+        or status_type.get("detail")
+        or status_type.get("description")
+        or ""
+    )
 
     return {
         "sport": "tennis",
@@ -202,6 +209,11 @@ async def fetch_tracked_tennis_matches(
             continue
 
         for event in payload.get("events", []):
+            for competition in event.get("competitions") or []:
+                match = _competition_to_match(event, competition, tour)
+                if match:
+                    matches.append(match)
+
             groupings = event.get("groupings") or []
             for grouping in groupings:
                 for competition in grouping.get("competitions") or []:

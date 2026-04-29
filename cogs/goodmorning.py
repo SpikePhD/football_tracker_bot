@@ -7,9 +7,8 @@ import re
 
 from discord.ext import commands, tasks
 
-from cogs.matches import build_matches_message
+from cogs.matches import build_combined_matches_message_from_api
 from config import CHANNEL_ID
-from modules import api_provider
 from modules.bot_mode import get_mode, is_verbose
 from modules.discord_poster import post_new_general_message, post_new_message_to_context
 from modules.storage import load, save
@@ -83,11 +82,10 @@ class GoodMorning(commands.Cog):
             return
 
         try:
-            session = self.bot.http_session
-            fixtures = await api_provider.fetch_day(session)
-            fixtures = await api_provider.enrich_fixtures(session, fixtures)
-            fixtures.sort(key=lambda m: m["fixture"]["date"])
-            content = f"{get_greeting()}\n\n{build_matches_message(fixtures)}"
+            content = (
+                f"{get_greeting()}\n\n"
+                f"{await build_combined_matches_message_from_api(self.bot.http_session)}"
+            )
             await post_new_general_message(self.bot, CHANNEL_ID, content=content)
             logger.info(f"Morning message sent at {now.strftime('%H:%M')} Europe/Rome.")
         except Exception as e:
