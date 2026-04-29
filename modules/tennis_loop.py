@@ -5,6 +5,7 @@ from config import CHANNEL_ID
 from modules import api_provider
 from modules.bot_mode import is_silent
 from modules.discord_poster import post_new_general_message, upsert_live_message
+from utils.time_utils import italy_now, parse_utc_to_italy
 from utils.tennis_formatter import (
     format_tennis_final_message,
     format_tennis_live_message,
@@ -18,6 +19,15 @@ pre_announced_ids: set[str] = set()
 final_announced_ids: set[str] = set()
 live_message_ids: dict[str, int] = {}
 live_state_keys: dict[str, str] = {}
+
+
+def _is_today_italy(start_time: str | None) -> bool:
+    if not start_time:
+        return False
+    try:
+        return parse_utc_to_italy(start_time).date() == italy_now().date()
+    except Exception:
+        return False
 
 
 def clear_tennis_state_today() -> None:
@@ -83,6 +93,8 @@ async def run_tennis_loop(bot) -> None:
             continue
 
         if status_short == "FT":
+            if not _is_today_italy(match.get("start_time")):
+                continue
             if match_id not in final_announced_ids:
                 await post_new_general_message(
                     bot,
