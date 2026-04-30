@@ -1,4 +1,4 @@
-﻿# modules/scheduler.py
+# modules/scheduler.py
 
 import asyncio
 import logging
@@ -12,9 +12,14 @@ from modules.ft_handler import (
 )
 from modules.live_loop import clear_already_posted_today, run_live_loop, seed_already_posted
 from modules.tennis_loop import clear_tennis_state_today, run_tennis_loop
+from modules.football_memory import update_standings_only, update_team_info_only
 from utils.time_utils import italy_now
 
 logger = logging.getLogger(__name__)
+
+# Track daily/weekly memory updates to avoid duplicates
+_last_standings_update_date: datetime | None = None
+_last_team_info_update_date: datetime | None = None
 
 
 async def schedule_day(bot):
@@ -57,6 +62,28 @@ async def schedule_day(bot):
     end_of_day = datetime.combine(current_day_date_italy, datetime.max.time()).replace(
         tzinfo=italy_now().tzinfo
     )
+
+    # --- Memory Updates ---
+    # Daily standings update at midnight (Italy time)
+    global _last_standings_update_date
+    if _last_standings_update_date is None or _last_standings_update_date.date() < current_day_date_italy:
+        try:
+            await update_standings_only(bot.http_session)
+            _last_standings_update_date = italy_now()
+            logger.info("📊 Daily standings memory update completed.")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to update standings memory: {e}")
+
+    # Weekly team info update on Sunday midnight (Italy time)
+    global _last_team_info_update_date
+    if italy_now().weekday() == 6:  # Sunday
+        if _last_team_info_update_date is None or _last_team_info_update_date.date() < current_day_date_italy:
+            try:
+                await update_team_info_only(bot.http_session)
+                _last_team_info_update_date = italy_now()
+                logger.info("👥 Weekly team info memory update completed.")
+            except Exception as e:
+                logger.error(f"⚠️ Failed to update team info memory: {e}")
 
     football_interval = api_provider.get_poll_interval()
     tennis_interval = 60

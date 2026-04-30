@@ -1,4 +1,4 @@
-﻿# config.py
+# config.py
 import os
 from dotenv import load_dotenv
 
@@ -89,6 +89,12 @@ DOMESTIC_SLUG_GROUPS = {
     "esp.1": ["esp.1", "esp.copa_del_rey", "esp.super_cup"],
 }
 
+
+# â”€â”€ Football Memory Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Memory staleness threshold (days) - warn if memory is older than this
+MEMORY_STALE_THRESHOLD_DAYS = int(os.getenv("MEMORY_STALE_THRESHOLD_DAYS", "30"))
+# ESPN API cache TTL (seconds) for memory updates (standings, roster)
+ESPN_CACHE_TTL_SEC = int(os.getenv("ESPN_CACHE_TTL_SEC", "43200"))  # 12 hours
 
 # â”€â”€ Cloud LLM â€” used by !ask (OpenAI-compatible API) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 LLM_API_KEY   = os.getenv("LLM_API_KEY",   "")

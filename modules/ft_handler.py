@@ -9,6 +9,7 @@ from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
 from utils.event_formatter import format_match_events, event_completeness_note, normalize_api_football_events
 from modules.discord_poster import post_new_general_message
+from modules.football_memory import update_match_in_memory
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,13 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     """Build and send the FT result message from a normalized match dict."""
     from modules import api_provider  # late import to avoid circular dependency
     match_details = await api_provider.enrich_fixture_events(bot.http_session, match_details)
+
+    # Update football memory with FT match data
+    try:
+        await update_match_in_memory(bot.http_session, match_details)
+        logger.info(f"💾 Updated football memory with FT match: {match_details['fixture']['id']}")
+    except Exception as e:
+        logger.error(f"⚠️ Failed to update football memory for match {match_details.get('fixture', {}).get('id')}: {e}")
 
     home_team = match_details.get("teams", {}).get("home", {}).get("name", "Home Team")
     away_team = match_details.get("teams", {}).get("away", {}).get("name", "Away Team")

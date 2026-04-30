@@ -1,4 +1,4 @@
-﻿# cogs/ask.py
+# cogs/ask.py
 import json
 import logging
 import re
@@ -24,6 +24,12 @@ from config import (
 from utils.time_utils import italy_now, parse_utc_to_italy
 from modules import api_provider
 from modules.discord_poster import post_new_message_to_context
+from modules.football_memory import (
+    load_memory,
+    check_memory_staleness,
+    get_league_standings,
+    get_team_info,
+)
 from utils.espn_client import (
     fetch_next_team_fixture_espn,
     search_team_espn,
@@ -81,6 +87,28 @@ TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_memory",
+            "description": "Retrieve stored facts (standings, team stats, players) from bot memory. Use this FIRST for factual questions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["league", "team"],
+                        "description": "Type of entity to retrieve from memory.",
+                    },
+                    "entity_name": {
+                        "type": "string",
+                        "description": "Name of the league or team, e.g. 'Serie A' or 'AC Milan'.",
+                    },
+                },
+                "required": ["entity_type", "entity_name"],
+            },
+        },
+    },
 ]
 
 
@@ -103,6 +131,34 @@ class Ask(commands.Cog):
         history.append({"role": "assistant", "content": reply})
         await post_new_message_to_context(ctx, content=reply)
 
+    @commands.command(
+        name="refresh_memory",
+        help="Admin: Force update all football memory (standings, teams, players).",
+    )
+    @commands.is_owner()
+    async def refresh_memory(self, ctx: commands.Context):
+        from modules.football_memory import update_all_memory
+        async with ctx.typing():
+            await update_all_memory(self.bot.http_session)
+        await post_new_message_to_context(ctx, content="✅ Football memory refreshed.")
+
+    @commands.command(
+        name="dump_memory",
+        help="Admin: Export football memory to a file and post it.",
+    )
+    @commands.is_owner()
+    async def dump_memory(self, ctx: commands.Context):
+        import discord
+        from pathlib import Path
+        memory = load_memory()
+        dump_path = Path("bot_memory/football_memory_dump.json")
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(dump_path, "w", encoding="utf-8") as f:
+            import json
+            json.dump(memory, f, indent=2, ensure_ascii=False)
+        await ctx.send(file=discord.File(dump_path, filename="football_memory.json"))
+        dump_path.unlink(missing_ok=True)  # Clean up
+
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if isinstance(error, commands.CommandOnCooldown):
             await post_new_message_to_context(
@@ -116,13 +172,26 @@ class Ask(commands.Cog):
         if not LLM_API_KEY:
             return "⚠️ LLM_API_KEY is not set. Add it to your .env file."
 
+        # --- Memory Integration ---
+        memory = load_memory()
+        staleness_warning = check_memory_staleness(memory)
+        memory_context = self._format_memory_context(question, memory)
+
         today = italy_now().strftime("%A, %B %d, %Y")
         system_content = (
             f"{LLM_SYSTEM_PROMPT}\n"
             f"Today's date is {today}.\n"
-            "Rules: perform web_search before final answer; do not make factual claims without retrieved evidence; "
-            "always end factual answers with a 'Sources:' line using 1-3 links/domains from retrieved results."
+            f"{memory_context}\n"
+            "Rules: "
+            "1. Use memory data FIRST if available (prefer memory over web_search for standings, team stats, player stats). "
+            "2. If memory is missing, use web_search or other tools. "
+            "3. Always end factual answers with a 'Sources:' line using 1-3 links/domains from retrieved results. "
+            "4. If memory is stale, warn the user in your answer."
         )
+
+        # Add staleness warning to system prompt if needed
+        if staleness_warning:
+            system_content += f"\n\n{staleness_warning}"
 
         messages = [
             {"role": "system", "content": system_content},
@@ -368,7 +437,162 @@ class Ask(commands.Cog):
             except Exception as e:
                 return {"content": f"Next match fetch failed: {e}", "sources": []}
 
+        if name == "get_memory":
+            try:
+                entity_type = args.get("entity_type", "")
+                entity_name = args.get("entity_name", "")
+                if not entity_type or not entity_name:
+                    return {"content": "Missing entity_type or entity_name for get_memory.", "sources": []}
+
+                if entity_type == "league":
+                    # Find league by name
+                    for league_id, league_name in LEAGUE_NAME_MAP.items():
+                        if league_name.lower() == entity_name.lower():
+                            standings = get_league_standings(league_id)
+                            if standings:
+                                lines = [f"{league_name} Standings:"]
+                                for team in standings:
+                                    lines.append(
+                                        f"  {team['position']}. {team['name']} - {team['points']}pts "
+                                        f"(P{team['played']} W{team['won']} D{team['drawn']} L{team['lost']}) "
+                                        f"GF{team['goals_for']} GA{team['goals_against']}"
+                                    )
+                                return {
+                                    "content": "\n".join(lines),
+                                    "sources": [{"href": "", "domain": "Bot Memory"}],
+                                }
+                            else:
+                                return {
+                                    "content": f"No standings found in memory for {entity_name}.",
+                                    "sources": [],
+                                }
+
+                elif entity_type == "team":
+                    # Find team by name (case-insensitive)
+                    memory = load_memory()
+                    for team_id, team_data in memory.get("teams", {}).items():
+                        if team_data.get("name", "").lower() == entity_name.lower():
+                            lines = [f"{team_data['name']} Info:"]
+                            lines.append(f"  Coach: {team_data.get('coach', 'Unknown')}")
+                            if "stats" in team_data:
+                                stats = team_data["stats"]
+                                lines.append(
+                                    f"  Stats: W{stats.get('wins', 0)} D{stats.get('draws', 0)} "
+                                    f"L{stats.get('losses', 0)} GF{stats.get('goals_for', 0)} "
+                                    f"GA{stats.get('goals_against', 0)}"
+                                )
+                            # Top 3 scorers
+                            players = team_data.get("players", {})
+                            if players:
+                                sorted_players = sorted(
+                                    players.items(),
+                                    key=lambda x: x[1].get("goals", 0),
+                                    reverse=True,
+                                )[:3]
+                                if sorted_players:
+                                    lines.append("  Top Scorers:")
+                                    for pname, pdata in sorted_players:
+                                        lines.append(
+                                            f"    - {pname}: {pdata.get('goals', 0)} goals, "
+                                            f"{pdata.get('assists', 0)} assists, "
+                                            f"{pdata.get('yellow_cards', 0)} yellow cards, "
+                                            f"{pdata.get('red_cards', 0)} red cards"
+                                        )
+                            return {
+                                "content": "\n".join(lines),
+                                "sources": [{"href": "", "domain": "Bot Memory"}],
+                            }
+                    return {
+                        "content": f"No team found in memory for {entity_name}.",
+                        "sources": [],
+                    }
+
+            except Exception as e:
+                logger.error(f"get_memory tool failed: {e}")
+                return {"content": f"Memory lookup failed: {e}", "sources": []}
+
         return {"content": f"Unknown tool: {name}", "sources": []}
+
+    def _format_memory_context(self, question: str, memory: dict) -> str:
+        """
+        Extract relevant entities from the question and format memory context for LLM.
+        Returns a string to inject into the system prompt.
+        """
+        lines = ["Memory Context (use this FIRST for facts):"]
+
+        # Extract entities from question
+        question_lower = question.lower()
+        entities = {"leagues": [], "teams": []}
+
+        # Check for league names
+        for league_id, league_name in LEAGUE_NAME_MAP.items():
+            if league_name.lower() in question_lower:
+                entities["leagues"].append(league_name)
+
+        # Check for team names (simple list of common teams)
+        common_teams = [
+            "AC Milan", "Inter", "Juventus", "Roma", "Lazio", "Napoli",
+            "Atalanta", "Fiorentina", "Bologna", "Torino", "Sassuolo",
+            "Monza", "Lecce", "Salernitana", "Empoli", "Udinese",
+            "Arsenal", "Chelsea", "Liverpool", "Man City", "Man United",
+            "Tottenham", "Aston Villa", "Newcastle", "Brighton", "West Ham",
+            "Real Madrid", "Barcelona", "Atletico Madrid", "Real Sociedad", "Villarreal",
+            "Bayern Munich", "Dortmund", "Leverkusen", "RB Leipzig", "Union Berlin",
+            "PSG", "Lyon", "Marseille", "Lille", "Monaco",
+        ]
+        for team in common_teams:
+            if team.lower() in question_lower:
+                entities["teams"].append(team)
+
+        # Add league standings if requested
+        for league_name in entities["leagues"]:
+            for league_id, lname in LEAGUE_NAME_MAP.items():
+                if lname == league_name:
+                    standings = get_league_standings(league_id)
+                    if standings:
+                        lines.append(f"\n{league_name} Standings (from memory):")
+                        for team in standings[:5]:  # Top 5
+                            lines.append(
+                                f"  {team['position']}. {team['name']} - {team['points']}pts "
+                                f"(P{team['played']} W{team['won']} D{team['drawn']} L{team['lost']})"
+                            )
+                        break
+
+        # Add team info if requested
+        for team_name in entities["teams"]:
+            team_info = None
+            for team_id, team_data in memory.get("teams", {}).items():
+                if team_data.get("name", "").lower() == team_name.lower():
+                    team_info = team_data
+                    break
+
+            if team_info:
+                lines.append(f"\n{team_name} Info (from memory):")
+                lines.append(f"  Coach: {team_info.get('coach', 'Unknown')}")
+                if "stats" in team_info:
+                    stats = team_info["stats"]
+                    lines.append(
+                        f"  Stats: W{stats.get('wins', 0)} D{stats.get('draws', 0)} "
+                        f"L{stats.get('losses', 0)} GF{stats.get('goals_for', 0)} "
+                        f"GA{stats.get('goals_against', 0)}"
+                    )
+                # Top 3 scorers
+                players = team_info.get("players", {})
+                if players:
+                    sorted_players = sorted(
+                        players.items(),
+                        key=lambda x: x[1].get("goals", 0),
+                        reverse=True,
+                    )[:3]
+                    if sorted_players:
+                        lines.append("  Top Scorers:")
+                        for pname, pdata in sorted_players:
+                            lines.append(
+                                f"    - {pname}: {pdata.get('goals', 0)} goals, "
+                                f"{pdata.get('assists', 0)} assists"
+                            )
+
+        return "\n".join(lines) if len(lines) > 1 else ""
 
 
 async def setup(bot: commands.Bot):

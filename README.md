@@ -10,7 +10,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 
 ## Features
 
-- **`!ask` command** — ask the bot any football question, answered by a local LLM (ollama) running on the Pi. The LLM can search the web via DuckDuckGo and query live fixture data in real time. Fully configurable persona via `.env`.
+- **`!ask` command** — ask the bot any football question, answered by a local LLM (Mistral/Ollama-compatible API). The LLM can search the web via DuckDuckGo, query live fixture data, **and access a persistent football memory** (standings, team stats, player stats) sourced from ESPN. Fully configurable persona via `.env`.
 - Live score updates for football and tracked tennis players
 - Full-time results with complete scorer and event details
 - **Grouped by sport and competition** — `!matches` shows football and tennis sections
@@ -38,7 +38,9 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 | `!verbose` | — | Enable verbose mode: startup message, morning broadcast, live updates, FT results |
 | `!normal` | — | Enable normal mode: live updates and FT results only, no broadcasts |
 | `!silent` | — | Enable silent mode: commands only, no automatic posts |
-| `!ask <question>` | — | Ask the local LLM a question. Can search the web and query live fixtures |
+| `!ask <question>` | — | Ask the local LLM a question. Can search the web, query live fixtures, and access football memory (standings, team stats, player stats) |
+| `!refresh_memory` | — | Admin: Force update all football memory (standings, teams, players) from ESPN |
+| `!dump_memory` | — | Admin: Export football memory to a file for debugging |
 | `!commands` | `!cmds`, `!help` | List all available commands |
 
 ---
@@ -99,6 +101,53 @@ OLLAMA_SYSTEM_PROMPT=You are Marco Van Botten, a die-hard AC Milan supporter...
 
 ```bash
 python football_tracker_bot.py
+```
+
+---
+
+## Football Memory Feature
+
+The `!ask` command now has access to a **persistent football memory** that stores:
+- **League standings** (updated daily at midnight Italy time)
+- **Team information** (coach, roster/players — updated weekly on Sundays)
+- **Team stats** (W/D/L, goals for/against — updated after every Full-Time match)
+- **Player stats** (goals, assists, yellow/red cards — updated after every Full-Time match)
+- **Match history** (last 30 days of Full-Time matches)
+
+### How It Works
+1. **Data Source:** All memory data is sourced from **ESPN API** (no web scraping).
+2. **Update Triggers:**
+   - **Full-Time matches:** Automatically updates team stats, player stats, and match history.
+   - **Daily (midnight):** Updates league standings for all tracked leagues.
+   - **Weekly (Sunday midnight):** Updates team rosters and coach information.
+3. **LLM Integration:** The LLM is instructed to **use memory first** for factual questions (standings, team stats, player stats). If memory is missing or stale, it falls back to web search.
+4. **Staleness Warnings:** If memory hasn't been updated in over `MEMORY_STALE_THRESHOLD_DAYS` (default: 30), the LLM will warn users that the data may be outdated.
+
+### Configuration
+| Variable | Default | Description |
+|---|---|---|
+| `MEMORY_STALE_THRESHOLD_DAYS` | 30 | Warn if memory is older than this (days) |
+| `ESPN_CACHE_TTL_SEC` | 43200 (12h) | Cache TTL for ESPN API responses (standings, roster) |
+
+### Admin Commands
+| Command | Description |
+|---|---|
+| `!refresh_memory` | Force update all football memory (standings, teams, players) from ESPN |
+| `!dump_memory` | Export the current football memory to a JSON file |
+
+### Example Usage
+```
+User: !ask What is AC Milan's position in Serie A?
+Bot: AC Milan is currently 1st in Serie A with 60 points (P20 W15 D5 L0).
+     Sources: Bot Memory
+
+User: !ask Who is AC Milan's top scorer?
+Bot: Olivier Giroud is AC Milan's top scorer with 12 goals.
+     Sources: Bot Memory
+
+User: !ask When is the next Inter vs Milan match?
+Bot: Inter vs AC Milan - Saturday, May 10, 2025 at 20:45 (Serie A)
+     Sources: ESPN API
 ```
 
 ---
@@ -168,7 +217,8 @@ football_tracker_bot/
 ├── auto_update.sh            # Unattended auto-update via cron
 │
 ├── bot_memory/               # Pi-owned runtime state (gitignored, never overwritten)
-│   └── state.json            # {"silent": false} — persists across restarts
+│   ├── state.json            # {"silent": false} — persists across restarts
+│   └── football_memory.json  # Football memory (standings, teams, players, matches)
 │
 ├── inject_memory/            # GitHub-controlled reference data (updated on git pull)
 │   └── (milan_calendar.json, etc. — added as needed)
@@ -193,10 +243,11 @@ football_tracker_bot/
 │   ├── discord_poster.py     # Centralised Discord message sending
 │   ├── bot_mode.py           # Silent/verbose flag (reads/writes bot_memory/state.json)
 │   ├── storage.py            # JSON read/write wrapper for bot_memory/
-│   └── power_manager.py      # OS sleep prevention
+│   ├── power_manager.py      # OS sleep prevention
+│   └── football_memory.py    # Football memory management (standings, teams, players)
 │
 └── utils/                    # Stateless utilities
-    ├── espn_client.py        # ESPN public API client — fetches and normalises match data
+    ├── espn_client.py        # ESPN public API client — fetches and normalises match data, standings, and rosters
     ├── api_client.py         # API-Football client (fallback path)
     ├── time_utils.py         # Italy timezone helpers
     └── personality.py        # Greeting and startup message variants
@@ -255,10 +306,11 @@ Secrets are loaded from `.env` via `python-dotenv`. The bot raises a clear `Runt
 | `BOT_TOKEN` | Yes | Discord bot token |
 | `API_KEY` | Yes | API-Football (v3) key (fallback only) |
 | `CHANNEL_ID` | Yes | Discord channel ID for all updates |
-| `OLLAMA_URL` | No | ollama server URL (default: `http://localhost:11434`) |
-| `OLLAMA_MODEL` | No | ollama model to use (default: `qwen2.5:3b`) |
-| `BOT_NAME` | No | Bot display name used in the default LLM persona (default: `Marco`) |
-| `OLLAMA_SYSTEM_PROMPT` | No | Full system prompt for the LLM. Overrides the default persona entirely |
+| `LLM_API_KEY` | No | LLM API key (Mistral/Ollama-compatible) for `!ask` command |
+| `LLM_BASE_URL` | No | LLM API base URL (default: `https://api.mistral.ai/v1`) |
+| `LLM_MODEL` | No | LLM model name (default: `mistral-small-latest`) |
+| `MEMORY_STALE_THRESHOLD_DAYS` | No | Warn if football memory is older than this (default: 30) |
+| `ESPN_CACHE_TTL_SEC` | No | ESPN API cache TTL for memory updates (default: 43200 = 12h) |
 
 Non-secret config lives in `config.py`:
 
@@ -270,3 +322,5 @@ Non-secret config lives in `config.py`:
 | `DOMESTIC_SLUG_GROUPS` | Maps a primary league slug → all domestic cup slugs for that country |
 | `INTERNATIONAL_SLUGS` | ESPN slugs for European and international competitions |
 | `build_league_slugs(slug)` | Returns the full slug list for a team's country + all international competitions |
+| `MEMORY_STALE_THRESHOLD_DAYS` | Memory staleness threshold (from `.env`) |
+| `ESPN_CACHE_TTL_SEC` | ESPN cache TTL for memory updates (from `.env`) |

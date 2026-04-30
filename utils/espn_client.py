@@ -300,6 +300,158 @@ async def fetch_next_team_fixture_espn(
     return _normalize_event(event, league_id)
 
 
+# ── Standings ─────────────────────────────────────────────────────────────────
+
+async def fetch_standings_espn(
+    session: aiohttp.ClientSession,
+    slug: str,
+) -> list[dict] | None:
+    """
+    Fetch league standings from ESPN.
+    ESPN endpoint: https://site.api.espn.com/apis/site/v2/sports/soccer/{slug}/standings
+    Returns list of team standings (normalized) or None on failure.
+    """
+    url = f"{ESPN_BASE}/{slug}/standings"
+    try:
+        async with session.get(url, timeout=ESPN_TIMEOUT) as resp:
+            if resp.status != 200:
+                logger.warning(f"ESPN standings HTTP {resp.status} for {slug}")
+                return None
+            data = await resp.json(content_type=None)
+            return _normalize_standings(data)
+    except Exception as e:
+        logger.warning(f"Failed to fetch standings for {slug}: {e}")
+        return None
+
+
+def _normalize_standings(data: dict) -> list[dict]:
+    """
+    Convert ESPN standings response to our normalized format.
+    ESPN response structure:
+    {
+        "standings": [
+            {
+                "team": {"id": "123", "displayName": "AC Milan"},
+                "stats": [
+                    {"name": "rank", "value": "1"},
+                    {"name": "points", "value": "60"},
+                    ...
+                ]
+            },
+            ...
+        ]
+    }
+    """
+    standings = []
+    for entry in data.get("standings", []):
+        team = entry.get("team", {})
+        stats_list = entry.get("stats", [])
+        stats = {s["name"]: s["value"] for s in stats_list}
+
+        try:
+            standing_entry = {
+                "team_id": team.get("id", ""),
+                "name": team.get("displayName") or team.get("name", "Unknown"),
+                "position": int(stats.get("rank", 0)),
+                "points": int(stats.get("points", 0)),
+                "played": int(stats.get("matchesPlayed", 0)),
+                "won": int(stats.get("wins", 0)),
+                "drawn": int(stats.get("draws", 0)),
+                "lost": int(stats.get("losses", 0)),
+                "goals_for": int(stats.get("goalsFor", 0)),
+                "goals_against": int(stats.get("goalsAgainst", 0)),
+                "goal_difference": int(stats.get("goalDifferential", 0)),
+            }
+            standings.append(standing_entry)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Failed to parse standing entry for {team.get('displayName', '?')}: {e}")
+            continue
+
+    return standings
+
+
+# ── Team Roster ───────────────────────────────────────────────────────────────
+
+async def fetch_team_roster_espn(
+    session: aiohttp.ClientSession,
+    team_id: str,
+    slug: str,
+) -> dict | None:
+    """
+    Fetch team roster (players + coach) from ESPN.
+    ESPN endpoint: https://site.api.espn.com/apis/site/v2/sports/soccer/teams/{team_id}
+    Returns dict with team name, coach, and players (by name) or None on failure.
+    """
+    url = f"{ESPN_BASE}/teams/{team_id}"
+    try:
+        async with session.get(url, timeout=ESPN_TIMEOUT) as resp:
+            if resp.status != 200:
+                logger.warning(f"ESPN team roster HTTP {resp.status} for {team_id}")
+                return None
+            data = await resp.json(content_type=None)
+            return _normalize_roster(data)
+    except Exception as e:
+        logger.warning(f"Failed to fetch roster for {team_id}: {e}")
+        return None
+
+
+def _normalize_roster(data: dict) -> dict:
+    """
+    Convert ESPN team response to our normalized format.
+    ESPN response structure:
+    {
+        "team": {"id": "123", "displayName": "AC Milan"},
+        "athletes": [
+            {
+                "id": "456",
+                "fullName": "Olivier Giroud",
+                "position": {"name": "F"},
+                "jersey": "9"
+            },
+            ...
+        ],
+        "staff": [
+            {
+                "position": {"name": "Head Coach"},
+                "fullName": "Stefano Pioli"
+            },
+            ...
+        ]
+    }
+    """
+    team = data.get("team", {})
+    athletes = data.get("athletes", [])
+    staff = data.get("staff", [])
+
+    # Extract coach
+    coach = "Unknown"
+    for person in staff:
+        if person.get("position", {}).get("name") == "Head Coach":
+            coach = person.get("fullName", "Unknown")
+            break
+
+    # Extract players (by name, as per user preference)
+    players = {}
+    for athlete in athletes:
+        player_name = athlete.get("fullName", "Unknown")
+        if not player_name:
+            continue
+        players[player_name] = {
+            "position": athlete.get("position", {}).get("name", "Unknown"),
+            "number": athlete.get("jersey", "N/A"),
+            "goals": 0,
+            "assists": 0,
+            "yellow_cards": 0,
+            "red_cards": 0,
+        }
+
+    return {
+        "name": team.get("displayName") or team.get("name", "Unknown"),
+        "coach": coach,
+        "players": players,
+    }
+
+
 # ── HTTP requests ─────────────────────────────────────────────────────────────
 
 async def fetch_scoreboard(
