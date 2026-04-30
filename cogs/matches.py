@@ -86,15 +86,17 @@ def build_tennis_section(matches: list) -> str:
         lines.append("No tracked tennis matches live, upcoming, or finished today.")
         return "\n".join(lines)
 
+    # Only include matches that are actually today (live, upcoming today, or finished today)
     live = sorted(
         [m for m in matches if m.get("status", {}).get("short") == "LIVE"],
         key=lambda m: m.get("start_time") or "",
     )
+    # Only show upcoming matches that are scheduled for TODAY
     upcoming = sorted(
         [
             m for m in matches
             if m.get("status", {}).get("short") == "NS"
-            and _is_tennis_upcoming(m, TENNIS_UPCOMING_DAYS)
+            and _is_tennis_today(m)
         ],
         key=lambda m: m.get("start_time") or "",
     )
