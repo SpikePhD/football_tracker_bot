@@ -187,7 +187,7 @@ class Ask(commands.Cog):
             "2. If memory is missing, use web_search or other tools. "
             "3. Always end factual answers with a 'Sources:' line using 1-3 links/domains from retrieved results. "
             "4. If memory is stale, warn the user in your answer. "
-            "5. If you retrieve data from get_memory tool, STOP calling tools and answer directly using that data."
+            "5. If you see 'FINAL ANSWER FROM MEMORY' in a tool response, STOP immediately and use that data as your final answer. DO NOT CALL ANY MORE TOOLS."
         )
 
         # Add staleness warning to system prompt if needed
@@ -451,7 +451,7 @@ class Ask(commands.Cog):
                         if league_name.lower() == entity_name.lower():
                             standings = get_league_standings(league_id)
                             if standings:
-                                lines = [f"Memory data: {league_name} Standings:"]
+                                lines = [f"{league_name} Standings:"]
                                 for team in standings:
                                     lines.append(
                                         f"  {team['position']}. {team['name']} - {team['points']}pts "
@@ -459,7 +459,7 @@ class Ask(commands.Cog):
                                         f"GF{team['goals_for']} GA{team['goals_against']}"
                                     )
                                 return {
-                                    "content": "\n".join(lines),
+                                    "content": f"FINAL ANSWER FROM MEMORY:\n" + "\n".join(lines) + "\n\nDO NOT CALL ANY MORE TOOLS.",
                                     "sources": [{"href": "", "domain": "Bot Memory"}],
                                 }
                             else:
@@ -473,7 +473,7 @@ class Ask(commands.Cog):
                     memory = load_memory()
                     for team_id, team_data in memory.get("teams", {}).items():
                         if team_data.get("name", "").lower() == entity_name.lower():
-                            lines = [f"Memory data: {team_data['name']} Info:"]
+                            lines = [f"{team_data['name']} Info:"]
                             lines.append(f"  Coach: {team_data.get('coach', 'Unknown')}")
                             if "stats" in team_data:
                                 stats = team_data["stats"]
@@ -500,7 +500,7 @@ class Ask(commands.Cog):
                                             f"{pdata.get('red_cards', 0)} red cards"
                                         )
                             return {
-                                "content": "\n".join(lines),
+                                "content": f"FINAL ANSWER FROM MEMORY:\n" + "\n".join(lines) + "\n\nDO NOT CALL ANY MORE TOOLS.",
                                 "sources": [{"href": "", "domain": "Bot Memory"}],
                             }
                     return {
