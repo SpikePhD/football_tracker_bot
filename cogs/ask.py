@@ -248,11 +248,16 @@ class Ask(commands.Cog):
                     if isinstance(args, str):
                         args = json.loads(args)
                     result = await self._execute_tool(session, tc["function"]["name"], args)
+                    result_content = result.get("content", "")
+                    if "FINAL ANSWER FROM MEMORY:" in result_content:
+                        final_answer = result_content.split("FINAL ANSWER FROM MEMORY:", 1)[1]
+                        final_answer = final_answer.replace("DO NOT CALL ANY MORE TOOLS.", "").strip()
+                        return self._attach_sources(final_answer, result.get("sources", []))
                     if tc["function"]["name"] == "web_search":
                         collected_sources.extend(result.get("sources", []))
                     messages.append({
                         "role": "tool",
-                        "content": result["content"],
+                        "content": result_content,
                         "tool_call_id": tc["id"],
                     })
 
