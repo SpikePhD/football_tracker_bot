@@ -1,6 +1,7 @@
 ﻿# modules/live_loop.py
 
 import logging
+import asyncio
 
 from config import CHANNEL_ID
 from modules import api_provider
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 # Track per-match live state in-memory (reset daily / on restart).
 live_state_keys: dict[str, str] = {}
 live_message_ids: dict[str, int] = {}
+_live_loop_lock = asyncio.Lock()
 
 _LIVE_STATUSES = {"1H", "HT", "2H", "ET", "PEN"}
 
@@ -50,61 +52,62 @@ async def run_live_loop(bot):
     Polls live fixtures, enriches event data before dedup checks, and then
     upserts one live message per match. Also registers matches for FT checking.
     """
-    if is_silent():
-        return
+    async with _live_loop_lock:
+        if is_silent():
+            return
 
-    now = italy_now()
-    logger.info(f"[{now.strftime('%H:%M')}] Querying live endpoint...")
+        now = italy_now()
+        logger.info(f"[{now.strftime('%H:%M')}] Querying live endpoint...")
 
-    matches = await api_provider.fetch_live(bot.http_session)
-    if not matches:
-        logger.info(f"[{now.strftime('%H:%M')}] No live fixtures returned or fetch error.")
-        return
+        matches = await api_provider.fetch_live(bot.http_session)
+        if not matches:
+            logger.info(f"[{now.strftime('%H:%M')}] No live fixtures returned or fetch error.")
+            return
 
-    seen_live_ids: set[str] = set()
+        seen_live_ids: set[str] = set()
 
-    for match in matches:
-        match_id = str(match["fixture"]["id"])
-        seen_live_ids.add(match_id)
-        if not is_tracked_for_ft(match_id):
-            track_match_for_ft(match)
+        for match in matches:
+            match_id = str(match["fixture"]["id"])
+            seen_live_ids.add(match_id)
+            if not is_tracked_for_ft(match_id):
+                track_match_for_ft(match)
 
-        # Enrich first so dedup key and outgoing message reflect final data.
-        enriched = await api_provider.enrich_fixture_events(bot.http_session, match)
+            # Enrich first so dedup key and outgoing message reflect final data.
+            enriched = await api_provider.enrich_fixture_events(bot.http_session, match)
 
-        home = enriched["teams"]["home"]["name"]
-        away = enriched["teams"]["away"]["name"]
-        score = enriched["goals"]
-        events = enriched.get("events", [])
-        state_key = f"{match_id}_{score['home']}-{score['away']}_{len(events)}"
+            home = enriched["teams"]["home"]["name"]
+            away = enriched["teams"]["away"]["name"]
+            score = enriched["goals"]
+            events = enriched.get("events", [])
+            state_key = f"{match_id}_{score['home']}-{score['away']}_{len(events)}"
 
-        previous_state = live_state_keys.get(match_id)
-        if previous_state == state_key:
-            continue
+            previous_state = live_state_keys.get(match_id)
+            if previous_state == state_key:
+                continue
 
-        event_strings = format_match_events(events, home, away)
-        completeness = event_completeness_note(score, events)
+            event_strings = format_match_events(events, home, away)
+            completeness = event_completeness_note(score, events)
 
-        line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
-        if event_strings:
-            line_content += " (" + "; ".join(event_strings) + ")"
-        if completeness:
-            line_content += completeness
+            line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
+            if event_strings:
+                line_content += " (" + "; ".join(event_strings) + ")"
+            if completeness:
+                line_content += completeness
 
-        updated_message = await upsert_live_message(
-            bot=bot,
-            channel_id=CHANNEL_ID,
-            message_id=live_message_ids.get(match_id),
-            content=line_content,
-        )
+            updated_message = await upsert_live_message(
+                bot=bot,
+                channel_id=CHANNEL_ID,
+                message_id=live_message_ids.get(match_id),
+                content=line_content,
+            )
 
-        if updated_message is not None:
-            live_message_ids[match_id] = updated_message.id
-            live_state_keys[match_id] = state_key
-            logger.info(f"Live update upserted for match {match_id}: {line_content}")
+            if updated_message is not None:
+                live_message_ids[match_id] = updated_message.id
+                live_state_keys[match_id] = state_key
+                logger.info(f"Live update upserted for match {match_id}: {line_content}")
 
-    # Clean stale map entries when a match is no longer live.
-    stale_ids = [mid for mid in live_state_keys if mid not in seen_live_ids]
-    for mid in stale_ids:
-        live_state_keys.pop(mid, None)
-        live_message_ids.pop(mid, None)
+        # Clean stale map entries when a match is no longer live.
+        stale_ids = [mid for mid in live_state_keys if mid not in seen_live_ids]
+        for mid in stale_ids:
+            live_state_keys.pop(mid, None)
+            live_message_ids.pop(mid, None)

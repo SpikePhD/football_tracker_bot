@@ -12,6 +12,7 @@ The bot has a particular focus on AC Milan and the major Italian and European co
 
 - **`!ask` command** — ask the bot any football question, answered by a local LLM (Mistral/Ollama-compatible API). The LLM can search the web via DuckDuckGo, query live fixture data, **and access a persistent football memory** (standings, team stats, player stats) sourced from ESPN. Fully configurable persona via `.env`.
 - Live score updates for football and tracked tennis players
+- Tennis upcoming announcements are gated to a configurable pre-match window (default: 8 hours)
 - Full-time results with complete scorer and event details
 - **Grouped by sport and competition** — `!matches` shows football and tennis sections
 - **Configurable morning broadcast** at Europe/Rome time — greeting + today's tracked sports
@@ -218,6 +219,7 @@ football_tracker_bot/
 │
 ├── bot_memory/               # Pi-owned runtime state (gitignored, never overwritten)
 │   ├── state.json            # {"silent": false} — persists across restarts
+│   ├── tennis_state.json     # Tennis dedup state (upcoming/final announcements)
 │   └── football_memory.json  # Football memory (standings, teams, players, matches)
 │
 ├── inject_memory/            # GitHub-controlled reference data (updated on git pull)
@@ -311,6 +313,7 @@ Secrets are loaded from `.env` via `python-dotenv`. The bot raises a clear `Runt
 | `LLM_MODEL` | No | LLM model name (default: `mistral-small-latest`) |
 | `MEMORY_STALE_THRESHOLD_DAYS` | No | Warn if football memory is older than this (default: 30) |
 | `ESPN_CACHE_TTL_SEC` | No | ESPN API cache TTL for memory updates (default: 43200 = 12h) |
+| `TENNIS_PRE_ANNOUNCE_HOURS` | No | Hours-before-start window for posting tennis upcoming messages (default: 8) |
 
 Non-secret config lives in `config.py`:
 
@@ -324,3 +327,4 @@ Non-secret config lives in `config.py`:
 | `build_league_slugs(slug)` | Returns the full slug list for a team's country + all international competitions |
 | `MEMORY_STALE_THRESHOLD_DAYS` | Memory staleness threshold (from `.env`) |
 | `ESPN_CACHE_TTL_SEC` | ESPN cache TTL for memory updates (from `.env`) |
+| `TENNIS_PRE_ANNOUNCE_HOURS` | Tennis upcoming announcement window in hours (from `.env`) |

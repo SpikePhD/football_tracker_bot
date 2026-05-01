@@ -2,10 +2,11 @@
 import logging
 from datetime import timedelta
 
-from config import CHANNEL_ID
+from config import CHANNEL_ID, TENNIS_PRE_ANNOUNCE_HOURS
 from modules import api_provider
 from modules.bot_mode import is_silent
 from modules.discord_poster import post_new_general_message, upsert_live_message
+from modules.storage import load, save
 from utils.time_utils import italy_now, parse_utc_to_italy
 from utils.tennis_formatter import (
     format_tennis_final_message,
@@ -20,6 +21,9 @@ pre_announced_ids: set[str] = set()
 final_announced_ids: set[str] = set()
 live_message_ids: dict[str, int] = {}
 live_state_keys: dict[str, str] = {}
+_TENNIS_STATE_FILE = "tennis_state.json"
+_TENNIS_STATE_DEFAULT = {"pre_announced_ids": [], "final_announced_ids": []}
+_state_loaded = False
 
 
 def _is_today_italy(start_time: str | None) -> bool:
@@ -55,17 +59,40 @@ def _is_within_window(start_time: str | None, hours: int = 48) -> bool:
         return False
 
 
+def _load_state_once() -> None:
+    global _state_loaded
+    if _state_loaded:
+        return
+    state = load(_TENNIS_STATE_FILE, _TENNIS_STATE_DEFAULT)
+    pre_announced_ids.update(str(mid) for mid in state.get("pre_announced_ids", []))
+    final_announced_ids.update(str(mid) for mid in state.get("final_announced_ids", []))
+    _state_loaded = True
+
+
+def _persist_state() -> None:
+    save(
+        _TENNIS_STATE_FILE,
+        {
+            "pre_announced_ids": sorted(pre_announced_ids),
+            "final_announced_ids": sorted(final_announced_ids),
+        },
+    )
+
+
 def clear_tennis_state_today() -> None:
+    _load_state_once()
     pre_announced_ids.clear()
     final_announced_ids.clear()
     live_message_ids.clear()
     live_state_keys.clear()
+    _persist_state()
     logger.info("Cleared tennis tracking state for the new day.")
 
 
 async def run_tennis_loop(bot) -> None:
     if is_silent():
         return
+    _load_state_once()
 
     try:
         matches = await api_provider.fetch_tennis_day(bot.http_session)
@@ -103,6 +130,8 @@ async def run_tennis_loop(bot) -> None:
             # Only announce upcoming matches that are today or tomorrow
             if not (_is_today_italy(start_time) or _is_tomorrow_italy(start_time)):
                 continue
+            if not _is_within_window(start_time, hours=TENNIS_PRE_ANNOUNCE_HOURS):
+                continue
             if match_id not in pre_announced_ids:
                 await post_new_general_message(
                     bot,
@@ -110,6 +139,7 @@ async def run_tennis_loop(bot) -> None:
                     content=format_tennis_pre_message(match),
                 )
                 pre_announced_ids.add(match_id)
+                _persist_state()
             continue
 
         if status_short == "LIVE":
@@ -147,6 +177,7 @@ async def run_tennis_loop(bot) -> None:
                     content=format_tennis_final_message(match),
                 )
                 final_announced_ids.add(match_id)
+                _persist_state()
 
             live_message_ids.pop(match_id, None)
             live_state_keys.pop(match_id, None)

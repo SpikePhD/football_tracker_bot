@@ -40,6 +40,13 @@ else
     echo "  bot_memory/goodmorning.json already exists - keeping state"
 fi
 
+if [ ! -f bot_memory/tennis_state.json ]; then
+    echo '{"pre_announced_ids": [], "final_announced_ids": []}' > bot_memory/tennis_state.json
+    echo "  Created bot_memory/tennis_state.json"
+else
+    echo "  bot_memory/tennis_state.json already exists - keeping state"
+fi
+
 echo ""
 echo "🔄 Restarting bot service ($SERVICE_NAME)..."
 sudo systemctl restart "$SERVICE_NAME"

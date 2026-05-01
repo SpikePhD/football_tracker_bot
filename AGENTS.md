@@ -49,7 +49,7 @@ Bot state reads/writes → modules/storage.py → bot_memory/state.json
 | `football_tracker_bot.py` | Bot lifecycle, task loops (morning + 11am), HTTP session, cog loading |
 | `config.py` | All config: secrets, `TRACKED_LEAGUE_IDS`, `LEAGUE_NAME_MAP`, `LEAGUE_SLUG_MAP`, `build_league_slugs()` |
 | `modules/scheduler.py` | Daily orchestration: seed football state → poll football and tennis until midnight |
-| `modules/live_loop.py` | Live polling: builds score updates, deduplicates by `{match_id}_{score}_{event_count}` |
+| `modules/live_loop.py` | Live polling: builds score updates, deduplicates by `{match_id}_{score}_{event_count}`, guarded by a loop lock to avoid duplicate sends from overlapping ticks |
 | `modules/ft_handler.py` | Tracks live matches for FT check; posts final results (dual ESPN/fallback path) |
 | `modules/api_provider.py` | Provider layer: ESPN primary + API-Football fallback, health state, 55s cache |
 | `modules/discord_poster.py` | All Discord sends — the only place `channel.send()` is called |
@@ -79,6 +79,7 @@ Bot state reads/writes → modules/storage.py → bot_memory/state.json
 ```
 bot_memory/       # Pi-owned runtime state. Gitignored. Never overwritten by git pull.
   state.json      # {"silent": false} — persists across restarts
+  tennis_state.json # {"pre_announced_ids": [], "final_announced_ids": []} — tennis announcement dedup across restarts
 
 inject_memory/    # GitHub-controlled reference data. Updated on every git pull.
   (milan_calendar.json, etc. added as needed)
@@ -134,6 +135,14 @@ announcement, and command messages.
 ```
 The event count is included because ESPN sometimes reports score changes before populating scorer
 details. A follow-up post is triggered when new events appear for the same scoreline.
+The loop is protected by an async lock so overlapping scheduler ticks cannot emit duplicate posts for
+the same state transition.
+
+### Tennis upcoming announcements
+- Upcoming (`NS`) tennis messages are posted only when the match is within
+  `TENNIS_PRE_ANNOUNCE_HOURS` from now (default: 8h).
+- Upcoming/final tennis announcement IDs are persisted in `bot_memory/tennis_state.json` to avoid
+  reposts after service restarts.
 
 ### Bot memory
 - `modules/storage.py` provides `load(filename, default)` and `save(filename, data)` for JSON files

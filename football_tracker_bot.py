@@ -37,6 +37,7 @@ intents = discord.Intents.default()
 intents.message_content = True # Ensure this is enabled if you use message content
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 current_day_scheduler_task: asyncio.Task | None = None
+_startup_completed = False
 
 # --- HTTP Session Management ---
 async def ensure_http_session(bot_instance: commands.Bot):
@@ -98,6 +99,12 @@ async def eleven_am_daily_trigger():
 # --- Bot Events ---
 @bot.event
 async def on_ready():
+    global _startup_completed
+    if _startup_completed:
+        logger.info("on_ready fired again after reconnect; skipping startup bootstrap.")
+        return
+    _startup_completed = True
+
     logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     logger.info(f"🚀 Running bot from commit: {get_version_info()['sha']}")
     await ensure_http_session(bot) # Ensure session is ready
