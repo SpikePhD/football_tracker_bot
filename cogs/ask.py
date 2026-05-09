@@ -404,7 +404,6 @@ class Ask(commands.Cog):
         if name == "get_todays_fixtures":
             try:
                 matches = await api_provider.fetch_day(session)
-                matches = await api_provider.enrich_fixtures(session, matches)
                 if not matches:
                     return {"content": "No fixtures found for today.", "sources": []}
                 lines = []

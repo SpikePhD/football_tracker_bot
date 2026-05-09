@@ -34,7 +34,8 @@ def _load_public_config() -> dict:
         )
 
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        # Accept UTF-8 with or without BOM to avoid Windows editor compatibility issues.
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except json.JSONDecodeError as e:
         raise RuntimeError(f"config.json is not valid JSON: {e}") from e
 
@@ -99,6 +100,7 @@ API_RETRY_INTERVAL_SEC = int(_expect(provider_cfg, "retry_interval_sec", int, "o
 API_ESPN_POLL_INTERVAL_SEC = int(_expect(provider_cfg, "espn_poll_interval_sec", int, "operations.api_provider"))
 API_FALLBACK_POLL_INTERVAL_SEC = int(_expect(provider_cfg, "fallback_poll_interval_sec", int, "operations.api_provider"))
 API_SCOREBOARD_CACHE_TTL_SEC = int(_expect(provider_cfg, "scoreboard_cache_ttl_sec", int, "operations.api_provider"))
+API_ENRICH_MAX_CALLS_PER_TICK = int(_expect(provider_cfg, "enrich_max_calls_per_tick", int, "operations.api_provider"))
 
 LOG_FILE_PATH = _expect(log_cfg, "file_path", str, "log")
 LOG_FILE_MAX_BYTES = int(_expect(log_cfg, "file_max_bytes", int, "log"))

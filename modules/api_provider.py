@@ -10,6 +10,7 @@ import aiohttp
 import asyncio
 
 from config import (
+    API_ENRICH_MAX_CALLS_PER_TICK,
     API_ESPN_POLL_INTERVAL_SEC,
     API_FAILURE_THRESHOLD,
     API_FALLBACK_POLL_INTERVAL_SEC,
@@ -53,6 +54,10 @@ _tennis_cache: list[dict] = []
 _tennis_cache_date: str | None = None
 _tennis_cache_ts: datetime | None = None
 _TRACKED_SLUGS: set[str] = set(LEAGUE_SLUG_MAP.values())
+_enrich_attempted_states: set[str] = set()
+_enrich_attempted_date: str | None = None
+_enrich_tick_key: str | None = None
+_enrich_tick_count: int = 0
 
 
 # ── Health management ─────────────────────────────────────────────────────────
@@ -196,6 +201,9 @@ async def fetch_day(session: aiohttp.ClientSession) -> list[dict]:
     """
     if is_espn_healthy():
         return await _get_cached_scoreboard(session)
+    if api_client.is_quota_exceeded_today():
+        logger.warning("🟡 [APIProvider] API-Football quota exhausted for today. Skipping fallback day fetch.")
+        return []
     logger.info("🟡 [APIProvider] Running on API-FOOTBALL fallback. Fetching day fixtures...")
     return await api_client.fetch_day_fixtures(session)
 
@@ -216,6 +224,9 @@ async def fetch_live(session: aiohttp.ClientSession) -> list[dict]:
         return live
 
     retry_str = _retry_after.strftime("%H:%M") if _retry_after else "N/A"
+    if api_client.is_quota_exceeded_today():
+        logger.warning("🟡 [APIProvider] API-Football quota exhausted for today. Skipping fallback live fetch.")
+        return []
     logger.info(f"🟡 [APIProvider] Running on API-FOOTBALL fallback. ESPN retry at {retry_str}.")
     return await api_client.fetch_live_fixtures(session)
 
@@ -236,6 +247,8 @@ async def fetch_fixture(session: aiohttp.ClientSession, fixture_id) -> dict | No
     Fetch a single fixture by ID. Used by ft_handler in fallback mode only.
     Delegates to API-Football (ESPN doesn't have a per-event endpoint we use here).
     """
+    if api_client.is_quota_exceeded_today():
+        return None
     return await api_client.fetch_fixture_by_id(session, fixture_id)
 
 
@@ -273,6 +286,35 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     fixture_id = match.get("fixture", {}).get("id")
     if not fixture_id:
         return match
+
+    # Do not spam enrichment attempts for identical match states.
+    global _enrich_attempted_date, _enrich_tick_key, _enrich_tick_count
+    today = get_italy_date_string()
+    if _enrich_attempted_date != today:
+        _enrich_attempted_states.clear()
+        _enrich_attempted_date = today
+
+    enrich_state = f"{fixture_id}:{goals.get('home')}:{goals.get('away')}:{len(events)}"
+    if enrich_state in _enrich_attempted_states:
+        return match
+
+    # Hard cap enrichment calls per scheduler tick/minute.
+    tick_key = italy_now().strftime("%Y%m%d%H%M")
+    if _enrich_tick_key != tick_key:
+        _enrich_tick_key = tick_key
+        _enrich_tick_count = 0
+    if _enrich_tick_count >= API_ENRICH_MAX_CALLS_PER_TICK:
+        logger.info(
+            f"[Enrich] Skipping fixture {fixture_id}: per-tick cap "
+            f"{API_ENRICH_MAX_CALLS_PER_TICK} reached."
+        )
+        return match
+
+    if api_client.is_quota_exceeded_today():
+        return match
+
+    _enrich_attempted_states.add(enrich_state)
+    _enrich_tick_count += 1
 
     logger.info(
         f"🔍 [Enrich] Fetching API-Football events for fixture {fixture_id} "

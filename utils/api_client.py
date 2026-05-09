@@ -19,6 +19,17 @@ HEADERS = {
 API_REQUEST_TIMEOUT = 15
 _TIMEOUT = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
 
+_quota_exceeded_day: str | None = None
+
+
+def is_quota_exceeded_today() -> bool:
+    """Return True when API-Football daily quota is known to be exhausted for today's Italy date."""
+    global _quota_exceeded_day
+    today = get_italy_date_string()
+    if _quota_exceeded_day and _quota_exceeded_day != today:
+        _quota_exceeded_day = None
+    return _quota_exceeded_day == today
+
 async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None:
     """
     Helper function to make an API request and handle common errors.
@@ -32,6 +43,11 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
 
                 api_errors = data.get("errors")
                 if api_errors and ( (isinstance(api_errors, list) and len(api_errors) > 0) or isinstance(api_errors, dict) ):
+                    global _quota_exceeded_day
+                    if isinstance(api_errors, dict):
+                        request_err = str(api_errors.get("requests", "")).lower()
+                        if "request limit" in request_err or "reached the request limit" in request_err:
+                            _quota_exceeded_day = get_italy_date_string()
                     logger.error(f"❌ API Error for {url}: {api_errors} | Status: {response.status} | Parameters: {data.get('parameters')}")
                     return None
 
@@ -41,6 +57,8 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
                 return data
 
             elif response.status == 429:
+                global _quota_exceeded_day
+                _quota_exceeded_day = get_italy_date_string()
                 logger.warning(f"Rate limited! Status: {response.status} for {url}. Check API plan limits.")
                 return None
             else:

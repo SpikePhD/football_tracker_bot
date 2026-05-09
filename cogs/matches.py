@@ -139,7 +139,6 @@ async def build_combined_matches_message_from_api(session) -> str:
 
     try:
         football_fixtures = await api_provider.fetch_day(session)
-        football_fixtures = await api_provider.enrich_fixtures(session, football_fixtures)
         football_fixtures.sort(key=lambda m: m["fixture"]["date"])
     except Exception as e:
         logger.error(f"Failed to fetch football snapshot: {e}", exc_info=True)
