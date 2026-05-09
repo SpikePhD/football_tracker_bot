@@ -35,6 +35,7 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
     Helper function to make an API request and handle common errors.
     Returns the parsed JSON data (the whole payload) or None on error.
     """
+    global _quota_exceeded_day
     logger.info(f"🌐 API Request: {url}")
     try:
         async with session.get(url, headers=HEADERS, timeout=_TIMEOUT) as response:
@@ -43,7 +44,6 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
 
                 api_errors = data.get("errors")
                 if api_errors and ( (isinstance(api_errors, list) and len(api_errors) > 0) or isinstance(api_errors, dict) ):
-                    global _quota_exceeded_day
                     if isinstance(api_errors, dict):
                         request_err = str(api_errors.get("requests", "")).lower()
                         if "request limit" in request_err or "reached the request limit" in request_err:
@@ -57,7 +57,6 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
                 return data
 
             elif response.status == 429:
-                global _quota_exceeded_day
                 _quota_exceeded_day = get_italy_date_string()
                 logger.warning(f"Rate limited! Status: {response.status} for {url}. Check API plan limits.")
                 return None
