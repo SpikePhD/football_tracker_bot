@@ -13,8 +13,17 @@ if [ ! -f .env.deploy ]; then
     cp .env.deploy.example .env.deploy
     echo "  ✔ Created .env.deploy (edit SERVICE_NAME/GIT_BRANCH for your host if needed)"
 fi
-# shellcheck source=.env.deploy.example
-source .env.deploy
+load_env_file_safely() {
+    local env_file="$1"
+    local tmp_file
+    tmp_file="$(mktemp)"
+    # Strip UTF-8 BOM from first line if present, then source.
+    sed '1s/^\xEF\xBB\xBF//' "$env_file" > "$tmp_file"
+    # shellcheck disable=SC1090
+    source "$tmp_file"
+    rm -f "$tmp_file"
+}
+load_env_file_safely .env.deploy
 
 if [ ! -f config.json ]; then
     echo "⚠️  config.json not found — creating from config.example.json"

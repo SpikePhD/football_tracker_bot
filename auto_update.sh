@@ -11,8 +11,17 @@ if [ ! -f "$BOT_DIR/.env.deploy" ]; then
     echo "WARNING: $BOT_DIR/.env.deploy not found — creating from .env.deploy.example" >&2
     cp "$BOT_DIR/.env.deploy.example" "$BOT_DIR/.env.deploy"
 fi
-# shellcheck source=.env.deploy.example
-source "$BOT_DIR/.env.deploy"
+load_env_file_safely() {
+    local env_file="$1"
+    local tmp_file
+    tmp_file="$(mktemp)"
+    # Strip UTF-8 BOM from first line if present, then source.
+    sed '1s/^\xEF\xBB\xBF//' "$env_file" > "$tmp_file"
+    # shellcheck disable=SC1090
+    source "$tmp_file"
+    rm -f "$tmp_file"
+}
+load_env_file_safely "$BOT_DIR/.env.deploy"
 
 # Path to the python executable WITHIN your virtual environment
 VENV_PYTHON_PATH="$BOT_DIR/.venv/bin/python"
