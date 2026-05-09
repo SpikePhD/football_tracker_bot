@@ -1,160 +1,123 @@
-# config.py
+﻿import json
 import os
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-# â”€ load your .env
 load_dotenv()
 
-# â”€ Discord / API credentials
-API_KEY   = os.getenv("API_KEY")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-_channel  = os.getenv("CHANNEL_ID")
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is not set in environment/.env")
-if not API_KEY:
-    raise RuntimeError("API_KEY is not set in environment/.env")
-if not _channel:
-    raise RuntimeError("CHANNEL_ID is not set in environment/.env")
-
-CHANNEL_ID = int(_channel)
-
-# Tennis tracking by player name (normalized lowercase).
-TRACKED_TENNIS_PLAYERS = [
-    "jannik sinner",
-    "lorenzo musetti",
-]
-
-# Tennis polling/caching settings (v1 uses ESPN only).
-TENNIS_CACHE_TTL_SEC = 55
-TENNIS_UPCOMING_DAYS = 7
-# Tennis pre-match announcement window:
-# only announce NS matches when kickoff is within this many hours.
-TENNIS_PRE_ANNOUNCE_HOURS = int(os.getenv("TENNIS_PRE_ANNOUNCE_HOURS", "8"))
-
-# Live updates edit an existing game message only if it is among the last N
-# channel messages. Set to 0 to always post fresh live updates.
-LIVE_UPDATE_EDIT_WINDOW_MESSAGES = 100
-# â”€ Tracked Leagues
-TRACKED_LEAGUE_IDS = [
-    135,  # Serie A
-    137,  # Coppa Italia
-    547,  # Supercoppa Italiana
-    39,   # Premier League
-    45,   # FA Cup
-    48,   # Carabao Cup
-    528,  # Community Shield
-    140,  # La Liga
-    143,  # Copa del Rey
-    556,  # Supercopa
-    2,    # Champions League
-    3,    # Europa League
-    848,  # Conference League
-    531,  # UEFA Super Cup
-    1168, # Intercontinental Cup
-    15,   # Club World Cup
-    1,    # World Cup
-    4     # EURO
-]
-
-# â”€ Human-readable league names (shared by matches and competitions cogs)
-LEAGUE_NAME_MAP = {
-    135:  "Serie A",
-    137:  "Coppa Italia",
-    547:  "Supercoppa Italiana",
-    39:   "Premier League",
-    45:   "FA Cup",
-    48:   "Carabao Cup",
-    528:  "Community Shield",
-    140:  "La Liga",
-    143:  "Copa del Rey",
-    556:  "Supercopa de EspaÃ±a",
-    2:    "Champions League",
-    3:    "Europa League",
-    848:  "Conference League",
-    531:  "UEFA Super Cup",
-    1168: "Intercontinental Cup",
-    15:   "Club World Cup",
-    1:    "FIFA World Cup",
-    4:    "UEFA EURO",
-}
-
-# â”€ Slug groups for !next command: domestic competitions per primary league + shared internationals
-INTERNATIONAL_SLUGS = [
-    "uefa.champions", "uefa.europa", "uefa.europa.conf",
-    "uefa.super_cup", "fifa.cwc", "fifa.intercontinental_cup",
-    "fifa.world", "uefa.euro",
-]
-
-DOMESTIC_SLUG_GROUPS = {
-    "ita.1": ["ita.1", "ita.coppa_italia", "ita.super_cup"],
-    "eng.1": ["eng.1", "eng.fa", "eng.league_cup", "eng.charity"],
-    "esp.1": ["esp.1", "esp.copa_del_rey", "esp.super_cup"],
-}
+def _require_env(name: str) -> str:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        raise RuntimeError(f"{name} is not set in environment/.env")
+    return value.strip()
 
 
-# â”€â”€ Football Memory Settings â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-# Memory staleness threshold (days) - warn if memory is older than this
-MEMORY_STALE_THRESHOLD_DAYS = int(os.getenv("MEMORY_STALE_THRESHOLD_DAYS", "30"))
-# ESPN API cache TTL (seconds) for memory updates (standings, roster)
-ESPN_CACHE_TTL_SEC = int(os.getenv("ESPN_CACHE_TTL_SEC", "43200"))  # 12 hours
+BOT_TOKEN = _require_env("BOT_TOKEN")
+API_KEY = _require_env("API_KEY")
+try:
+    CHANNEL_ID = int(_require_env("CHANNEL_ID"))
+except ValueError as e:
+    raise RuntimeError("CHANNEL_ID must be a numeric Discord channel ID.") from e
 
-# â”€â”€ Cloud LLM â€” used by !ask (OpenAI-compatible API) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-LLM_API_KEY   = os.getenv("LLM_API_KEY",   "")
-LLM_BASE_URL  = os.getenv("LLM_BASE_URL",  "https://api.mistral.ai/v1")
-LLM_MODEL     = os.getenv("LLM_MODEL",     "mistral-small-latest")
-LLM_SYSTEM_PROMPT = os.getenv(
-    "LLM_SYSTEM_PROMPT",
-    "You are Marco Van Botten, a die-hard AC Milan supporter and passionate football expert. "
-    "You answer questions about football with deep love for AC Milan and Italian football culture. "
-    "Be concise, punchy, and occasionally dramatic. "
-    "IMPORTANT: Never answer from memory for anything that could be factually wrong or outdated â€” "
-    "this includes ages, birthdays, current roles, recent results, transfer news, standings, or any "
-    "specific statistic. Always use web_search for these. Only skip the search for timeless facts "
-    "you are completely certain about (e.g. who won a specific historic final). "
-    "For AC Milan news and transfers, prefer: acmilan.com, gazzetta.it, corrieredellosport.it, calciomercato.com."
+# Optional additional secret for secondary football provider usage.
+SECONDARY_API_KEY = os.getenv("SECONDARY_API_KEY", "").strip()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
+
+
+def _load_public_config() -> dict:
+    path = Path("config.json")
+    if not path.exists():
+        raise RuntimeError(
+            "config.json is missing. Create it from config.example.json and restart the bot."
+        )
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"config.json is not valid JSON: {e}") from e
+
+    if not isinstance(raw, dict):
+        raise RuntimeError("config.json root must be a JSON object.")
+
+    return raw
+
+
+def _expect(cfg: dict, key: str, expected_type, parent: str = ""):
+    scope = f"{parent}.{key}" if parent else key
+    if key not in cfg:
+        raise RuntimeError(f"config.json is missing required key: {scope}")
+    value = cfg[key]
+    if not isinstance(value, expected_type):
+        expected_name = (
+            ", ".join(t.__name__ for t in expected_type)
+            if isinstance(expected_type, tuple)
+            else expected_type.__name__
+        )
+        raise RuntimeError(
+            f"config.json key '{scope}' has invalid type: "
+            f"expected {expected_name}, got {type(value).__name__}"
+        )
+    return value
+
+
+_PUBLIC = _load_public_config()
+
+bot_cfg = _expect(_PUBLIC, "bot", dict)
+tracking_cfg = _expect(_PUBLIC, "tracking", dict)
+ops_cfg = _expect(_PUBLIC, "operations", dict)
+log_cfg = _expect(_PUBLIC, "log", dict)
+memory_cfg = _expect(_PUBLIC, "memory", dict)
+llm_cfg = _expect(_PUBLIC, "llm", dict)
+search_cfg = _expect(_PUBLIC, "search", dict)
+
+BOT_NAME = _expect(bot_cfg, "name", str, "bot")
+
+TRACKED_TENNIS_PLAYERS = _expect(tracking_cfg, "tennis_players", list, "tracking")
+TRACKED_LEAGUE_IDS = _expect(tracking_cfg, "tracked_league_ids", list, "tracking")
+
+league_name_map_raw = _expect(tracking_cfg, "league_name_map", dict, "tracking")
+LEAGUE_NAME_MAP = {int(k): str(v) for k, v in league_name_map_raw.items()}
+
+league_slug_map_raw = _expect(tracking_cfg, "league_slug_map", dict, "tracking")
+LEAGUE_SLUG_MAP = {int(k): str(v) for k, v in league_slug_map_raw.items()}
+
+INTERNATIONAL_SLUGS = _expect(tracking_cfg, "international_slugs", list, "tracking")
+DOMESTIC_SLUG_GROUPS = _expect(tracking_cfg, "domestic_slug_groups", dict, "tracking")
+
+TENNIS_CACHE_TTL_SEC = int(_expect(ops_cfg, "tennis_cache_ttl_sec", int, "operations"))
+TENNIS_UPCOMING_DAYS = int(_expect(ops_cfg, "tennis_upcoming_days", int, "operations"))
+TENNIS_PRE_ANNOUNCE_HOURS = int(_expect(ops_cfg, "tennis_pre_announce_hours", int, "operations"))
+LIVE_UPDATE_EDIT_WINDOW_MESSAGES = int(
+    _expect(ops_cfg, "live_update_edit_window_messages", int, "operations")
 )
 
-# Trusted-source search settings for !ask web_search tool.
-_trusted_domains_raw = os.getenv(
-    "TRUSTED_SPORT_DOMAINS",
-    "acmilan.com,gazzetta.it,corrieredellosport.it,calciomercato.com,espn.com,bbc.com,skysports.com,theathletic.com,uefa.com,fifa.com,legaseriea.it",
-)
-TRUSTED_SPORT_DOMAINS = [
-    d.strip().lower()
-    for d in _trusted_domains_raw.split(",")
-    if d.strip()
-]
-WEB_SEARCH_MIN_TRUSTED_RESULTS = int(os.getenv("WEB_SEARCH_MIN_TRUSTED_RESULTS", "2"))
+provider_cfg = _expect(ops_cfg, "api_provider", dict, "operations")
+API_FAILURE_THRESHOLD = int(_expect(provider_cfg, "failure_threshold", int, "operations.api_provider"))
+API_RETRY_INTERVAL_SEC = int(_expect(provider_cfg, "retry_interval_sec", int, "operations.api_provider"))
+API_ESPN_POLL_INTERVAL_SEC = int(_expect(provider_cfg, "espn_poll_interval_sec", int, "operations.api_provider"))
+API_FALLBACK_POLL_INTERVAL_SEC = int(_expect(provider_cfg, "fallback_poll_interval_sec", int, "operations.api_provider"))
+API_SCOREBOARD_CACHE_TTL_SEC = int(_expect(provider_cfg, "scoreboard_cache_ttl_sec", int, "operations.api_provider"))
+
+LOG_FILE_PATH = _expect(log_cfg, "file_path", str, "log")
+LOG_FILE_MAX_BYTES = int(_expect(log_cfg, "file_max_bytes", int, "log"))
+LOG_FILE_BACKUP_COUNT = int(_expect(log_cfg, "file_backup_count", int, "log"))
+LOG_EXPORT_DEFAULT_LINES = int(_expect(log_cfg, "export_default_lines", int, "log"))
+LOG_EXPORT_MAX_LINES = int(_expect(log_cfg, "export_max_lines", int, "log"))
+LOG_EXPORT_MAX_BYTES = int(_expect(log_cfg, "export_max_bytes", int, "log"))
+
+MEMORY_STALE_THRESHOLD_DAYS = int(_expect(memory_cfg, "stale_threshold_days", int, "memory"))
+ESPN_CACHE_TTL_SEC = int(_expect(memory_cfg, "espn_cache_ttl_sec", int, "memory"))
+
+LLM_BASE_URL = _expect(llm_cfg, "base_url", str, "llm")
+LLM_MODEL = _expect(llm_cfg, "model", str, "llm")
+LLM_SYSTEM_PROMPT = _expect(llm_cfg, "system_prompt", str, "llm")
+
+TRUSTED_SPORT_DOMAINS = _expect(search_cfg, "trusted_sport_domains", list, "search")
+WEB_SEARCH_MIN_TRUSTED_RESULTS = int(_expect(search_cfg, "min_trusted_results", int, "search"))
 
 
 def build_league_slugs(primary_slug: str) -> list:
-    """
-    Return the full list of ESPN league slugs to search for a team's next fixture.
-    Combines the domestic group for the given primary slug with all international slugs.
-    """
     domestic = DOMESTIC_SLUG_GROUPS.get(primary_slug, [primary_slug])
     return list(dict.fromkeys(domestic + INTERNATIONAL_SLUGS))
-
-# â”€ ESPN league slugs (maps API-Football league ID â†’ ESPN URL slug)
-LEAGUE_SLUG_MAP = {
-    135:  "ita.1",               # Serie A
-    137:  "ita.coppa_italia",    # Coppa Italia
-    547:  "ita.super_cup",       # Supercoppa Italiana
-    39:   "eng.1",               # Premier League
-    45:   "eng.fa",              # FA Cup
-    48:   "eng.league_cup",      # Carabao Cup
-    528:  "eng.charity",         # Community Shield
-    140:  "esp.1",               # La Liga
-    143:  "esp.copa_del_rey",    # Copa del Rey
-    556:  "esp.super_cup",       # Supercopa de EspaÃ±a
-    2:    "uefa.champions",      # Champions League
-    3:    "uefa.europa",         # Europa League
-    848:  "uefa.europa.conf",    # Conference League
-    531:  "uefa.super_cup",      # UEFA Super Cup
-    1168: "fifa.intercontinental_cup",  # Intercontinental Cup
-    15:   "fifa.cwc",            # Club World Cup
-    1:    "fifa.world",          # World Cup
-    4:    "uefa.euro",           # EURO
-}
-

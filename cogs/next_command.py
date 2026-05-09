@@ -2,15 +2,12 @@
 import logging
 from discord.ext import commands
 
-from config import LEAGUE_NAME_MAP, LEAGUE_SLUG_MAP, build_league_slugs
-from utils.espn_client import search_team_espn, fetch_next_team_fixture_espn
+from config import LEAGUE_NAME_MAP
+from modules import api_provider
 from utils.time_utils import parse_utc_to_italy
 from modules.discord_poster import post_new_message_to_context
 
 logger = logging.getLogger(__name__)
-
-_TRACKED_SLUGS: set = set(LEAGUE_SLUG_MAP.values())
-
 
 class NextCommand(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -23,25 +20,14 @@ class NextCommand(commands.Cog):
     async def next_match(self, ctx: commands.Context, *, team_name: str):
         await ctx.typing()
 
-        result = await search_team_espn(self.bot.http_session, team_name, _TRACKED_SLUGS)
-        if result is None:
-            await post_new_message_to_context(
-                ctx,
-                content=(
-                    f'Could not find a tracked team matching "{team_name}". '
-                    'Check the spelling or try a more specific name (e.g. "Manchester United", "Juventus").'
-                )
-            )
-            return
-
-        espn_team_id, primary_slug = result
-        slugs = build_league_slugs(primary_slug)
-
-        match = await fetch_next_team_fixture_espn(self.bot.http_session, espn_team_id, slugs)
+        match = await api_provider.fetch_next_match_for_team(self.bot.http_session, team_name)
         if match is None:
             await post_new_message_to_context(
                 ctx,
-                content=f'No upcoming match found for "{team_name.title()}" in the next 14 days.'
+                content=(
+                    f'Could not find a tracked upcoming match for "{team_name}". '
+                    'Check the spelling or try a more specific name (e.g. "Manchester United", "Juventus").'
+                )
             )
             return
 

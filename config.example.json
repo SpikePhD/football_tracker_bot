@@ -1,0 +1,132 @@
+﻿{
+  "bot": {
+    "name": "Marco Van Botten"
+  },
+  "tracking": {
+    "tennis_players": [
+      "jannik sinner",
+      "lorenzo musetti"
+    ],
+    "tracked_league_ids": [
+      135,
+      137,
+      547,
+      39,
+      45,
+      48,
+      528,
+      140,
+      143,
+      556,
+      2,
+      3,
+      848,
+      531,
+      1168,
+      15,
+      1,
+      4
+    ],
+    "league_name_map": {
+      "135": "Serie A",
+      "137": "Coppa Italia",
+      "547": "Supercoppa Italiana",
+      "39": "Premier League",
+      "45": "FA Cup",
+      "48": "Carabao Cup",
+      "528": "Community Shield",
+      "140": "La Liga",
+      "143": "Copa del Rey",
+      "556": "Supercopa de Espana",
+      "2": "Champions League",
+      "3": "Europa League",
+      "848": "Conference League",
+      "531": "UEFA Super Cup",
+      "1168": "Intercontinental Cup",
+      "15": "Club World Cup",
+      "1": "FIFA World Cup",
+      "4": "UEFA EURO"
+    },
+    "league_slug_map": {
+      "135": "ita.1",
+      "137": "ita.coppa_italia",
+      "547": "ita.super_cup",
+      "39": "eng.1",
+      "45": "eng.fa",
+      "48": "eng.league_cup",
+      "528": "eng.charity",
+      "140": "esp.1",
+      "143": "esp.copa_del_rey",
+      "556": "esp.super_cup",
+      "2": "uefa.champions",
+      "3": "uefa.europa",
+      "848": "uefa.europa.conf",
+      "531": "uefa.super_cup",
+      "1168": "fifa.intercontinental_cup",
+      "15": "fifa.cwc",
+      "1": "fifa.world",
+      "4": "uefa.euro"
+    },
+    "international_slugs": [
+      "uefa.champions",
+      "uefa.europa",
+      "uefa.europa.conf",
+      "uefa.super_cup",
+      "fifa.cwc",
+      "fifa.intercontinental_cup",
+      "fifa.world",
+      "uefa.euro"
+    ],
+    "domestic_slug_groups": {
+      "ita.1": ["ita.1", "ita.coppa_italia", "ita.super_cup"],
+      "eng.1": ["eng.1", "eng.fa", "eng.league_cup", "eng.charity"],
+      "esp.1": ["esp.1", "esp.copa_del_rey", "esp.super_cup"]
+    }
+  },
+  "operations": {
+    "tennis_cache_ttl_sec": 55,
+    "tennis_upcoming_days": 7,
+    "tennis_pre_announce_hours": 8,
+    "live_update_edit_window_messages": 100,
+    "api_provider": {
+      "failure_threshold": 3,
+      "retry_interval_sec": 600,
+      "espn_poll_interval_sec": 60,
+      "fallback_poll_interval_sec": 480,
+      "scoreboard_cache_ttl_sec": 55
+    }
+  },
+  "log": {
+    "file_path": "bot_memory/logs/bot.log",
+    "file_max_bytes": 1048576,
+    "file_backup_count": 5,
+    "export_default_lines": 200,
+    "export_max_lines": 1200,
+    "export_max_bytes": 3500000
+  },
+  "memory": {
+    "stale_threshold_days": 30,
+    "espn_cache_ttl_sec": 43200
+  },
+  "llm": {
+    "base_url": "https://api.mistral.ai/v1",
+    "model": "mistral-small-latest",
+    "system_prompt": "You are Marco Van Botten, a die-hard AC Milan supporter and passionate football expert. You answer questions about football with deep love for AC Milan and Italian football culture. Be concise, punchy, and occasionally dramatic. IMPORTANT: Never answer from memory for anything that could be factually wrong or outdated - this includes ages, birthdays, current roles, recent results, transfer news, standings, or any specific statistic. Always use web_search for these. Only skip the search for timeless facts you are completely certain about (e.g. who won a specific historic final). For AC Milan news and transfers, prefer: acmilan.com, gazzetta.it, corrieredellosport.it, calciomercato.com."
+  },
+  "search": {
+    "trusted_sport_domains": [
+      "acmilan.com",
+      "gazzetta.it",
+      "corrieredellosport.it",
+      "calciomercato.com",
+      "espn.com",
+      "bbc.com",
+      "skysports.com",
+      "theathletic.com",
+      "uefa.com",
+      "fifa.com",
+      "legaseriea.it"
+    ],
+    "min_trusted_results": 2
+  }
+}

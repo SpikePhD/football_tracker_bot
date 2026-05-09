@@ -12,14 +12,12 @@ from ddgs import DDGS
 
 from config import (
     LEAGUE_NAME_MAP,
-    LEAGUE_SLUG_MAP,
     LLM_API_KEY,
     LLM_BASE_URL,
     LLM_MODEL,
     LLM_SYSTEM_PROMPT,
     TRUSTED_SPORT_DOMAINS,
     WEB_SEARCH_MIN_TRUSTED_RESULTS,
-    build_league_slugs,
 )
 from utils.time_utils import italy_now, parse_utc_to_italy
 from modules import api_provider
@@ -30,14 +28,9 @@ from modules.football_memory import (
     get_league_standings,
     get_team_info,
 )
-from utils.espn_client import (
-    fetch_next_team_fixture_espn,
-    search_team_espn,
-)
 
 logger = logging.getLogger(__name__)
 
-_TRACKED_SLUGS = set(LEAGUE_SLUG_MAP.values())
 _HISTORY_MAXLEN = 10
 _MAX_TOOL_ROUNDS = 6
 _MAX_WEB_RESULTS = 5
@@ -153,11 +146,16 @@ class Ask(commands.Cog):
         memory = load_memory()
         dump_path = Path("bot_memory/football_memory_dump.json")
         dump_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(dump_path, "w", encoding="utf-8") as f:
-            import json
-            json.dump(memory, f, indent=2, ensure_ascii=False)
-        await ctx.send(file=discord.File(dump_path, filename="football_memory.json"))
-        dump_path.unlink(missing_ok=True)  # Clean up
+        try:
+            with open(dump_path, "w", encoding="utf-8") as f:
+                import json
+                json.dump(memory, f, indent=2, ensure_ascii=False)
+            await post_new_message_to_context(
+                ctx,
+                attachments=[discord.File(dump_path, filename="football_memory.json")],
+            )
+        finally:
+            dump_path.unlink(missing_ok=True)  # Clean up
 
     async def cog_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if isinstance(error, commands.CommandOnCooldown):
@@ -426,14 +424,9 @@ class Ask(commands.Cog):
         if name == "get_next_match":
             try:
                 team = args.get("team_name", "")
-                result = await search_team_espn(session, team, _TRACKED_SLUGS)
-                if not result:
-                    return {"content": f"Could not find team: {team}", "sources": []}
-                team_id, primary_slug = result
-                slugs = build_league_slugs(primary_slug)
-                fixture = await fetch_next_team_fixture_espn(session, team_id, slugs)
+                fixture = await api_provider.fetch_next_match_for_team(session, team)
                 if not fixture:
-                    return {"content": f"No upcoming fixture found for {team}.", "sources": []}
+                    return {"content": f"Could not find team: {team}", "sources": []}
                 home = fixture["teams"]["home"]["name"]
                 away = fixture["teams"]["away"]["name"]
                 date_utc = fixture["fixture"]["date"]

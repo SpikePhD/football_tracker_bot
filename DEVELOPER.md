@@ -20,7 +20,7 @@ This guide is for developers working on the bot's source code. For first-time de
 
 ### Prerequisites
 
-- Python 3.10 or higher
+- Python 3.12
 - Git
 - A Discord bot token ([Discord Developer Portal](https://discord.com/developers/applications))
 - An API-Football key ([dashboard.api-football.com](https://dashboard.api-football.com))

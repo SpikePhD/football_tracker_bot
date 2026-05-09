@@ -22,8 +22,13 @@ final_announced_ids: set[str] = set()
 live_message_ids: dict[str, int] = {}
 live_state_keys: dict[str, str] = {}
 _TENNIS_STATE_FILE = "tennis_state.json"
-_TENNIS_STATE_DEFAULT = {"pre_announced_ids": [], "final_announced_ids": []}
+_TENNIS_STATE_DEFAULT = {
+    "pre_announced_ids": [],
+    "final_announced_ids": [],
+    "last_reset_date": None,
+}
 _state_loaded = False
+_last_reset_date: str | None = None
 
 
 def _is_today_italy(start_time: str | None) -> bool:
@@ -60,12 +65,13 @@ def _is_within_window(start_time: str | None, hours: int = 48) -> bool:
 
 
 def _load_state_once() -> None:
-    global _state_loaded
+    global _state_loaded, _last_reset_date
     if _state_loaded:
         return
     state = load(_TENNIS_STATE_FILE, _TENNIS_STATE_DEFAULT)
     pre_announced_ids.update(str(mid) for mid in state.get("pre_announced_ids", []))
     final_announced_ids.update(str(mid) for mid in state.get("final_announced_ids", []))
+    _last_reset_date = state.get("last_reset_date")
     _state_loaded = True
 
 
@@ -75,16 +81,23 @@ def _persist_state() -> None:
         {
             "pre_announced_ids": sorted(pre_announced_ids),
             "final_announced_ids": sorted(final_announced_ids),
+            "last_reset_date": _last_reset_date,
         },
     )
 
 
 def clear_tennis_state_today() -> None:
+    global _last_reset_date
     _load_state_once()
+    today_str = italy_now().date().isoformat()
+    if _last_reset_date == today_str:
+        logger.info("Tennis state already cleared for today; keeping dedup IDs.")
+        return
     pre_announced_ids.clear()
     final_announced_ids.clear()
     live_message_ids.clear()
     live_state_keys.clear()
+    _last_reset_date = today_str
     _persist_state()
     logger.info("Cleared tennis tracking state for the new day.")
 

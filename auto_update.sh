@@ -5,14 +5,14 @@ set -Eeuo pipefail
 # Derive the bot directory from the location of this script (portable, no hardcoded paths)
 BOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Load deployment config (SERVICE_NAME) — created by install.sh
-# Auto-bootstrap from .bot_config.example on first run after an update.
-if [ ! -f "$BOT_DIR/.bot_config" ]; then
-    echo "WARNING: $BOT_DIR/.bot_config not found — creating from .bot_config.example" >&2
-    cp "$BOT_DIR/.bot_config.example" "$BOT_DIR/.bot_config"
+# Load deployment config (SERVICE_NAME/GIT_BRANCH) — created by install.sh
+# Auto-bootstrap from .env.deploy.example on first run after an update.
+if [ ! -f "$BOT_DIR/.env.deploy" ]; then
+    echo "WARNING: $BOT_DIR/.env.deploy not found — creating from .env.deploy.example" >&2
+    cp "$BOT_DIR/.env.deploy.example" "$BOT_DIR/.env.deploy"
 fi
-# shellcheck source=.bot_config.example
-source "$BOT_DIR/.bot_config"
+# shellcheck source=.env.deploy.example
+source "$BOT_DIR/.env.deploy"
 
 # Path to the python executable WITHIN your virtual environment
 VENV_PYTHON_PATH="$BOT_DIR/.venv/bin/python"
@@ -20,10 +20,7 @@ VENV_PYTHON_PATH="$BOT_DIR/.venv/bin/python"
 # Path to the pip executable WITHIN your virtual environment
 VENV_PIP_PATH="$BOT_DIR/.venv/bin/pip"
 
-# The Git branch you want to pull updates from (usually "main" or "master")
-GIT_BRANCH="main"
-
-# The name of your systemd service for the bot (read from .bot_config)
+# The name of your systemd service for the bot (read from .env.deploy)
 SYSTEMD_SERVICE_NAME="$SERVICE_NAME"
 
 # Log file for this update script

@@ -6,22 +6,30 @@
 set -e
 cd "$(dirname "$0")"
 
-# Load deployment config (SERVICE_NAME) — created by install.sh
-# Auto-bootstrap from .bot_config.example on first run after an update.
-if [ ! -f .bot_config ]; then
-    echo "⚠️  .bot_config not found — creating from .bot_config.example"
-    cp .bot_config.example .bot_config
-    echo "  ✔ Created .bot_config (edit it if your service name differs from marco_van_botten)"
+# Load deployment config (SERVICE_NAME/GIT_BRANCH) — created by install.sh
+# Auto-bootstrap from .env.deploy.example on first run after an update.
+if [ ! -f .env.deploy ]; then
+    echo "⚠️  .env.deploy not found — creating from .env.deploy.example"
+    cp .env.deploy.example .env.deploy
+    echo "  ✔ Created .env.deploy (edit SERVICE_NAME/GIT_BRANCH for your host if needed)"
 fi
-# shellcheck source=.bot_config.example
-source .bot_config
+# shellcheck source=.env.deploy.example
+source .env.deploy
 
-echo "⬇️  Pulling latest code..."
-git pull
+if [ ! -f config.json ]; then
+    echo "⚠️  config.json not found — creating from config.example.json"
+    cp config.example.json config.json
+    echo "  ✔ Created config.json"
+fi
+
+echo "⬇️  Pulling latest code from $GIT_BRANCH..."
+git pull origin "$GIT_BRANCH"
 
 echo ""
 echo "🧠 Checking bot_memory/..."
 mkdir -p bot_memory
+mkdir -p bot_memory/logs
+mkdir -p bot_memory/log_exports
 
 # Add new default files here as the bot grows.
 # Existing files are never overwritten.
@@ -41,7 +49,7 @@ else
 fi
 
 if [ ! -f bot_memory/tennis_state.json ]; then
-    echo '{"pre_announced_ids": [], "final_announced_ids": []}' > bot_memory/tennis_state.json
+    echo '{"pre_announced_ids": [], "final_announced_ids": [], "last_reset_date": null}' > bot_memory/tennis_state.json
     echo "  Created bot_memory/tennis_state.json"
 else
     echo "  bot_memory/tennis_state.json already exists - keeping state"

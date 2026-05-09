@@ -1,4 +1,4 @@
-# Operations Runbook — Marco Van Botten
+﻿# Operations Runbook â€” Marco Van Botten
 
 Day-to-day maintenance guide for the bot running on a Raspberry Pi (or any Linux host). For first-time setup see `README.md`. For code changes see `DEVELOPER.md`.
 
@@ -43,7 +43,7 @@ ssh lucac@raspberry.local "systemctl status marco_van_botten --no-pager"
 
 The bot logs to the systemd journal. All log lines include a timestamp, level, and the originating module.
 
-### View logs (live — follows new entries)
+### View logs (live â€” follows new entries)
 
 ```bash
 journalctl -u marco_van_botten -f
@@ -89,7 +89,7 @@ tail -30 ~/football_tracker_bot/auto_update.log
 
 ```
 [2026-04-06 19:10:52] [INFO    ] [modules.api_provider] ESPN scoreboard fetched: 5 matches
-[2026-04-06 19:10:52] [INFO    ] [modules.api_provider] 🔍 [Enrich] Fetching API-Football events for fixture 737089
+[2026-04-06 19:10:52] [INFO    ] [modules.api_provider] ðŸ” [Enrich] Fetching API-Football events for fixture 737089
 [2026-04-06 19:10:53] [WARNING ] [utils.espn_client   ] espn_client: Timeout fetching uefa.champions scoreboard.
 ```
 
@@ -137,7 +137,7 @@ sudo systemctl restart marco_van_botten
 
 ## 4. Updating the Bot
 
-### From Windows (recommended — one click)
+### From Windows (recommended â€” one click)
 
 Double-click **`update_bot.bat`** in the project folder. It SSHs into the Pi, pulls the latest code, and restarts the service automatically.
 
@@ -155,7 +155,7 @@ This will:
 
 ### Automatic updates (cron)
 
-`auto_update.sh` runs every 15 minutes via cron. It checks if the local commit matches the remote; if not, it pulls and restarts automatically. No action needed — this is set up by `install.sh`.
+`auto_update.sh` runs every 15 minutes via cron. It checks if the local commit matches the remote; if not, it pulls and restarts automatically. No action needed â€” this is set up by `install.sh`.
 
 To check when the last auto-update ran:
 
@@ -171,7 +171,7 @@ crontab -e   # comment out or delete the auto_update.sh line
 
 ### After a requirements.txt change
 
-`auto_update.sh` detects changes to `requirements.txt` and re-runs `pip install -r requirements.txt` automatically. Manual updates via `update.sh` do **not** re-install dependencies — run this manually if needed:
+`auto_update.sh` detects changes to `requirements.txt` and re-runs `pip install -r requirements.txt` automatically. Manual updates via `update.sh` do **not** re-install dependencies â€” run this manually if needed:
 
 ```bash
 cd ~/football_tracker_bot
@@ -189,7 +189,7 @@ The bot supports three broadcast modes that control what it posts automatically.
 |------|----------------------------------|
 | `verbose` | Startup message, configured morning broadcast, live score updates, FT results |
 | `normal` | Live score updates and FT results only (no startup or morning broadcast) |
-| `silent` | Nothing — only responds to commands |
+| `silent` | Nothing â€” only responds to commands |
 
 ### Change mode via Discord
 
@@ -232,10 +232,10 @@ Output examples:
 
 ```
 # Healthy (normal)
-🟢 ESPN (primary) — Poll: 60s
+ðŸŸ¢ ESPN (primary) â€” Poll: 60s
 
 # On fallback
-🟡 API-Football (fallback) — Poll: 480s
+ðŸŸ¡ API-Football (fallback) â€” Poll: 480s
 ESPN failed 4 times. Retrying at 20:30.
 ```
 
@@ -246,30 +246,30 @@ ESPN failed 4 times. Retrying at 20:30.
 | ESPN (primary) | 60 seconds |
 | API-Football (fallback) | 480 seconds (8 minutes) |
 
-The slower fallback interval is intentional — API-Football has a daily request cap.
+The slower fallback interval is intentional â€” API-Football has a daily request cap.
 
 ### ESPN event enrichment
 
 Even when ESPN is the primary provider, API-Football is occasionally called to fill in missing goal events (ESPN's public API sometimes omits them from completed matches). These calls only happen when a discrepancy is detected and are logged as:
 
 ```
-🔍 [Enrich] Fetching API-Football events for fixture 737089 (2 missing goal(s) in ESPN data)
-✅ [Enrich] Fixture 737089: replaced 1 ESPN events with 3 API-Football events.
+ðŸ” [Enrich] Fetching API-Football events for fixture 737089 (2 missing goal(s) in ESPN data)
+âœ… [Enrich] Fixture 737089: replaced 1 ESPN events with 3 API-Football events.
 ```
 
 If API-Football is also missing the data:
 
 ```
-ℹ️ [Enrich] Fixture 737089: API-Football also has incomplete data. Keeping ESPN events.
+â„¹ï¸ [Enrich] Fixture 737089: API-Football also has incomplete data. Keeping ESPN events.
 ```
 
-In this case a `⚠️ N goal(s) missing from event data` warning appears in the Discord output. This is a data quality limitation of both providers and not a bot bug.
+In this case a `âš ï¸ N goal(s) missing from event data` warning appears in the Discord output. This is a data quality limitation of both providers and not a bot bug.
 
 ---
 
 ## 7. LLM Configuration (`!ask`)
 
-The `!ask` command routes questions through a local LLM running on the Pi via [ollama](https://ollama.com/). All configuration is in `~/football_tracker_bot/.env`.
+The `!ask` command routes questions through a local LLM running on the Pi via [ollama](https://ollama.com/). Secrets are in `~/football_tracker_bot/.env`; non-secret LLM behavior is in `~/football_tracker_bot/config.json`.
 
 ### Configure the persona
 
@@ -281,16 +281,19 @@ Key variables:
 
 | Variable | Description | Default |
 |---|---|---|
-| `BOT_NAME` | Bot's name used in the default persona prompt | `Marco` |
-| `OLLAMA_MODEL` | Model to use — must be pulled first | `qwen2.5:3b` |
-| `OLLAMA_URL` | ollama server address | `http://localhost:11434` |
-| `OLLAMA_SYSTEM_PROMPT` | Full persona/system prompt. Overrides the default entirely | *(see below)* |
+| `llm.model` (config.json) | Model name used by `!ask` | `mistral-small-latest` |
+| `llm.base_url` (config.json) | OpenAI-compatible base URL | `https://api.mistral.ai/v1` |
+| `llm.system_prompt` (config.json) | Persona/system prompt for `!ask` | *(see config.example.json)* |
+Example (`config.json`):
 
-Example:
-
-```env
-BOT_NAME=Marco Van Botten
-OLLAMA_SYSTEM_PROMPT=You are Marco Van Botten, a die-hard AC Milan supporter. You provide football information when asked, with deep passion for AC Milan. You can be dramatic, give banter, and are not afraid to show your bias. Keep replies concise. When you need current information — scores, fixtures, news — use the tools available to you.
+```json
+{
+  "llm": {
+    "base_url": "https://api.mistral.ai/v1",
+    "model": "mistral-small-latest",
+    "system_prompt": "You are Marco Van Botten..."
+  }
+}
 ```
 
 After editing `.env`, restart the bot:
@@ -306,7 +309,7 @@ ollama pull llama3.2:3b        # alternative to qwen2.5:3b
 ollama list                    # see all downloaded models
 ```
 
-Then update `OLLAMA_MODEL` in `.env` and restart.
+Then update `llm.model` in `config.json` and restart.
 
 ### Check ollama is running
 
@@ -338,23 +341,23 @@ sudo systemctl restart marco_van_botten
 
 ```
 ~/football_tracker_bot/
-├── football_tracker_bot.py     Main bot entry point
-├── config.py                   League IDs, names, ESPN slugs
-├── .env                        Secrets: BOT_TOKEN, API_KEY, CHANNEL_ID  ← gitignored
-├── .bot_config                 Deployment config: SERVICE_NAME           ← gitignored
-├── requirements.txt            Python dependencies
-│
-├── install.sh                  First-time installer
-├── update.sh                   Manual update script
-├── auto_update.sh              Cron auto-updater
-├── auto_update.log             Auto-update history log                   ← gitignored
-│
-├── bot_memory/
-│   └── state.json              Broadcast mode state                      ← gitignored
-│
-├── cogs/                       Discord command extensions
-├── modules/                    Core bot logic
-└── utils/                      Stateless helpers
+â”œâ”€â”€ football_tracker_bot.py     Main bot entry point
+â”œâ”€â”€ config.json                 Public bot behavior config (non-secret, committed)
+â”œâ”€â”€ .env                        Secrets: BOT_TOKEN, API_KEY, SECONDARY_API_KEY, CHANNEL_ID, LLM_API_KEY  â† gitignored
+â”œâ”€â”€ .env.deploy                 Deployment config: SERVICE_NAME, GIT_BRANCH           â† gitignored
+â”œâ”€â”€ requirements.txt            Python dependencies
+â”‚
+â”œâ”€â”€ install.sh                  First-time installer
+â”œâ”€â”€ update.sh                   Manual update script
+â”œâ”€â”€ auto_update.sh              Cron auto-updater
+â”œâ”€â”€ auto_update.log             Auto-update history log                   â† gitignored
+â”‚
+â”œâ”€â”€ bot_memory/
+â”‚   â””â”€â”€ state.json              Broadcast mode state                      â† gitignored
+â”‚
+â”œâ”€â”€ cogs/                       Discord command extensions
+â”œâ”€â”€ modules/                    Core bot logic
+â””â”€â”€ utils/                      Stateless helpers
 ```
 
 **Service file (outside the repo):**
@@ -376,7 +379,7 @@ sudo systemctl restart marco_van_botten
 ### Bot is not posting anything
 
 1. Check the service is running: `systemctl status marco_van_botten`
-2. Check broadcast mode: `!mode` — if silent, switch with `!verbose` or `!normal`
+2. Check broadcast mode: `!mode` â€” if silent, switch with `!verbose` or `!normal`
 3. Check logs for errors: `journalctl -u marco_van_botten -n 50 --no-pager`
 4. Check the bot has permission to post in the configured channel
 
@@ -394,21 +397,21 @@ The service is configured with `Restart=on-failure` so it will restart automatic
 
 ### "Command not found" when running update.sh
 
-The script requires `.bot_config` to exist. If it's missing:
+The script requires `.env.deploy` to exist. If it is missing:
 
 ```bash
 cd ~/football_tracker_bot
-cp .bot_config.example .bot_config
-# Edit .bot_config if your service name is different from marco_van_botten
+cp .env.deploy.example .env.deploy
+# Edit .env.deploy if your service/branch differs from defaults
 ```
 
 ### Bot posts duplicate updates after a restart
 
-This is handled automatically by startup seeding — on restart, the bot reads the current fixture list and pre-populates its deduplication sets so it won't re-post updates already visible. If duplicates appear, check the logs around startup for seeding messages:
+This is handled automatically by startup seeding â€” on restart, the bot reads the current fixture list and pre-populates its deduplication sets so it won't re-post updates already visible. If duplicates appear, check the logs around startup for seeding messages:
 
 ```
-🌱 Seeded 2 already-FT match IDs (will not re-announce).
-🌱 Seeded 1 in-progress match snapshot(s) into already_posted.
+ðŸŒ± Seeded 2 already-FT match IDs (will not re-announce).
+ðŸŒ± Seeded 1 in-progress match snapshot(s) into already_posted.
 ```
 
 ### ESPN timeouts in logs
@@ -417,7 +420,7 @@ This is handled automatically by startup seeding — on restart, the bot reads t
 WARNING: espn_client: Timeout fetching uefa.champions scoreboard.
 ```
 
-Occasional timeouts from individual ESPN league endpoints are normal — the bot continues with the other leagues and the timed-out one will be retried on the next poll cycle. Only worry if *all* leagues are failing (the bot will switch to API-Football fallback automatically in that case).
+Occasional timeouts from individual ESPN league endpoints are normal â€” the bot continues with the other leagues and the timed-out one will be retried on the next poll cycle. Only worry if *all* leagues are failing (the bot will switch to API-Football fallback automatically in that case).
 
 ### API-Football rate limit warning
 
@@ -436,7 +439,7 @@ cat ~/football_tracker_bot/bot_memory/state.json
 # Should contain: {"mode": "verbose"} or {"mode": "normal"} or {"mode": "silent"}
 ```
 
-`update.sh` and `install.sh` only create this file if it doesn't exist — they never overwrite it. If it keeps resetting, check that your git repo doesn't have a `bot_memory/state.json` tracked (it should be gitignored).
+`update.sh` and `install.sh` only create this file if it doesn't exist â€” they never overwrite it. If it keeps resetting, check that your git repo doesn't have a `bot_memory/state.json` tracked (it should be gitignored).
 
 ### `!ask` does not respond
 
@@ -483,7 +486,7 @@ ollama pull qwen2.5:3b
 ollama run qwen2.5:3b "Forza Milan?"
 ```
 
-If this fails, ollama itself has a problem — check `journalctl -u ollama -n 30`.
+If this fails, ollama itself has a problem â€” check `journalctl -u ollama -n 30`.
 
 ### Checking the Discord bot token / channel ID
 
@@ -493,3 +496,5 @@ These are in `~/football_tracker_bot/.env`. If the token has been regenerated in
 nano ~/football_tracker_bot/.env
 sudo systemctl restart marco_van_botten
 ```
+
+

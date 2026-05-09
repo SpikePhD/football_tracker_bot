@@ -7,7 +7,7 @@ echo.
 echo Connecting to raspberry.local...
 echo.
 
-ssh lucac@raspberry.local "cd ~/football_tracker_bot && bash update.sh && echo && sudo systemctl status marco_van_botten --no-pager"
+ssh lucac@raspberry "cd ~/football_tracker_bot && bash update.sh && echo && sudo systemctl status marco_van_botten --no-pager"
 
 if %ERRORLEVEL% EQU 0 (
     echo.

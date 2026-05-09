@@ -1,4 +1,4 @@
-# modules/ft_handler.py
+﻿# modules/ft_handler.py
 
 import logging
 import discord
@@ -19,7 +19,7 @@ _already_announced_ft: set = set()  # match IDs that have already received a FT 
 
 def clear_tracked_matches_today():
     global tracked_matches, _already_announced_ft
-    logger.info("🔄 Clearing 'tracked_matches' dictionary for the new day.")
+    logger.info("ðŸ”„ Clearing 'tracked_matches' dictionary for the new day.")
     tracked_matches.clear()
     _already_announced_ft.clear()
 
@@ -39,7 +39,7 @@ def seed_already_announced_ft(fixtures: list) -> None:
                 _already_announced_ft.add(str(mid))
                 count += 1
     if count:
-        logger.info(f"🌱 Seeded {count} already-FT match IDs (will not re-announce).")
+        logger.info(f"ðŸŒ± Seeded {count} already-FT match IDs (will not re-announce).")
 
 
 def track_match_for_ft(match_data: dict):
@@ -63,7 +63,7 @@ def track_match_for_ft(match_data: dict):
         home = match_data.get("teams", {}).get("home", {}).get("name", "Home Team")
         away = match_data.get("teams", {}).get("away", {}).get("name", "Away Team")
         logger.info(
-            f"🆕 Tracking {home} vs {away} (ID: {match_id}) for FT. "
+            f"ðŸ†• Tracking {home} vs {away} (ID: {match_id}) for FT. "
             f"Expected check around {expected_ft_check_time.strftime('%H:%M')}"
         )
     except KeyError as e:
@@ -76,7 +76,7 @@ def is_tracked_for_ft(match_id) -> bool:
     return str(match_id) in tracked_matches
 
 
-# ── Shared FT posting logic ───────────────────────────────────────────────────
+# â”€â”€ Shared FT posting logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     """Build and send the FT result message from a normalized match dict."""
@@ -85,11 +85,26 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
 
     # Update football memory with FT match data
     try:
-        await update_match_in_memory(bot.http_session, match_details)
-        logger.info(f"💾 Updated football memory with FT match: {match_details['fixture']['id']}")
+        fixture = match_details.get("fixture", {})
+        teams = match_details.get("teams", {})
+        league = match_details.get("league", {})
+        has_required_memory_keys = (
+            fixture.get("id") is not None
+            and fixture.get("status", {}).get("short") == "FT"
+            and teams.get("home", {}).get("id") is not None
+            and teams.get("away", {}).get("id") is not None
+            and league.get("id") is not None
+        )
+        if has_required_memory_keys:
+            await update_match_in_memory(bot.http_session, match_details)
+            logger.info(f"Updated football memory with FT match: {fixture['id']}")
+        else:
+            logger.warning(
+                "Skipping football memory update for FT post because normalized match payload "
+                "is missing one or more required IDs."
+            )
     except Exception as e:
-        logger.error(f"⚠️ Failed to update football memory for match {match_details.get('fixture', {}).get('id')}: {e}")
-
+        logger.error(f"Failed to update football memory for match {match_details.get('fixture', {}).get('id')}: {e}")
     home_team = match_details.get("teams", {}).get("home", {}).get("name", "Home Team")
     away_team = match_details.get("teams", {}).get("away", {}).get("name", "Away Team")
     goals = match_details.get("goals", {"home": "?", "away": "?"})
@@ -105,22 +120,22 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     if note:
         ft_message += note
         logger.warning(
-            f"⚠️ FT event mismatch for {home_team} vs {away_team}: "
+            f"âš ï¸ FT event mismatch for {home_team} vs {away_team}: "
             f"score total={int(goals.get('home',0) or 0) + int(goals.get('away',0) or 0)}, "
             f"goal events={sum(1 for e in events if e.get('type') == 'Goal')}."
         )
 
-    logger.info(f"📢 Posting FT result: {ft_message}")
+    logger.info(f"ðŸ“¢ Posting FT result: {ft_message}")
     await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
 
 
-# ── Main FT detection (dual-path) ─────────────────────────────────────────────
+# â”€â”€ Main FT detection (dual-path) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async def fetch_and_post_ft(bot: discord.Client):
     """
     Check tracked matches for Full-Time status and post results.
 
-    ESPN mode (primary): reads finished matches from the cached scoreboard — no extra API call.
+    ESPN mode (primary): reads finished matches from the cached scoreboard â€” no extra API call.
     Fallback mode: calls API-Football per tracked match after expected FT time.
     """
     if is_silent():
@@ -131,7 +146,7 @@ async def fetch_and_post_ft(bot: discord.Client):
     current_time = italy_now()
 
     if api_provider.is_espn_healthy():
-        # ── ESPN path ──────────────────────────────────────────────────────────
+        # â”€â”€ ESPN path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         finished = await api_provider.fetch_finished_today(bot.http_session)
         finished_by_id = {str(m["fixture"]["id"]): m for m in finished}
 
@@ -140,11 +155,11 @@ async def fetch_and_post_ft(bot: discord.Client):
                 continue  # too early to expect FT
 
             if match_id not in finished_by_id:
-                # Match not yet in FT — check if it's been suspiciously long
+                # Match not yet in FT â€” check if it's been suspiciously long
                 elapsed = (current_time - info["exp_ft"]).total_seconds()
                 if elapsed > 1800:  # 30 min past expected FT with no result
                     logger.warning(
-                        f"⚠️ Match ID {match_id} is 30+ min past expected FT but not showing as FT "
+                        f"âš ï¸ Match ID {match_id} is 30+ min past expected FT but not showing as FT "
                         f"in ESPN scoreboard. Dropping from tracking."
                     )
                     del tracked_matches[match_id]
@@ -161,33 +176,33 @@ async def fetch_and_post_ft(bot: discord.Client):
             mid = str(match["fixture"]["id"])
             if mid in tracked_matches or mid in _already_announced_ft:
                 continue
-            logger.info(f"🆕 [Orphan FT] Announcing untracked FT match {mid}.")
+            logger.info(f"ðŸ†• [Orphan FT] Announcing untracked FT match {mid}.")
             await _post_ft_from_data(bot, match)
             _already_announced_ft.add(mid)
 
     else:
-        # ── API-Football fallback path ─────────────────────────────────────────
+        # â”€â”€ API-Football fallback path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         for match_id, info in list(tracked_matches.items()):
             if current_time < info["exp_ft"]:
                 continue
 
-            logger.info(f"🔍 [Fallback] Checking FT status for match ID {match_id}")
+            logger.info(f"ðŸ” [Fallback] Checking FT status for match ID {match_id}")
 
             payload = await api_provider.fetch_fixture(bot.http_session, match_id)
             if not payload:
-                logger.warning(f"⚠️ No payload for FT check of match ID {match_id}. Retrying next cycle.")
+                logger.warning(f"âš ï¸ No payload for FT check of match ID {match_id}. Retrying next cycle.")
                 continue
 
             api_response_list = payload.get("response")
             if not isinstance(api_response_list, list) or not api_response_list:
-                logger.warning(f"⚠️ Empty or invalid response for FT check of match ID {match_id}.")
+                logger.warning(f"âš ï¸ Empty or invalid response for FT check of match ID {match_id}.")
                 continue
 
             match_details_raw = api_response_list[0]
             fixture_status_short = match_details_raw.get("fixture", {}).get("status", {}).get("short")
 
             if fixture_status_short != "FT":
-                logger.info(f"ℹ️ Match ID {match_id} status is '{fixture_status_short}', not FT yet.")
+                logger.info(f"â„¹ï¸ Match ID {match_id} status is '{fixture_status_short}', not FT yet.")
                 if fixture_status_short in ("PST", "CANC", "ABD", "AWD", "WO"):
                     logger.info(f"Match ID {match_id} permanently finished as '{fixture_status_short}'. Dropping.")
                     del tracked_matches[match_id]
@@ -201,10 +216,29 @@ async def fetch_and_post_ft(bot: discord.Client):
             normalized_events = normalize_api_football_events(raw_events)
 
             normalized = {
-                "teams": {"home": {"name": home_team}, "away": {"name": away_team}},
+                "fixture": {
+                    "id": match_details_raw.get("fixture", {}).get("id"),
+                    "date": match_details_raw.get("fixture", {}).get("date"),
+                    "status": {"short": fixture_status_short},
+                },
+                "league": {
+                    "id": match_details_raw.get("league", {}).get("id"),
+                },
+                "teams": {
+                    "home": {
+                        "id": match_details_raw.get("teams", {}).get("home", {}).get("id"),
+                        "name": home_team,
+                    },
+                    "away": {
+                        "id": match_details_raw.get("teams", {}).get("away", {}).get("id"),
+                        "name": away_team,
+                    },
+                },
                 "goals": match_details_raw.get("goals", {"home": "?", "away": "?"}),
                 "events": normalized_events,
             }
             await _post_ft_from_data(bot, normalized)
             del tracked_matches[match_id]
+
+
 

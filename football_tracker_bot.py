@@ -3,14 +3,8 @@
 
 import logging
 import sys # For directing to stdout
-
-# Standard logging setup
-logging.basicConfig(
-    level=logging.INFO,
-    format="[%(asctime)s] [%(levelname)-8s] [%(name)-20s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    stream=sys.stdout,
-)
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
 
 import os
 import asyncio
@@ -20,7 +14,13 @@ import discord
 from discord.ext import commands, tasks
 import aiohttp # Make sure aiohttp is imported
 
-from config import BOT_TOKEN, CHANNEL_ID
+from config import (
+    BOT_TOKEN,
+    CHANNEL_ID,
+    LOG_FILE_BACKUP_COUNT,
+    LOG_FILE_MAX_BYTES,
+    LOG_FILE_PATH,
+)
 from utils.personality import greet_message
 from modules.power_manager import setup_power_management
 from modules.scheduler import schedule_day
@@ -31,6 +31,37 @@ from cogs.version import get_version_info
 from utils.time_utils import italy_tz
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Configure root logger to stdout + rotating file."""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.handlers.clear()
+
+    formatter = logging.Formatter(
+        fmt="[%(asctime)s] [%(levelname)-8s] [%(name)-20s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(formatter)
+
+    log_path = Path(LOG_FILE_PATH)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    file_handler = RotatingFileHandler(
+        filename=log_path,
+        maxBytes=LOG_FILE_MAX_BYTES,
+        backupCount=LOG_FILE_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(formatter)
+
+    root.addHandler(stdout_handler)
+    root.addHandler(file_handler)
+
+
+_configure_logging()
 
 # --- Intents & bot setup ---
 intents = discord.Intents.default()

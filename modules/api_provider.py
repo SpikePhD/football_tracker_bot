@@ -9,7 +9,17 @@ import aiohttp
 
 import asyncio
 
-from config import LEAGUE_SLUG_MAP, TENNIS_CACHE_TTL_SEC, TENNIS_UPCOMING_DAYS
+from config import (
+    API_ESPN_POLL_INTERVAL_SEC,
+    API_FAILURE_THRESHOLD,
+    API_FALLBACK_POLL_INTERVAL_SEC,
+    API_RETRY_INTERVAL_SEC,
+    API_SCOREBOARD_CACHE_TTL_SEC,
+    LEAGUE_SLUG_MAP,
+    TENNIS_CACHE_TTL_SEC,
+    TENNIS_UPCOMING_DAYS,
+    build_league_slugs,
+)
 from utils import espn_client
 from utils import espn_tennis_client
 from utils import api_client
@@ -20,10 +30,10 @@ logger = logging.getLogger(__name__)
 
 # ── Tuning constants ──────────────────────────────────────────────────────────
 
-FAILURE_THRESHOLD = 3       # consecutive ESPN failures before switching to fallback
-RETRY_INTERVAL_SEC = 600    # seconds before probing ESPN again after a switch (10 min)
-ESPN_POLL_INTERVAL = 60     # seconds between polls when ESPN is primary
-FALLBACK_POLL_INTERVAL = 480  # seconds between polls when using API-Football
+FAILURE_THRESHOLD = API_FAILURE_THRESHOLD
+RETRY_INTERVAL_SEC = API_RETRY_INTERVAL_SEC
+ESPN_POLL_INTERVAL = API_ESPN_POLL_INTERVAL_SEC
+FALLBACK_POLL_INTERVAL = API_FALLBACK_POLL_INTERVAL_SEC
 
 # ── Health state ──────────────────────────────────────────────────────────────
 
@@ -36,12 +46,13 @@ _retry_after: datetime | None = None   # wall-clock datetime (Italy tz)
 _cache: list[dict] = []
 _cache_date: str | None = None  # Italy date string (YYYY-MM-DD) the cache covers
 _cache_ts: datetime | None = None
-CACHE_TTL_SEC = 55   # expire just before the next 60s poll
+CACHE_TTL_SEC = API_SCOREBOARD_CACHE_TTL_SEC
 
 # Tennis cache
 _tennis_cache: list[dict] = []
 _tennis_cache_date: str | None = None
 _tennis_cache_ts: datetime | None = None
+_TRACKED_SLUGS: set[str] = set(LEAGUE_SLUG_MAP.values())
 
 
 # ── Health management ─────────────────────────────────────────────────────────
@@ -226,6 +237,19 @@ async def fetch_fixture(session: aiohttp.ClientSession, fixture_id) -> dict | No
     Delegates to API-Football (ESPN doesn't have a per-event endpoint we use here).
     """
     return await api_client.fetch_fixture_by_id(session, fixture_id)
+
+
+async def fetch_next_match_for_team(session: aiohttp.ClientSession, team_name: str) -> dict | None:
+    """
+    Find a team's next fixture using ESPN search and competition-aware slugs.
+    Returns a normalized match dict or None when team/match is not found.
+    """
+    result = await espn_client.search_team_espn(session, team_name, _TRACKED_SLUGS)
+    if not result:
+        return None
+    espn_team_id, primary_slug = result
+    slugs = build_league_slugs(primary_slug)
+    return await espn_client.fetch_next_team_fixture_espn(session, espn_team_id, slugs)
 
 
 async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> dict:

@@ -273,19 +273,18 @@ async def update_all_memory(session: Any) -> None:
     Called by !refresh_memory or at startup.
     """
     memory = load_memory()
-    tasks = []
+    league_jobs: list[tuple[int, Any]] = []
 
     # Update standings for all tracked leagues
     for league_id in TRACKED_LEAGUE_IDS:
         slug = LEAGUE_SLUG_MAP.get(league_id)
         if slug:
-            tasks.append(
-                (league_id, update_league_standings(session, league_id, slug))
-            )
+            league_jobs.append((league_id, update_league_standings(session, league_id, slug)))
 
     # Execute standings updates
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for league_id, result in results:
+    league_ids = [league_id for league_id, _ in league_jobs]
+    results = await asyncio.gather(*(job for _, job in league_jobs), return_exceptions=True)
+    for league_id, result in zip(league_ids, results):
         if isinstance(result, dict):
             memory["leagues"][str(league_id)] = result
 
@@ -304,14 +303,15 @@ async def update_all_memory(session: Any) -> None:
         team_ids_to_update.add(str(match_data["away"]["id"]))
 
     # Update team info (roster + coach)
-    team_tasks = []
+    team_jobs: list[tuple[str, Any]] = []
     for team_id in team_ids_to_update:
         # Use Serie A slug as default (most teams will be in Serie A)
         slug = LEAGUE_SLUG_MAP.get(135, "ita.1")
-        team_tasks.append((team_id, update_team_info(session, team_id, slug)))
+        team_jobs.append((team_id, update_team_info(session, team_id, slug)))
 
-    team_results = await asyncio.gather(*team_tasks, return_exceptions=True)
-    for team_id, result in team_results:
+    team_ids = [team_id for team_id, _ in team_jobs]
+    team_results = await asyncio.gather(*(job for _, job in team_jobs), return_exceptions=True)
+    for team_id, result in zip(team_ids, team_results):
         if isinstance(result, dict):
             memory["teams"][team_id] = result
 
@@ -345,17 +345,16 @@ async def update_all_memory(session: Any) -> None:
 async def update_standings_only(session: Any) -> None:
     """Update only league standings (called daily at midnight)."""
     memory = load_memory()
-    tasks = []
+    league_jobs: list[tuple[int, Any]] = []
 
     for league_id in TRACKED_LEAGUE_IDS:
         slug = LEAGUE_SLUG_MAP.get(league_id)
         if slug:
-            tasks.append(
-                (league_id, update_league_standings(session, league_id, slug))
-            )
+            league_jobs.append((league_id, update_league_standings(session, league_id, slug)))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for league_id, result in results:
+    league_ids = [league_id for league_id, _ in league_jobs]
+    results = await asyncio.gather(*(job for _, job in league_jobs), return_exceptions=True)
+    for league_id, result in zip(league_ids, results):
         if isinstance(result, dict):
             memory["leagues"][str(league_id)] = result
 
@@ -381,13 +380,14 @@ async def update_team_info_only(session: Any) -> None:
         team_ids_to_update.add(str(match_data["away"]["id"]))
 
     # Update team info
-    tasks = []
+    team_jobs: list[tuple[str, Any]] = []
     for team_id in team_ids_to_update:
         slug = LEAGUE_SLUG_MAP.get(135, "ita.1")  # Default to Serie A
-        tasks.append((team_id, update_team_info(session, team_id, slug)))
+        team_jobs.append((team_id, update_team_info(session, team_id, slug)))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    for team_id, result in results:
+    team_ids = [team_id for team_id, _ in team_jobs]
+    results = await asyncio.gather(*(job for _, job in team_jobs), return_exceptions=True)
+    for team_id, result in zip(team_ids, results):
         if isinstance(result, dict):
             memory["teams"][team_id] = result
 
