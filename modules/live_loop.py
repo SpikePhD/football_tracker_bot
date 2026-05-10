@@ -2,6 +2,7 @@
 
 import logging
 import asyncio
+from datetime import timedelta
 
 from config import CHANNEL_ID
 from modules import api_provider
@@ -17,14 +18,25 @@ logger = logging.getLogger(__name__)
 live_state_keys: dict[str, str] = {}
 live_message_ids: dict[str, int] = {}
 _live_loop_lock = asyncio.Lock()
+_missing_since: dict[str, object] = {}
+_last_observed: dict[str, dict] = {}
+_regression_hold: dict[str, dict] = {}
+_last_sent_content: dict[str, tuple[str, object]] = {}
 
 _LIVE_STATUSES = {"1H", "HT", "2H", "ET", "PEN"}
+_MISSING_GRACE_SEC = 180
+_TEXT_DEDUPE_WINDOW_SEC = 300
+_REGRESSION_CONFIRM_TICKS = 3
 
 
 def clear_already_posted_today():
     logger.info("Clearing live update state maps for the new day.")
     live_state_keys.clear()
     live_message_ids.clear()
+    _missing_since.clear()
+    _last_observed.clear()
+    _regression_hold.clear()
+    _last_sent_content.clear()
 
 
 def seed_already_posted(fixtures: list) -> None:
@@ -69,6 +81,7 @@ async def run_live_loop(bot):
         for match in matches:
             match_id = str(match["fixture"]["id"])
             seen_live_ids.add(match_id)
+            _missing_since.pop(match_id, None)
             if not is_tracked_for_ft(match_id):
                 track_match_for_ft(match)
 
@@ -79,10 +92,53 @@ async def run_live_loop(bot):
             away = enriched["teams"]["away"]["name"]
             score = enriched["goals"]
             events = enriched.get("events", [])
+            elapsed = enriched.get("fixture", {}).get("status", {}).get("elapsed")
             state_key = f"{match_id}_{score['home']}-{score['away']}_{len(events)}"
+
+            previous_observed = _last_observed.get(match_id)
+            if previous_observed:
+                prev_home = previous_observed["home"]
+                prev_away = previous_observed["away"]
+                prev_elapsed = previous_observed.get("elapsed")
+                curr_home = int(score.get("home") or 0)
+                curr_away = int(score.get("away") or 0)
+                prev_total = prev_home + prev_away
+                curr_total = curr_home + curr_away
+                elapsed_regressed = (
+                    isinstance(elapsed, int)
+                    and isinstance(prev_elapsed, int)
+                    and elapsed + 2 < prev_elapsed
+                )
+                score_regressed = curr_home < prev_home or curr_away < prev_away
+                if score_regressed or (elapsed_regressed and curr_total <= prev_total):
+                    hold = _regression_hold.get(match_id)
+                    if hold and hold.get("state_key") == state_key:
+                        hold["ticks"] += 1
+                    else:
+                        hold = {"state_key": state_key, "ticks": 1}
+                    _regression_hold[match_id] = hold
+
+                    if hold["ticks"] < _REGRESSION_CONFIRM_TICKS:
+                        logger.info(
+                            f"Regression guard: holding match {match_id} state "
+                            f"{state_key} (tick {hold['ticks']}/{_REGRESSION_CONFIRM_TICKS})."
+                        )
+                        continue
+
+                    logger.warning(
+                        f"Regression guard: accepting repeated regressive state for match {match_id} "
+                        f"after {hold['ticks']} ticks."
+                    )
+                else:
+                    _regression_hold.pop(match_id, None)
 
             previous_state = live_state_keys.get(match_id)
             if previous_state == state_key:
+                _last_observed[match_id] = {
+                    "home": int(score.get("home") or 0),
+                    "away": int(score.get("away") or 0),
+                    "elapsed": elapsed if isinstance(elapsed, int) else None,
+                }
                 continue
 
             event_strings = format_match_events(events, home, away)
@@ -94,6 +150,24 @@ async def run_live_loop(bot):
             if completeness:
                 line_content += completeness
 
+            last_sent = _last_sent_content.get(match_id)
+            if last_sent:
+                last_content, sent_at = last_sent
+                if (
+                    last_content == line_content
+                    and (now - sent_at) <= timedelta(seconds=_TEXT_DEDUPE_WINDOW_SEC)
+                ):
+                    live_state_keys[match_id] = state_key
+                    _last_observed[match_id] = {
+                        "home": int(score.get("home") or 0),
+                        "away": int(score.get("away") or 0),
+                        "elapsed": elapsed if isinstance(elapsed, int) else None,
+                    }
+                    logger.info(
+                        f"Text dedupe: suppressed repeated live content for match {match_id}."
+                    )
+                    continue
+
             updated_message = await upsert_live_message(
                 bot=bot,
                 channel_id=CHANNEL_ID,
@@ -104,10 +178,27 @@ async def run_live_loop(bot):
             if updated_message is not None:
                 live_message_ids[match_id] = updated_message.id
                 live_state_keys[match_id] = state_key
+                _last_sent_content[match_id] = (line_content, now)
+                _last_observed[match_id] = {
+                    "home": int(score.get("home") or 0),
+                    "away": int(score.get("away") or 0),
+                    "elapsed": elapsed if isinstance(elapsed, int) else None,
+                }
                 logger.info(f"Live update upserted for match {match_id}: {line_content}")
 
-        # Clean stale map entries when a match is no longer live.
-        stale_ids = [mid for mid in live_state_keys if mid not in seen_live_ids]
-        for mid in stale_ids:
+        # Clean stale map entries when a match is no longer live, after grace window.
+        for mid in list(live_state_keys.keys()):
+            if mid in seen_live_ids:
+                continue
+            first_missing = _missing_since.get(mid)
+            if first_missing is None:
+                _missing_since[mid] = now
+                continue
+            if (now - first_missing) < timedelta(seconds=_MISSING_GRACE_SEC):
+                continue
             live_state_keys.pop(mid, None)
             live_message_ids.pop(mid, None)
+            _missing_since.pop(mid, None)
+            _last_observed.pop(mid, None)
+            _regression_hold.pop(mid, None)
+            _last_sent_content.pop(mid, None)
