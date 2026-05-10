@@ -83,3 +83,4 @@ modules/
 - Duplicated configuration constants in multiple files
 - Backward-compat shims unless explicitly requested
 - Destructive repo operations unless explicitly requested
+- Duplicating updater shell logic in Python when `update.sh` is the canonical path

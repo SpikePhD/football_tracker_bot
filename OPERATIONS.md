@@ -56,6 +56,11 @@ Inspect:
 tail -n 100 ~/football_tracker_bot/auto_update.log
 ```
 
+### Discord-triggered update
+
+`!update` (alias `!pull`) runs `bash update.sh` from inside the bot process.
+It is intentionally open to channel users and may restart the service immediately.
+
 ## 5. Configuration Files
 
 - `.env` -> secrets only

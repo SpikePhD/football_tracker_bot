@@ -96,6 +96,8 @@ All Discord sends flow through `modules/discord_poster.py`.
 
 Cogs are auto-loaded at startup.
 
+Note: `cogs/update.py` executes `update.sh` via subprocess and uses an in-process lock to avoid concurrent update runs.
+
 ## 6. Logging
 
 - Root logger configured in startup

@@ -13,6 +13,7 @@ Primary source: ESPN public API (no auth). Secondary source: API-Football (fallb
 - `!ask` command with tool-assisted football Q&A
 - Startup + scheduled broadcast controls via bot mode
 - `!log` command to export runtime log snippets as `.txt`
+- `!update` command to trigger `update.sh` from Discord
 
 ## Commands
 
@@ -34,6 +35,7 @@ Primary source: ESPN public API (no auth). Secondary source: API-Football (fallb
 | `!refresh_memory` | - | Admin memory refresh |
 | `!dump_memory` | - | Admin memory export |
 | `!log [errors|module <name>]` | - | Export bot logs as text |
+| `!update` | `!pull` | Force-run `update.sh` (pull latest + restart service) |
 | `!commands` | `!cmds`, `!help` | List available commands |
 
 ## Python Version
@@ -116,3 +118,4 @@ football_tracker_bot/
 - All Discord sends must go through `modules/discord_poster.py`.
 - Provider calls should go through `modules/api_provider.py`.
 - Do not put non-secret behavior knobs in `.env`.
+- `!update` is intentionally open to channel users and can restart the bot.
