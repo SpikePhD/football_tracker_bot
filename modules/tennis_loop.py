@@ -2,7 +2,7 @@
 import logging
 from datetime import timedelta
 
-from config import CHANNEL_ID, TENNIS_PRE_ANNOUNCE_HOURS
+from config import CHANNEL_ID
 from modules import api_provider
 from modules.bot_mode import is_silent
 from modules.discord_poster import post_new_general_message, upsert_live_message
@@ -11,7 +11,6 @@ from utils.time_utils import italy_now, parse_utc_to_italy
 from utils.tennis_formatter import (
     format_tennis_final_message,
     format_tennis_live_message,
-    format_tennis_pre_message,
     tennis_live_state_key,
 )
 
@@ -140,19 +139,8 @@ async def run_tennis_loop(bot) -> None:
             continue
 
         if status_short == "NS":
-            # Only announce upcoming matches that are today or tomorrow
-            if not (_is_today_italy(start_time) or _is_tomorrow_italy(start_time)):
-                continue
-            if not _is_within_window(start_time, hours=TENNIS_PRE_ANNOUNCE_HOURS):
-                continue
-            if match_id not in pre_announced_ids:
-                await post_new_general_message(
-                    bot,
-                    CHANNEL_ID,
-                    content=format_tennis_pre_message(match),
-                )
-                pre_announced_ids.add(match_id)
-                _persist_state()
+            # Pre-announcements intentionally disabled:
+            # tennis fixtures are still shown in daily snapshot/!matches.
             continue
 
         if status_short == "LIVE":
