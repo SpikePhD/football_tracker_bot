@@ -207,21 +207,31 @@ async def search_team_espn(
     Returns (espn_team_id: str, primary_league_slug: str) for the first result
     whose defaultLeagueSlug is in tracked_slugs, or None if not found.
     """
-    params = {"query": team_name, "sport": "soccer", "limit": 5}
-    try:
-        async with session.get(ESPN_SEARCH_BASE, params=params, timeout=ESPN_TIMEOUT) as resp:
-            if resp.status != 200:
-                logger.warning(f"espn_client: search HTTP {resp.status} for '{team_name}'")
-                return None
-            data = await resp.json(content_type=None)
-    except Exception as e:
-        logger.warning(f"espn_client: search failed for '{team_name}': {e}")
-        return None
+    aliases = {
+        "inter": "internazionale",
+        "milan": "ac milan",
+    }
+    query_candidates = [team_name]
+    alias = aliases.get(team_name.strip().lower())
+    if alias and alias not in query_candidates:
+        query_candidates.append(alias)
 
-    for item in data.get("items", []):
-        slug = item.get("defaultLeagueSlug", "")
-        if slug in tracked_slugs:
-            return str(item["id"]), slug
+    for query in query_candidates:
+        params = {"query": query, "sport": "soccer", "limit": 5}
+        try:
+            async with session.get(ESPN_SEARCH_BASE, params=params, timeout=ESPN_TIMEOUT) as resp:
+                if resp.status != 200:
+                    logger.warning(f"espn_client: search HTTP {resp.status} for '{query}'")
+                    continue
+                data = await resp.json(content_type=None)
+        except Exception as e:
+            logger.warning(f"espn_client: search failed for '{query}': {e}")
+            continue
+
+        for item in data.get("items", []):
+            slug = item.get("defaultLeagueSlug", "")
+            if slug in tracked_slugs:
+                return str(item["id"]), slug
 
     return None
 
@@ -241,7 +251,7 @@ async def fetch_next_team_fixture_espn(
     scoreboard by date instead and filter for events involving espn_team_id.
     Returns a normalised match dict or None.
     """
-    from datetime import timedelta, timezone
+    from datetime import datetime, timedelta, timezone
     from utils.time_utils import italy_now
     now = italy_now().astimezone(timezone.utc)
     team_id_str = str(espn_team_id)
