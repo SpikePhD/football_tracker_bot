@@ -1,6 +1,5 @@
 import logging
 import re
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -14,11 +13,13 @@ from config import (
     LOG_FILE_PATH,
 )
 from modules.discord_poster import post_new_message_to_context
+from utils.time_utils import italy_now
 
 logger = logging.getLogger(__name__)
 
 _LEVEL_PATTERN = re.compile(r"\[(WARNING|ERROR|CRITICAL)\s*\]")
 _MODULE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{2,80}$")
+_LINE_TS_PATTERN = re.compile(r"^\[(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\]")
 _SECRET_PATTERN = re.compile(
     r"(?i)\b("
     r"api[_-]?key|token|secret|password|authorization|bearer"
@@ -27,9 +28,44 @@ _SECRET_PATTERN = re.compile(
 _LONG_TOKEN_PATTERN = re.compile(r"\b[A-Za-z0-9_\-]{24,}\b")
 
 
-def _read_last_lines(path: Path, max_lines: int) -> list[str]:
-    with path.open("r", encoding="utf-8", errors="replace") as f:
-        return list(deque(f, maxlen=max_lines))
+def _iter_log_paths(base_path: Path) -> list[Path]:
+    """
+    Return log files in chronological order:
+    bot.log.N (highest N -> oldest first) ... bot.log.1 ... bot.log (current).
+    """
+    parent = base_path.parent
+    base_name = base_path.name
+    candidates = [p for p in parent.glob(f"{base_name}*") if p.is_file()]
+
+    rotated: list[tuple[int, Path]] = []
+    current: list[Path] = []
+    for path in candidates:
+        if path.name == base_name:
+            current.append(path)
+            continue
+        m = re.match(rf"^{re.escape(base_name)}\.(\d+)$", path.name)
+        if m:
+            rotated.append((int(m.group(1)), path))
+
+    rotated.sort(key=lambda t: t[0], reverse=True)
+    ordered = [p for _, p in rotated] + current
+    return ordered
+
+
+def _read_today_lines(base_path: Path, today_str: str) -> list[str]:
+    lines: list[str] = []
+    for path in _iter_log_paths(base_path):
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    m = _LINE_TS_PATTERN.match(line)
+                    if not m:
+                        continue
+                    if m.group(1) == today_str:
+                        lines.append(line)
+        except Exception:
+            continue
+    return lines
 
 
 def _redact_line(line: str) -> str:
@@ -88,17 +124,17 @@ class LogCog(commands.Cog):
     async def log_export(
         self,
         ctx: commands.Context,
-        mode: str = "recent",
+        mode: str = "today",
         *,
         value: str | None = None,
     ) -> None:
         mode = mode.lower().strip()
         value = (value or "").strip() or None
 
-        if mode not in {"recent", "errors", "module"}:
+        if mode not in {"today", "recent", "errors", "module"}:
             await post_new_message_to_context(
                 ctx,
-                content="Usage: `!log`, `!log errors`, `!log module <module_name>`",
+                content="Usage: `!log`, `!log today`, `!log errors`, `!log module <module_name>`",
             )
             return
 
@@ -124,22 +160,20 @@ class LogCog(commands.Cog):
             return
 
         try:
-            max_lines = min(max(LOG_EXPORT_DEFAULT_LINES, 1), LOG_EXPORT_MAX_LINES)
-            raw_lines = _read_last_lines(self.log_path, LOG_EXPORT_MAX_LINES)
+            today_str = italy_now().date().isoformat()
+            raw_lines = _read_today_lines(self.log_path, today_str)
 
-            if mode == "recent":
-                selected = raw_lines[-max_lines:]
+            if mode in {"today", "recent"}:
+                selected = raw_lines
             elif mode == "errors":
                 selected = [line for line in raw_lines if _LEVEL_PATTERN.search(line)]
-                selected = selected[-max_lines:]
             else:
                 selected = [line for line in raw_lines if f"[{value}" in line]
-                selected = selected[-max_lines:]
 
             if not selected:
                 await post_new_message_to_context(
                     ctx,
-                    content="No matching log entries found for this query.",
+                    content=f"No matching log entries found for {today_str} (Italy date).",
                 )
                 return
 
