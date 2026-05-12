@@ -394,12 +394,18 @@ async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[
         if isinstance(batch, Exception) or not isinstance(batch, list):
             continue
         for match in batch:
-            match_id = match.get("match_id")
-            if not match_id:
-                continue
-            deduped[match_id] = match
+            key = _tennis_identity_key(match)
+            existing = deduped.get(key)
+            if existing is None or _tennis_match_rank(match) > _tennis_match_rank(existing):
+                deduped[key] = match
 
-    matches = sorted(deduped.values(), key=lambda m: m.get("start_time") or "")
+    matches = []
+    for key, match in deduped.items():
+        merged = dict(match)
+        merged["canonical_id"] = key
+        matches.append(merged)
+
+    matches.sort(key=lambda m: m.get("start_time") or "")
 
     if not matches and _tennis_cache_date == today and _tennis_cache:
         logger.warning(
@@ -442,6 +448,49 @@ def _match_dt_italy(start_time: str | None):
         return parse_utc_to_italy(start_time)
     except Exception:
         return None
+
+
+def _normalize_name(value: str | None) -> str:
+    return " ".join((value or "").strip().lower().split())
+
+
+def _tennis_identity_key(match: dict) -> str:
+    players = sorted([
+        _normalize_name(match.get("player_a")),
+        _normalize_name(match.get("player_b")),
+    ])
+    event_name = _normalize_name(match.get("event_name"))
+    start_time = match.get("start_time") or ""
+    date_part = ""
+    if start_time:
+        try:
+            date_part = parse_utc_to_italy(start_time).date().isoformat()
+        except Exception:
+            date_part = str(start_time)[:10]
+    return f"{players[0]}|{players[1]}|{date_part}|{event_name}"
+
+
+def _tennis_status_rank(match: dict) -> int:
+    status = (match.get("status") or {}).get("short")
+    if status == "FT":
+        return 3
+    if status == "LIVE":
+        return 2
+    if status == "NS":
+        return 1
+    return 0
+
+
+def _tennis_match_rank(match: dict) -> tuple:
+    status = match.get("status") or {}
+    sets = match.get("sets") or []
+    return (
+        _tennis_status_rank(match),
+        1 if match.get("winner") else 0,
+        len(sets),
+        1 if status.get("detail") else 0,
+        1 if match.get("round") else 0,
+    )
 
 
 def _is_today(start_time: str | None) -> bool:
