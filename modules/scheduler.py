@@ -5,6 +5,9 @@ import logging
 from datetime import datetime, timedelta
 
 from modules import api_provider
+from config import CHANNEL_ID
+from modules.bot_mode import is_verbose
+from modules.discord_poster import post_new_general_message
 from modules.ft_handler import (
     clear_tracked_matches_today,
     fetch_and_post_ft,
@@ -20,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Track daily/weekly memory updates to avoid duplicates
 _last_standings_update_date: datetime | None = None
 _last_team_info_update_date: datetime | None = None
+_last_provider_was_espn: bool | None = None
 
 
 async def schedule_day(bot):
@@ -102,6 +106,24 @@ async def schedule_day(bot):
 
     while italy_now() < end_of_day:
         now = italy_now()
+        global _last_provider_was_espn
+        current_provider_is_espn = api_provider.is_espn_healthy()
+        if _last_provider_was_espn is None:
+            _last_provider_was_espn = current_provider_is_espn
+        elif _last_provider_was_espn != current_provider_is_espn:
+            if is_verbose():
+                if current_provider_is_espn:
+                    notice = (
+                        "🟢 Data provider recovered: back to ESPN primary."
+                    )
+                else:
+                    notice = (
+                        "🟡 Data provider degraded: using API-Football fallback "
+                        "until ESPN recovers."
+                    )
+                await post_new_general_message(bot, CHANNEL_ID, content=notice)
+            _last_provider_was_espn = current_provider_is_espn
+
         approx_remaining_cycles = 0
         if now < end_of_day:
             remaining_seconds = (end_of_day - now).total_seconds()
