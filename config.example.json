@@ -94,7 +94,8 @@
       "espn_poll_interval_sec": 60,
       "fallback_poll_interval_sec": 480,
       "scoreboard_cache_ttl_sec": 55,
-      "enrich_max_calls_per_tick": 2
+      "enrich_max_calls_per_tick": 2,
+      "enrich_grace_sec": 10
     }
   },
   "log": {

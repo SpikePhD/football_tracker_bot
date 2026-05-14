@@ -11,6 +11,7 @@ import asyncio
 
 from config import (
     API_ENRICH_MAX_CALLS_PER_TICK,
+    API_ENRICH_GRACE_SEC,
     API_ESPN_POLL_INTERVAL_SEC,
     API_FAILURE_THRESHOLD,
     API_FALLBACK_POLL_INTERVAL_SEC,
@@ -58,6 +59,7 @@ _enrich_attempted_states: set[str] = set()
 _enrich_attempted_date: str | None = None
 _enrich_tick_key: str | None = None
 _enrich_tick_count: int = 0
+_enrich_first_seen_states: dict[str, datetime] = {}
 
 
 # ── Health management ─────────────────────────────────────────────────────────
@@ -292,14 +294,27 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     today = get_italy_date_string()
     if _enrich_attempted_date != today:
         _enrich_attempted_states.clear()
+        _enrich_first_seen_states.clear()
         _enrich_attempted_date = today
 
     enrich_state = f"{fixture_id}:{goals.get('home')}:{goals.get('away')}:{len(events)}"
     if enrich_state in _enrich_attempted_states:
         return match
 
+    first_seen = _enrich_first_seen_states.get(enrich_state)
+    now_local = italy_now()
+    if first_seen is None:
+        _enrich_first_seen_states[enrich_state] = now_local
+        logger.info(
+            f"[Enrich] Deferring fixture {fixture_id} enrichment for "
+            f"{API_ENRICH_GRACE_SEC}s grace window."
+        )
+        return match
+    if (now_local - first_seen).total_seconds() < API_ENRICH_GRACE_SEC:
+        return match
+
     # Hard cap enrichment calls per scheduler tick/minute.
-    tick_key = italy_now().strftime("%Y%m%d%H%M")
+    tick_key = now_local.strftime("%Y%m%d%H%M")
     if _enrich_tick_key != tick_key:
         _enrich_tick_key = tick_key
         _enrich_tick_count = 0

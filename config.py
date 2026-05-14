@@ -101,6 +101,7 @@ API_ESPN_POLL_INTERVAL_SEC = int(_expect(provider_cfg, "espn_poll_interval_sec",
 API_FALLBACK_POLL_INTERVAL_SEC = int(_expect(provider_cfg, "fallback_poll_interval_sec", int, "operations.api_provider"))
 API_SCOREBOARD_CACHE_TTL_SEC = int(_expect(provider_cfg, "scoreboard_cache_ttl_sec", int, "operations.api_provider"))
 API_ENRICH_MAX_CALLS_PER_TICK = int(_expect(provider_cfg, "enrich_max_calls_per_tick", int, "operations.api_provider"))
+API_ENRICH_GRACE_SEC = int(_expect(provider_cfg, "enrich_grace_sec", int, "operations.api_provider"))
 
 LOG_FILE_PATH = _expect(log_cfg, "file_path", str, "log")
 LOG_FILE_MAX_BYTES = int(_expect(log_cfg, "file_max_bytes", int, "log"))
