@@ -66,24 +66,29 @@ _enrich_first_seen_states: dict[str, datetime] = {}
 
 def is_espn_healthy() -> bool:
     """
-    Returns True if ESPN should be tried.
-    Automatically re-arms ESPN once the retry window has elapsed.
+    Returns whether ESPN is currently the active provider.
     """
-    global _espn_healthy, _consecutive_failures, _retry_after
-
-    if not _espn_healthy and _retry_after is not None:
-        if italy_now() >= _retry_after:
-            _espn_healthy = True
-            _consecutive_failures = 0
-            _retry_after = None
-            logger.info("🟢 [APIProvider] ESPN retry window elapsed — probing ESPN on next request.")
-
     return _espn_healthy
+
+
+def _retry_window_elapsed() -> bool:
+    return (not _espn_healthy) and (_retry_after is not None) and (italy_now() >= _retry_after)
+
+
+def _should_try_espn_now() -> bool:
+    """Returns True when ESPN should be queried (primary mode or retry probe window)."""
+    if _espn_healthy:
+        return True
+    if _retry_window_elapsed():
+        retry_str = _retry_after.strftime("%H:%M") if _retry_after else "N/A"
+        logger.info(f"🟢 [APIProvider] ESPN retry window elapsed ({retry_str}) — probing ESPN now.")
+        return True
+    return False
 
 
 def get_poll_interval() -> int:
     """Returns the current polling interval in seconds."""
-    return ESPN_POLL_INTERVAL if is_espn_healthy() else FALLBACK_POLL_INTERVAL
+    return ESPN_POLL_INTERVAL if _espn_healthy else FALLBACK_POLL_INTERVAL
 
 
 def get_status() -> dict:
@@ -113,6 +118,15 @@ def _mark_espn_success() -> None:
 
 def _mark_espn_failure() -> None:
     global _espn_healthy, _consecutive_failures, _retry_after
+    if not _espn_healthy:
+        _retry_after = italy_now() + timedelta(seconds=RETRY_INTERVAL_SEC)
+        retry_str = _retry_after.strftime("%H:%M")
+        logger.warning(
+            f"🟡 [APIProvider] ESPN retry probe failed while on fallback. "
+            f"Next retry at {retry_str}."
+        )
+        return
+
     _consecutive_failures += 1
 
     if _espn_healthy:
@@ -201,7 +215,7 @@ async def fetch_day(session: aiohttp.ClientSession) -> list[dict]:
     All of today's tracked matches (any status).
     ESPN primary, API-Football fallback.
     """
-    if is_espn_healthy():
+    if _should_try_espn_now():
         return await _get_cached_scoreboard(session)
     if api_client.is_quota_exceeded_today():
         logger.warning("🟡 [APIProvider] API-Football quota exhausted for today. Skipping fallback day fetch.")
@@ -215,11 +229,11 @@ async def fetch_live(session: aiohttp.ClientSession) -> list[dict]:
     Currently in-progress matches only.
     ESPN primary, API-Football fallback.
     """
-    if is_espn_healthy():
+    if _should_try_espn_now():
         all_matches = await _get_cached_scoreboard(session)
         live_statuses = {"1H", "HT", "2H", "ET", "PEN"}
         live = [m for m in all_matches if m["fixture"]["status"]["short"] in live_statuses]
-        if not is_espn_healthy():
+        if not _espn_healthy:
             # Health switched to fallback during the scoreboard fetch
             logger.warning("🟡 [APIProvider] ESPN became unhealthy during fetch_live. Will use fallback next cycle.")
             return []

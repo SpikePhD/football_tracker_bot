@@ -6,6 +6,7 @@
 import asyncio
 import logging
 import aiohttp
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -213,8 +214,31 @@ async def search_team_espn(
     }
     query_candidates = [team_name]
     alias = aliases.get(team_name.strip().lower())
-    if alias and alias not in query_candidates:
-        query_candidates.append(alias)
+    if alias:
+        query_candidates = [alias, team_name]
+
+    def _norm(text: str) -> str:
+        return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+    def _score_item(item: dict, query: str) -> int:
+        q = _norm(query)
+        fields = [
+            item.get("displayName", ""),
+            item.get("name", ""),
+            item.get("description", ""),
+            item.get("shortName", ""),
+            item.get("abbreviation", ""),
+        ]
+        names = [_norm(f) for f in fields if f]
+        if not names:
+            return 0
+        if any(n == q for n in names):
+            return 100
+        if any(n.startswith(q) for n in names):
+            return 70
+        if any(q in n for n in names):
+            return 50
+        return 0
 
     for query in query_candidates:
         params = {"query": query, "sport": "soccer", "limit": 5}
@@ -228,10 +252,18 @@ async def search_team_espn(
             logger.warning(f"espn_client: search failed for '{query}': {e}")
             continue
 
+        best_item = None
+        best_score = -1
         for item in data.get("items", []):
             slug = item.get("defaultLeagueSlug", "")
-            if slug in tracked_slugs:
-                return str(item["id"]), slug
+            if slug not in tracked_slugs:
+                continue
+            score = _score_item(item, query)
+            if score > best_score:
+                best_score = score
+                best_item = item
+        if best_item is not None:
+            return str(best_item["id"]), best_item.get("defaultLeagueSlug", "")
 
     return None
 
