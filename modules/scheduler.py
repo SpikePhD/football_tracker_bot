@@ -13,7 +13,7 @@ from modules.ft_handler import (
     fetch_and_post_ft,
     seed_already_announced_ft,
 )
-from modules.live_loop import clear_already_posted_today, run_live_loop, seed_already_posted
+from modules.live_loop import clear_already_posted_today, run_live_loop
 from modules.tennis_loop import clear_tennis_state_today, run_tennis_loop
 from modules.football_memory import update_standings_only, update_team_info_only
 from utils.time_utils import italy_now, parse_utc_to_italy
@@ -203,9 +203,8 @@ async def schedule_day(bot):
                 activation_fixtures = await api_provider.fetch_day(bot.http_session)
                 if activation_fixtures:
                     seed_already_announced_ft(activation_fixtures)
-                    seed_already_posted(activation_fixtures)
             except Exception as e:
-                logger.error(f"[Scheduler] Football activation seeding failed: {e}", exc_info=True)
+                logger.error(f"[Scheduler] Football activation FT seeding failed: {e}", exc_info=True)
             next_football_due = italy_now()
 
         if not tennis_active and tennis_wake_at is not None and now >= tennis_wake_at:
@@ -232,6 +231,10 @@ async def schedule_day(bot):
 
         counter += 1
         due_candidates = [end_of_day]
+        if not football_active and football_wake_at is not None:
+            due_candidates.append(football_wake_at)
+        if not tennis_active and tennis_wake_at is not None:
+            due_candidates.append(tennis_wake_at)
         if next_football_due is not None:
             due_candidates.append(next_football_due)
         if next_tennis_due is not None:
