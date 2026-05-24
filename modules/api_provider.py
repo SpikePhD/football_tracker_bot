@@ -67,6 +67,7 @@ _api_fixture_id_cache_date: str | None = None
 _api_live_fixtures_cache: dict | None = None
 _api_live_fixtures_cache_ts: datetime | None = None
 _api_fixture_events_cache: dict[int, dict] = {}
+_best_known_events_by_espn_fixture: dict[str, dict] = {}
 API_ENRICH_RETRY_DELAYS_SEC = [10, 45, 120, 300, 900]
 API_LIVE_FIXTURES_CACHE_TTL_SEC = 60
 API_FIXTURE_EVENTS_CACHE_TTL_SEC = 90
@@ -336,6 +337,7 @@ def _reset_enrich_state_for_today() -> None:
     if _enrich_attempted_date != today:
         _enrich_retry_states.clear()
         _api_fixture_events_cache.clear()
+        _best_known_events_by_espn_fixture.clear()
         _api_live_fixtures_cache = None
         _api_live_fixtures_cache_ts = None
         _enrich_attempted_date = today
@@ -437,6 +439,16 @@ def _goal_event_count(events: list) -> int:
     return sum(1 for e in events if e.get("type") == "Goal")
 
 
+def _event_quality(events: list) -> tuple[int, int, int]:
+    goal_count = _goal_event_count(events)
+    red_cards = sum(1 for e in events if e.get("type") == "Card" and e.get("detail") == "Red Card")
+    return goal_count, red_cards, len(events)
+
+
+def _events_are_strictly_better(candidate_events: list, current_events: list) -> bool:
+    return _event_quality(candidate_events) > _event_quality(current_events)
+
+
 def _fresh_age_seconds(fetched_at: datetime | None, now_local: datetime) -> float | None:
     if fetched_at is None:
         return None
@@ -535,6 +547,63 @@ async def _fetch_fixture_events_for_enrichment(
     return events, False
 
 
+def _remember_best_known_events(
+    match: dict,
+    events: list,
+    total_goals: int,
+    source_label: str,
+    api_fixture_id: int | None = None,
+) -> None:
+    fixture_id = str(match.get("fixture", {}).get("id") or "")
+    if not fixture_id:
+        return
+
+    existing = _best_known_events_by_espn_fixture.get(fixture_id)
+    existing_events = existing.get("events", []) if existing else []
+    if existing and not _events_are_strictly_better(events, existing_events):
+        return
+
+    _best_known_events_by_espn_fixture[fixture_id] = {
+        "events": list(events),
+        "goal_count": _goal_event_count(events),
+        "event_count": len(events),
+        "score_total_at_capture": total_goals,
+        "source": source_label,
+        "api_fixture_id": api_fixture_id,
+        "updated_at": italy_now(),
+    }
+    api_part = f", API-Football fixture {api_fixture_id}" if api_fixture_id is not None else ""
+    logger.info(
+        f"[Enrich] Stored best-known events for ESPN fixture {fixture_id} "
+        f"from {source_label}{api_part}: "
+        f"{_goal_event_count(events)}/{total_goals} goals, {len(events)} event(s)."
+    )
+
+
+def _apply_best_known_events_if_better(match: dict, total_goals: int, goal_events: int) -> dict | None:
+    fixture_id = str(match.get("fixture", {}).get("id") or "")
+    if not fixture_id:
+        return None
+
+    best = _best_known_events_by_espn_fixture.get(fixture_id)
+    if not best:
+        return None
+
+    current_events = match.get("events", [])
+    best_events = best.get("events", [])
+    if not _events_are_strictly_better(best_events, current_events):
+        return None
+
+    best_goal_count = _goal_event_count(best_events)
+    source = best.get("source", "best-known events")
+    logger.info(
+        f"[Enrich] Reusing best-known enriched events for ESPN fixture {fixture_id} "
+        f"from {source}: {best_goal_count}/{total_goals} goals vs ESPN's "
+        f"{goal_events}/{total_goals}; preventing event-data downgrade."
+    )
+    return {**match, "events": list(best_events)}
+
+
 def _merge_enriched_events_if_better(
     match: dict,
     enriched_events: list,
@@ -573,7 +642,9 @@ def _merge_enriched_events_if_better(
         f"with {len(enriched_events)} event(s) from {source_label} "
         f"for API-Football fixture {api_fixture_id} ({af_goals}/{total_goals} goals)."
     )
-    return {**match, "events": enriched_events}
+    merged = {**match, "events": enriched_events}
+    _remember_best_known_events(merged, enriched_events, total_goals, source_label, api_fixture_id)
+    return merged
 
 
 def _match_api_fixture_candidate(
@@ -727,9 +798,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     try:
         total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
         goal_events = _goal_event_count(events)
-        if goal_events >= total_goals:
-            return match
-        missing = total_goals - goal_events
+        missing = max(0, total_goals - goal_events)
     except (TypeError, ValueError):
         return match
 
@@ -740,6 +809,21 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     global _enrich_attempted_date, _enrich_tick_key, _enrich_tick_count
     _reset_enrich_state_for_today()
     now_local = italy_now()
+
+    if goal_events >= total_goals:
+        best_known = _apply_best_known_events_if_better(match, total_goals, goal_events)
+        if best_known is not None:
+            return best_known
+        _remember_best_known_events(match, events, total_goals, "ESPN")
+        return match
+
+    best_known = _apply_best_known_events_if_better(match, total_goals, goal_events)
+    if best_known is not None:
+        match = best_known
+        events = match.get("events", [])
+        goal_events = _goal_event_count(events)
+        if goal_events >= total_goals:
+            return match
 
     cached_api_fixture_id = _api_fixture_id_cache.get(str(fixture_id))
     if cached_api_fixture_id is not None:

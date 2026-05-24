@@ -22,6 +22,7 @@ class RegressionTests(unittest.TestCase):
             api_provider._api_live_fixtures_cache = None
             api_provider._api_live_fixtures_cache_ts = None
             api_provider._api_fixture_events_cache.clear()
+            api_provider._best_known_events_by_espn_fixture.clear()
 
     def test_api_football_event_normalization_preserves_team_id(self):
         from utils.event_formatter import normalize_api_football_events
@@ -253,6 +254,143 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(first["events"][0]["player"]["name"], "Scorer")
         self.assertEqual(second["events"][0]["player"]["name"], "Scorer")
         self.assertEqual(fetch_events.await_count, 1)
+
+    def test_best_known_events_prevent_stale_cache_downgrade(self):
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="737155")
+        api_events = [
+            {
+                "time": {"elapsed": 26},
+                "player": {"name": "Scorer"},
+                "team": {"id": 50, "name": "Parma"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }
+        ]
+
+        async def run():
+            api_provider._reset_enrich_state_for_today()
+            api_provider._api_fixture_id_cache["737155"] = 999999
+            api_provider._api_fixture_events_cache[999999] = {
+                "fetched_at": datetime(2026, 5, 24, 15, 0, 0),
+                "events": api_events,
+            }
+            api_provider._best_known_events_by_espn_fixture["737155"] = {
+                "events": api_events,
+                "goal_count": 1,
+                "event_count": 1,
+                "score_total_at_capture": 1,
+                "source": "API-Football events",
+                "api_fixture_id": 999999,
+                "updated_at": datetime(2026, 5, 24, 15, 0, 0),
+            }
+            with (
+                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 5, 0)),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": []})) as fetch_events,
+            ):
+                enriched = await api_provider.enrich_fixture_events(None, match)
+                return enriched, fetch_events
+
+        enriched, fetch_events = asyncio.run(run())
+        self.assertEqual(enriched["events"][0]["player"]["name"], "Scorer")
+        self.assertEqual(fetch_events.await_count, 0)
+
+    def test_ft_payload_uses_best_known_events_before_missing_note(self):
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="737157")
+        match["fixture"]["status"]["short"] = "FT"
+        match["teams"]["home"]["name"] = "AC Milan"
+        match["teams"]["away"]["name"] = "Cagliari"
+        match["goals"] = {"home": 1, "away": 2}
+        match["events"] = [
+            {
+                "time": {"elapsed": 1},
+                "player": {"name": "Alexis Saelemaekers"},
+                "team": {"id": "50", "name": "AC Milan"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 19},
+                "player": {"name": "Gennaro Borrelli"},
+                "team": {"id": "51", "name": "Cagliari"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+        best_events = [
+            *match["events"],
+            {
+                "time": {"elapsed": 88},
+                "player": {"name": "Late Scorer"},
+                "team": {"id": "51", "name": "Cagliari"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+
+        async def run():
+            api_provider._reset_enrich_state_for_today()
+            api_provider._best_known_events_by_espn_fixture["737157"] = {
+                "events": best_events,
+                "goal_count": 3,
+                "event_count": 3,
+                "score_total_at_capture": 3,
+                "source": "API-Football events",
+                "api_fixture_id": 1391198,
+                "updated_at": datetime(2026, 5, 24, 22, 20, 0),
+            }
+            with patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 22, 51, 0)):
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+        self.assertEqual(len([e for e in enriched["events"] if e.get("type") == "Goal"]), 3)
+        self.assertEqual(enriched["events"][2]["player"]["name"], "Late Scorer")
+
+    def test_complete_espn_snapshot_does_not_downgrade_richer_best_known_events(self):
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="737155")
+        match["events"] = [
+            {
+                "time": {"elapsed": 26},
+                "player": {"name": "Scorer"},
+                "team": {"id": "50", "name": "Parma"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }
+        ]
+        best_events = [
+            *match["events"],
+            {
+                "time": {"elapsed": 70},
+                "player": {"name": "Sent Off"},
+                "team": {"id": "51", "name": "Sassuolo"},
+                "type": "Card",
+                "detail": "Red Card",
+            },
+        ]
+
+        async def run():
+            api_provider._reset_enrich_state_for_today()
+            api_provider._best_known_events_by_espn_fixture["737155"] = {
+                "events": best_events,
+                "goal_count": 1,
+                "event_count": 2,
+                "score_total_at_capture": 1,
+                "source": "API-Football events",
+                "api_fixture_id": 999999,
+                "updated_at": datetime(2026, 5, 24, 15, 0, 0),
+            }
+            with patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 5, 0)):
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+        self.assertEqual(len(enriched["events"]), 2)
+        self.assertEqual(enriched["events"][1]["detail"], "Red Card")
 
     def test_enrichment_does_not_use_espn_id_as_api_football_id(self):
         from modules import api_provider
