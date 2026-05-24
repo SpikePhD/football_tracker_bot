@@ -3,7 +3,10 @@
 # All other modules import from here instead of directly from api_client or espn_client.
 
 import logging
+import re
+import unicodedata
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 
 import aiohttp
 
@@ -25,7 +28,7 @@ from config import (
 from utils import espn_client
 from utils import espn_tennis_client
 from utils import api_client
-from utils.time_utils import italy_now, get_italy_date_string, parse_utc_to_italy
+from utils.time_utils import italy_now, get_italy_date_string, parse_utc_to_italy, get_current_season_year
 from utils.event_formatter import normalize_api_football_events
 
 logger = logging.getLogger(__name__)
@@ -55,11 +58,13 @@ _tennis_cache: list[dict] = []
 _tennis_cache_date: str | None = None
 _tennis_cache_ts: datetime | None = None
 _TRACKED_SLUGS: set[str] = set(LEAGUE_SLUG_MAP.values())
-_enrich_attempted_states: set[str] = set()
 _enrich_attempted_date: str | None = None
 _enrich_tick_key: str | None = None
 _enrich_tick_count: int = 0
-_enrich_first_seen_states: dict[str, datetime] = {}
+_enrich_retry_states: dict[str, dict] = {}
+_api_fixture_id_cache: dict[str, int] = {}
+_api_fixture_id_cache_date: str | None = None
+API_ENRICH_RETRY_DELAYS_SEC = [10, 45, 120, 300, 900]
 
 
 # ── Health management ─────────────────────────────────────────────────────────
@@ -180,11 +185,15 @@ async def _get_cached_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
         results = summary["matches"]
         success_count = summary["success_count"]
         failure_count = summary["failure_count"]
+        succeeded_league_ids = set(summary.get("succeeded_league_ids", []))
+        failed_league_ids = set(summary.get("failed_league_ids", []))
     except Exception as e:
         logger.error(f"[APIProvider] Unexpected error from espn_client: {e}", exc_info=True)
         results = []
         success_count = 0
         failure_count = len(LEAGUE_SLUG_MAP)
+        succeeded_league_ids = set()
+        failed_league_ids = set(LEAGUE_SLUG_MAP)
 
     if success_count == 0:
         logger.warning(
@@ -196,20 +205,45 @@ async def _get_cached_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
             return []
     elif results:
         _mark_espn_success()
-        _cache = results
+        if failure_count > 0 and _cache_date == today:
+            stale_matches = [
+                m for m in _cache
+                if m.get("league", {}).get("id") in failed_league_ids
+            ]
+            _cache = [
+                *results,
+                *stale_matches,
+            ]
+            logger.warning(
+                f"[APIProvider] ESPN partial refresh merged with stale same-day cache: "
+                f"{len(succeeded_league_ids)} league(s) fresh, "
+                f"{len(failed_league_ids)} league(s) preserved."
+            )
+        else:
+            _cache = results
         _cache_date = today
         _cache_ts = now
         logger.info(
-            f"[APIProvider] ESPN scoreboard fetched: {len(results)} matches "
+            f"[APIProvider] ESPN scoreboard fetched: {len(_cache)} matches "
             f"({success_count} league responses ok, {failure_count} failed)."
         )
     else:
         _mark_espn_success()
-        _cache = []
+        if failure_count > 0 and _cache_date == today:
+            _cache = [
+                m for m in _cache
+                if m.get("league", {}).get("id") in failed_league_ids
+            ]
+            logger.warning(
+                f"[APIProvider] ESPN partial refresh returned no fresh matches; "
+                f"preserved {len(_cache)} stale match(es) from failed league(s)."
+            )
+        else:
+            _cache = []
         _cache_date = today
         _cache_ts = now
         logger.info(
-            f"[APIProvider] ESPN returned 0 matches for today "
+            f"[APIProvider] ESPN returned {len(_cache)} matches for today "
             f"({success_count} league responses ok, {failure_count} failed)."
         )
 
@@ -289,10 +323,188 @@ async def fetch_next_match_for_team(session: aiohttp.ClientSession, team_name: s
     return await espn_client.fetch_next_team_fixture_espn(session, espn_team_id, slugs)
 
 
+def _reset_enrich_state_for_today() -> None:
+    global _enrich_attempted_date, _api_fixture_id_cache_date
+    today = get_italy_date_string()
+    if _enrich_attempted_date != today:
+        _enrich_retry_states.clear()
+        _enrich_attempted_date = today
+    if _api_fixture_id_cache_date != today:
+        _api_fixture_id_cache.clear()
+        _api_fixture_id_cache_date = today
+
+
+def _normalize_fixture_name(value: str | None) -> str:
+    text = unicodedata.normalize("NFKD", value or "")
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text).lower()
+    text = re.sub(r"\s+", " ", text).strip()
+
+    aliases = {
+        "internazionale": "inter",
+        "internazionale milano": "inter",
+        "inter milan": "inter",
+        "fc internazionale milano": "inter",
+        "ac milan": "milan",
+        "a c milan": "milan",
+    }
+    if text in aliases:
+        return aliases[text]
+
+    removable_tokens = {
+        "fc", "cf", "afc", "sc", "ac", "as", "ss", "us",
+        "calcio", "club", "football", "soccer",
+    }
+    tokens = [token for token in text.split() if token not in removable_tokens]
+    text = " ".join(tokens) or text
+    return aliases.get(text, text)
+
+
+def _name_similarity(left: str | None, right: str | None) -> float:
+    norm_left = _normalize_fixture_name(left)
+    norm_right = _normalize_fixture_name(right)
+    if not norm_left or not norm_right:
+        return 0.0
+    if norm_left == norm_right:
+        return 1.0
+    if norm_left in norm_right or norm_right in norm_left:
+        return 0.92
+    return SequenceMatcher(None, norm_left, norm_right).ratio()
+
+
+def _espn_fixture_datetime(match: dict) -> datetime | None:
+    raw_date = match.get("fixture", {}).get("date")
+    if not raw_date:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _espn_fixture_date(match: dict) -> str:
+    fixture_dt = _espn_fixture_datetime(match)
+    if fixture_dt:
+        if fixture_dt.tzinfo is None:
+            return fixture_dt.date().isoformat()
+        return fixture_dt.astimezone(italy_now().tzinfo).date().isoformat()
+    raw_date = match.get("fixture", {}).get("date")
+    if raw_date:
+        return str(raw_date)[:10]
+    return get_italy_date_string()
+
+
+def _season_for_match(match: dict) -> int:
+    fixture_dt = _espn_fixture_datetime(match)
+    if fixture_dt is None:
+        return get_current_season_year()
+    return fixture_dt.year if fixture_dt.month >= 8 else fixture_dt.year - 1
+
+
+def _candidate_time_delta_minutes(espn_dt: datetime | None, candidate: dict) -> float:
+    if espn_dt is None:
+        return 0.0
+    raw_date = candidate.get("fixture", {}).get("date")
+    if not raw_date:
+        return 999999.0
+    try:
+        candidate_dt = datetime.fromisoformat(str(raw_date).replace("Z", "+00:00"))
+    except ValueError:
+        return 999999.0
+    if candidate_dt.tzinfo is None and espn_dt.tzinfo is not None:
+        candidate_dt = candidate_dt.replace(tzinfo=espn_dt.tzinfo)
+    elif candidate_dt.tzinfo is not None and espn_dt.tzinfo is None:
+        espn_dt = espn_dt.replace(tzinfo=candidate_dt.tzinfo)
+    return abs((candidate_dt - espn_dt).total_seconds()) / 60
+
+
+async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_match: dict) -> int | None:
+    """
+    Map an ESPN fixture ID to API-Football's fixture ID using date, league,
+    team names, and kickoff proximity. The ESPN ID is only a cache key.
+    """
+    _reset_enrich_state_for_today()
+
+    espn_fixture_id = str(espn_match.get("fixture", {}).get("id") or "")
+    if not espn_fixture_id:
+        logger.info("[Enrich] Cannot resolve API-Football fixture ID: ESPN fixture ID missing.")
+        return None
+    if espn_fixture_id in _api_fixture_id_cache:
+        return _api_fixture_id_cache[espn_fixture_id]
+
+    try:
+        league_id = int(espn_match.get("league", {}).get("id"))
+    except (TypeError, ValueError):
+        logger.info(f"[Enrich] Cannot resolve API-Football fixture for ESPN fixture {espn_fixture_id}: league ID missing.")
+        return None
+
+    match_date = _espn_fixture_date(espn_match)
+    season = _season_for_match(espn_match)
+    url = (
+        "https://v3.football.api-sports.io/fixtures"
+        f"?date={match_date}&league={league_id}&season={season}"
+    )
+    payload = await api_client._make_request(session, url)
+    candidates = payload.get("response", []) if payload else []
+    if not isinstance(candidates, list) or not candidates:
+        logger.info(
+            f"[Enrich] No API-Football fixture candidates for ESPN fixture "
+            f"{espn_fixture_id} on {match_date} league {league_id}."
+        )
+        return None
+
+    espn_home = espn_match.get("teams", {}).get("home", {}).get("name")
+    espn_away = espn_match.get("teams", {}).get("away", {}).get("name")
+    espn_dt = _espn_fixture_datetime(espn_match)
+
+    best: tuple[float, dict] | None = None
+    for candidate in candidates:
+        try:
+            candidate_league_id = int(candidate.get("league", {}).get("id"))
+        except (TypeError, ValueError):
+            continue
+        if candidate_league_id != league_id:
+            continue
+        delta_minutes = _candidate_time_delta_minutes(espn_dt, candidate)
+        if delta_minutes > 120:
+            continue
+
+        candidate_home = candidate.get("teams", {}).get("home", {}).get("name")
+        candidate_away = candidate.get("teams", {}).get("away", {}).get("name")
+        home_score = _name_similarity(espn_home, candidate_home)
+        away_score = _name_similarity(espn_away, candidate_away)
+        if home_score < 0.70 or away_score < 0.70:
+            continue
+
+        average_name_score = (home_score + away_score) / 2
+        time_score = max(0.0, 1.0 - (delta_minutes / 120))
+        confidence = (average_name_score * 0.8) + (time_score * 0.2)
+        if best is None or confidence > best[0]:
+            best = (confidence, candidate)
+
+    if best is None or best[0] < 0.78:
+        logger.info(
+            f"[Enrich] No confident API-Football mapping for ESPN fixture "
+            f"{espn_fixture_id} ({espn_home} vs {espn_away}, league {league_id})."
+        )
+        return None
+
+    api_fixture_id = best[1].get("fixture", {}).get("id")
+    try:
+        api_fixture_id = int(api_fixture_id)
+    except (TypeError, ValueError):
+        logger.info(f"[Enrich] API-Football mapping for ESPN fixture {espn_fixture_id} had no usable fixture ID.")
+        return None
+
+    _api_fixture_id_cache[espn_fixture_id] = api_fixture_id
+    logger.info(f"[Enrich] Mapped ESPN fixture {espn_fixture_id} -> API-Football fixture {api_fixture_id}")
+    return api_fixture_id
+
+
 async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> dict:
     """
-    If ESPN event data is incomplete (goal count < score total), fetch the fixture
-    from API-Football and return a copy of the match with complete events.
+    If ESPN event data is incomplete (goal count < score total), fetch events
+    from API-Football and return a copy of the match with more complete events.
     Returns the original match unchanged if data is complete or on any error.
     """
     goals = match.get("goals", {})
@@ -311,31 +523,39 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     if not fixture_id:
         return match
 
-    # Do not spam enrichment attempts for identical match states.
     global _enrich_attempted_date, _enrich_tick_key, _enrich_tick_count
-    today = get_italy_date_string()
-    if _enrich_attempted_date != today:
-        _enrich_attempted_states.clear()
-        _enrich_first_seen_states.clear()
-        _enrich_attempted_date = today
+    _reset_enrich_state_for_today()
 
     enrich_state = f"{fixture_id}:{goals.get('home')}:{goals.get('away')}:{len(events)}"
-    if enrich_state in _enrich_attempted_states:
-        return match
-
-    first_seen = _enrich_first_seen_states.get(enrich_state)
+    retry_state = _enrich_retry_states.get(enrich_state)
     now_local = italy_now()
-    if first_seen is None:
-        _enrich_first_seen_states[enrich_state] = now_local
+    if retry_state is None:
+        retry_state = {
+            "first_seen": now_local,
+            "attempt_count": 0,
+            "last_attempt_at": None,
+            "exhausted": False,
+        }
+        _enrich_retry_states[enrich_state] = retry_state
         logger.info(
-            f"[Enrich] Deferring fixture {fixture_id} enrichment for "
-            f"{API_ENRICH_GRACE_SEC}s grace window."
+            f"[Enrich] Fixture {fixture_id} has {missing} missing goal event(s); "
+            f"first retry in {API_ENRICH_RETRY_DELAYS_SEC[0]}s."
         )
         return match
-    if (now_local - first_seen).total_seconds() < API_ENRICH_GRACE_SEC:
+
+    if retry_state.get("exhausted"):
         return match
 
-    # Hard cap enrichment calls per scheduler tick/minute.
+    attempt_count = int(retry_state.get("attempt_count", 0))
+    if attempt_count >= len(API_ENRICH_RETRY_DELAYS_SEC):
+        retry_state["exhausted"] = True
+        return match
+
+    first_seen = retry_state.get("first_seen") or now_local
+    required_delay = API_ENRICH_RETRY_DELAYS_SEC[attempt_count]
+    if (now_local - first_seen).total_seconds() < required_delay:
+        return match
+
     tick_key = now_local.strftime("%Y%m%d%H%M")
     if _enrich_tick_key != tick_key:
         _enrich_tick_key = tick_key
@@ -350,35 +570,63 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     if api_client.is_quota_exceeded_today():
         return match
 
-    _enrich_attempted_states.add(enrich_state)
     _enrich_tick_count += 1
+    retry_state["attempt_count"] = attempt_count + 1
+    retry_state["last_attempt_at"] = now_local
 
-    logger.info(
-        f"🔍 [Enrich] Fetching API-Football events for fixture {fixture_id} "
-        f"({missing} missing goal(s) in ESPN data)"
-    )
     try:
-        payload = await fetch_fixture(session, fixture_id)
+        api_fixture_id = await resolve_api_football_fixture_id(session, match)
+        if api_fixture_id is None:
+            logger.info(
+                f"[Enrich] Skipping enrichment for ESPN fixture {fixture_id}: "
+                f"no API-Football fixture mapping exists."
+            )
+            return match
+
+        logger.info(
+            f"[Enrich] Fetching API-Football events for mapped fixture "
+            f"{api_fixture_id} (ESPN fixture {fixture_id}; {missing} missing goal(s))"
+        )
+        payload = await api_client.fetch_fixture_events(session, api_fixture_id)
         if not payload:
             return match
         response = payload.get("response", [])
-        if not response:
+        if not isinstance(response, list):
             return match
-        enriched_events = normalize_api_football_events(response[0].get("events", []))
+
+        enriched_events = normalize_api_football_events(response)
         af_goals = sum(1 for e in enriched_events if e.get("type") == "Goal")
         if af_goals <= goal_events:
             logger.info(
-                f"ℹ️ [Enrich] Fixture {fixture_id}: API-Football also has incomplete data "
-                f"({af_goals} goal events vs ESPN's {goal_events}). Keeping ESPN events."
+                f"[Enrich] API-Football fixture {api_fixture_id} returned {af_goals} goal event(s) "
+                f"for ESPN fixture {fixture_id}; ESPN has {goal_events}. Keeping ESPN events."
+            )
+            if attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
+                retry_state["exhausted"] = True
+            return match
+
+        if abs(total_goals - af_goals) > abs(total_goals - goal_events):
+            logger.info(
+                f"[Enrich] API-Football fixture {api_fixture_id} has {af_goals}/{total_goals} "
+                f"goal events, farther from the score than ESPN's {goal_events}/{total_goals}. "
+                f"Keeping ESPN events."
             )
             return match
+
+        espn_non_goal_events = [e for e in events if e.get("type") != "Goal"]
+        api_non_goal_events = [e for e in enriched_events if e.get("type") != "Goal"]
+        if espn_non_goal_events and not api_non_goal_events:
+            enriched_events = [*enriched_events, *espn_non_goal_events]
+
+        retry_state["exhausted"] = True
         logger.info(
-            f"✅ [Enrich] Fixture {fixture_id}: replaced {len(events)} ESPN events "
-            f"with {len(enriched_events)} API-Football events ({af_goals}/{total_goals} goals)."
+            f"[Enrich] ESPN fixture {fixture_id}: replaced/merged {len(events)} ESPN events "
+            f"with {len(enriched_events)} event(s) from API-Football fixture "
+            f"{api_fixture_id} ({af_goals}/{total_goals} goals)."
         )
         return {**match, "events": enriched_events}
     except Exception as e:
-        logger.warning(f"⚠️ [Enrich] Failed to enrich fixture {fixture_id}: {e}")
+        logger.warning(f"[Enrich] Failed to enrich ESPN fixture {fixture_id}: {e}")
         return match
 
 

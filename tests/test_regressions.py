@@ -3,9 +3,9 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("API_KEY", "test-api-key")
@@ -92,6 +92,140 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(summary["matches"], [])
         self.assertEqual(summary["success_count"], 1)
         self.assertEqual(summary["failure_count"], 1)
+        self.assertEqual(summary["succeeded_league_ids"], [1])
+        self.assertEqual(summary["failed_league_ids"], [2])
+
+    def test_fetch_fixture_events_uses_events_endpoint(self):
+        from utils import api_client
+
+        captured = {}
+
+        async def fake_make_request(session, url):
+            captured["url"] = url
+            return {"response": []}
+
+        async def run():
+            with patch.object(api_client, "_make_request", fake_make_request):
+                return await api_client.fetch_fixture_events(None, 123)
+
+        payload = asyncio.run(run())
+        self.assertEqual(payload, {"response": []})
+        self.assertIn("/fixtures/events?fixture=123", captured["url"])
+
+    def test_enrichment_does_not_use_espn_id_as_api_football_id(self):
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="737155")
+        state = "737155:1:0:0"
+
+        async def run():
+            api_provider._reset_enrich_state_for_today()
+            api_provider._enrich_retry_states[state] = {
+                "first_seen": datetime(2026, 5, 24, 15, 0, 0),
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "exhausted": False,
+            }
+            with (
+                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=999999)),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": []})) as fetch_events,
+            ):
+                await api_provider.enrich_fixture_events(None, match)
+                return fetch_events
+
+        fetch_events = asyncio.run(run())
+        fetch_events.assert_awaited_once_with(None, 999999)
+
+    def test_enrichment_retries_same_incomplete_state_after_delay(self):
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="737155")
+        t0 = datetime(2026, 5, 24, 15, 0, 0)
+
+        async def run():
+            api_provider._reset_enrich_state_for_today()
+            api_provider._enrich_retry_states.clear()
+            fetch_events = AsyncMock(side_effect=[
+                {"response": []},
+                {"response": []},
+            ])
+            with (
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0, 10]),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=999999)),
+                patch.object(api_provider.api_client, "fetch_fixture_events", fetch_events),
+            ):
+                with patch.object(api_provider, "italy_now", return_value=t0):
+                    await api_provider.enrich_fixture_events(None, match)
+                    await api_provider.enrich_fixture_events(None, match)
+                with patch.object(api_provider, "italy_now", return_value=t0 + timedelta(seconds=11)):
+                    await api_provider.enrich_fixture_events(None, match)
+            return fetch_events.await_count
+
+        self.assertEqual(asyncio.run(run()), 2)
+
+    def test_partial_espn_cache_preserves_failed_league_matches(self):
+        from modules import api_provider
+
+        cached_match = self._espn_match(fixture_id="737155", league_id=135)
+        fresh_match = self._espn_match(fixture_id="eng-1", league_id=39)
+
+        async def fake_summary(session, slug_map, date_str=None):
+            return {
+                "matches": [fresh_match],
+                "success_count": 1,
+                "failure_count": 1,
+                "succeeded_league_ids": [39],
+                "failed_league_ids": [135],
+            }
+
+        async def run():
+            today = api_provider.get_italy_date_string()
+            api_provider._cache = [cached_match]
+            api_provider._cache_date = today
+            api_provider._cache_ts = api_provider.italy_now() - timedelta(seconds=api_provider.CACHE_TTL_SEC + 1)
+            with patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fake_summary):
+                return await api_provider._get_cached_scoreboard(None)
+
+        matches = asyncio.run(run())
+        self.assertEqual({m["fixture"]["id"] for m in matches}, {"737155", "eng-1"})
+
+    def test_enrichment_replaces_events_when_api_football_has_goal(self):
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="737155")
+        state = "737155:1:0:0"
+        api_goal = {
+            "time": {"elapsed": 26},
+            "player": {"name": "Scorer"},
+            "team": {"id": 50, "name": "Parma"},
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }
+
+        async def run():
+            api_provider._reset_enrich_state_for_today()
+            api_provider._enrich_retry_states[state] = {
+                "first_seen": datetime(2026, 5, 24, 15, 0, 0),
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "exhausted": False,
+            }
+            with (
+                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=999999)),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": [api_goal]})),
+            ):
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+        self.assertEqual(enriched["events"][0]["type"], "Goal")
+        self.assertEqual(enriched["events"][0]["player"]["name"], "Scorer")
 
     def test_ft_state_resets_only_on_date_change_and_persists_marks(self):
         from modules import ft_handler
@@ -163,6 +297,22 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(memory["teams"]["100"]["stats"]["goals_for"], 2)
         self.assertEqual(memory["teams"]["100"]["players"]["Scorer"]["goals"], 1)
         self.assertEqual(len(memory["matches"]), 1)
+
+    def _espn_match(self, fixture_id="737155", league_id=135):
+        return {
+            "fixture": {
+                "id": fixture_id,
+                "date": "2026-05-24T13:00:00+00:00",
+                "status": {"short": "1H", "elapsed": 30},
+            },
+            "league": {"id": league_id},
+            "teams": {
+                "home": {"id": "50", "name": "Parma"},
+                "away": {"id": "51", "name": "Sassuolo"},
+            },
+            "goals": {"home": 1, "away": 0},
+            "events": [],
+        }
 
 
 if __name__ == "__main__":

@@ -579,15 +579,20 @@ async def fetch_all_leagues_with_summary(
     normalized: list[dict] = []
     success_count = 0
     failure_count = 0
+    succeeded_league_ids: list[int] = []
+    failed_league_ids: list[int] = []
     for league_id, result in zip(league_ids, results):
         if isinstance(result, Exception):
             failure_count += 1
+            failed_league_ids.append(league_id)
             logger.warning(f"espn_client: Exception for league {league_id}: {result}")
             continue
         if result.get("ok"):
             success_count += 1
+            succeeded_league_ids.append(league_id)
         else:
             failure_count += 1
+            failed_league_ids.append(league_id)
         for event in result.get("events", []):
             match = _normalize_event(event, league_id)
             if match is not None:
@@ -597,4 +602,6 @@ async def fetch_all_leagues_with_summary(
         "matches": normalized,
         "success_count": success_count,
         "failure_count": failure_count,
+        "succeeded_league_ids": succeeded_league_ids,
+        "failed_league_ids": failed_league_ids,
     }

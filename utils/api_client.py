@@ -105,6 +105,14 @@ async def fetch_fixture_by_id(session: aiohttp.ClientSession, fixture_id: int) -
 
     return payload
 
+async def fetch_fixture_events(session: aiohttp.ClientSession, fixture_id: int) -> dict | None:
+    """
+    Fetches events for a specific API-Football fixture ID.
+    Returns the full JSON payload (dict) or None on error.
+    """
+    url = f"https://v3.football.api-sports.io/fixtures/events?fixture={fixture_id}"
+    return await _make_request(session, url)
+
 async def fetch_next_team_fixture(session: aiohttp.ClientSession, team_id: int) -> dict | None:
     """
     Fetches the next 'Not Started' fixture for a specific team in the current season.
