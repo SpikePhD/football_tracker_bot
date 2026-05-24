@@ -237,6 +237,7 @@ async def update_match_data(
 
         if not player_name or not team_id:
             continue
+        team_id = str(team_id)
 
         if team_id not in player_stats_updates:
             player_stats_updates[team_id] = {}
@@ -416,7 +417,13 @@ async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> None:
     home_id = str(match["teams"]["home"]["id"])
     away_id = str(match["teams"]["away"]["id"])
 
-    # Store match
+    if match_id in memory["matches"]:
+        memory["matches"][match_id] = update_result["match"]
+        save_memory(memory)
+        logger.info(f"Updated stored FT match without recounting stats: {match_id}")
+        return
+
+    # Store match and count its team/player stats once.
     memory["matches"][match_id] = update_result["match"]
 
     # Initialize teams if not present

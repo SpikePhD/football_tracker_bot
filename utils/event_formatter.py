@@ -28,7 +28,10 @@ def normalize_api_football_events(raw_events: list) -> list:
         {
             "time": {"elapsed": e.get("time", {}).get("elapsed", "?")},
             "player": {"name": e.get("player", {}).get("name", "N/A")},
-            "team": {"name": e.get("team", {}).get("name")},
+            "team": {
+                "id": e.get("team", {}).get("id"),
+                "name": e.get("team", {}).get("name"),
+            },
             "type": e.get("type"),
             "detail": e.get("detail"),
         }

@@ -134,6 +134,11 @@ def build_combined_matches_message(football_fixtures: list, tennis_matches: list
 
 
 async def build_combined_matches_message_from_api(session) -> str:
+    _, _, content = await fetch_combined_matches_snapshot(session)
+    return content
+
+
+async def fetch_combined_matches_snapshot(session) -> tuple[list, list, str]:
     football_fixtures = []
     tennis_matches = []
 
@@ -148,7 +153,11 @@ async def build_combined_matches_message_from_api(session) -> str:
     except Exception as e:
         logger.error(f"Failed to fetch tennis snapshot: {e}", exc_info=True)
 
-    return build_combined_matches_message(football_fixtures, tennis_matches)
+    return (
+        football_fixtures,
+        tennis_matches,
+        build_combined_matches_message(football_fixtures, tennis_matches),
+    )
 
 
 def _is_tennis_today(match: dict) -> bool:

@@ -26,7 +26,8 @@ from modules.power_manager import setup_power_management
 from modules.scheduler import schedule_day
 from modules.bot_mode import is_verbose, get_mode
 from modules.discord_poster import post_new_general_message
-from cogs.matches import build_combined_matches_message_from_api
+from modules.ft_handler import seed_already_announced_ft
+from cogs.matches import fetch_combined_matches_snapshot
 from cogs.version import get_version_info
 from utils.time_utils import italy_tz
 
@@ -147,8 +148,11 @@ async def on_ready():
             logger.info(f"📢 Startup broadcast skipped (mode: {get_mode()}).")
         else:
             try:
-                content = f"{greet_message()}\n\n{await build_combined_matches_message_from_api(bot.http_session)}"
-                await post_new_general_message(bot, CHANNEL_ID, content=content)
+                football_fixtures, _, snapshot = await fetch_combined_matches_snapshot(bot.http_session)
+                content = f"{greet_message()}\n\n{snapshot}"
+                sent = await post_new_general_message(bot, CHANNEL_ID, content=content)
+                if sent is not None:
+                    seed_already_announced_ft(football_fixtures)
             except discord.Forbidden:
                 logger.error(f"❌ Missing permissions to send greeting message to channel ID: {CHANNEL_ID}.")
             except Exception as e:

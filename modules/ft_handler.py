@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 
 from config import CHANNEL_ID
 from modules.bot_mode import is_silent
+from modules.storage import load, save
 from utils.time_utils import italy_now
 from utils.event_formatter import format_match_events, event_completeness_note, normalize_api_football_events
 from modules.discord_poster import post_new_general_message
@@ -15,13 +16,64 @@ logger = logging.getLogger(__name__)
 
 tracked_matches = {}  # {match_id: {"exp_ft": datetime, "initial_score_at_tracking": {...}}}
 _already_announced_ft: set = set()  # match IDs that have already received a FT announcement
+_FT_STATE_FILE = "ft_state.json"
+_FT_STATE_DEFAULT = {
+    "announced_ids": [],
+    "last_reset_date": None,
+}
+_ft_state_loaded = False
+_last_reset_date: str | None = None
+
+
+def _load_ft_state_once() -> None:
+    global _ft_state_loaded, _last_reset_date
+    if _ft_state_loaded:
+        return
+    state = load(_FT_STATE_FILE, _FT_STATE_DEFAULT)
+    _already_announced_ft.update(str(mid) for mid in state.get("announced_ids", []))
+    _last_reset_date = state.get("last_reset_date")
+    _ft_state_loaded = True
+
+
+def _persist_ft_state() -> None:
+    save(
+        _FT_STATE_FILE,
+        {
+            "announced_ids": sorted(_already_announced_ft),
+            "last_reset_date": _last_reset_date,
+        },
+    )
+
+
+def _ensure_ft_state_current_date() -> None:
+    global _last_reset_date
+    _load_ft_state_once()
+    today_str = italy_now().date().isoformat()
+    if _last_reset_date == today_str:
+        return
+    _already_announced_ft.clear()
+    _last_reset_date = today_str
+    _persist_ft_state()
+    logger.info("Cleared persisted FT announcement state for the new day.")
+
+
+def mark_ft_announced(match_id) -> None:
+    """Mark a Full-Time match as announced for today's Italy date."""
+    if match_id is None:
+        return
+    _ensure_ft_state_current_date()
+    mid = str(match_id)
+    if mid in _already_announced_ft:
+        return
+    _already_announced_ft.add(mid)
+    _persist_ft_state()
 
 
 def clear_tracked_matches_today():
-    global tracked_matches, _already_announced_ft
-    logger.info("ðŸ”„ Clearing 'tracked_matches' dictionary for the new day.")
+    global tracked_matches
+    logger.info("ðŸ”„ Clearing 'tracked_matches' dictionary for the schedule cycle.")
     tracked_matches.clear()
-    _already_announced_ft.clear()
+    _ensure_ft_state_current_date()
 
 
 def seed_already_announced_ft(fixtures: list) -> None:
@@ -30,13 +82,16 @@ def seed_already_announced_ft(fixtures: list) -> None:
     scheduler starts. Prevents re-announcing results already visible in the
     startup/morning broadcast message.
     """
-    global _already_announced_ft
+    _ensure_ft_state_current_date()
     count = 0
     for match in fixtures:
         if match.get("fixture", {}).get("status", {}).get("short") == "FT":
             mid = match["fixture"].get("id")
             if mid:
-                _already_announced_ft.add(str(mid))
+                before_count = len(_already_announced_ft)
+                mark_ft_announced(mid)
+                if len(_already_announced_ft) == before_count:
+                    continue
                 count += 1
     if count:
         logger.info(f"ðŸŒ± Seeded {count} already-FT match IDs (will not re-announce).")
@@ -126,7 +181,8 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
         )
 
     logger.info(f"ðŸ“¢ Posting FT result: {ft_message}")
-    await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
+    sent = await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
+    return sent is not None
 
 
 # â”€â”€ Main FT detection (dual-path) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -143,6 +199,7 @@ async def fetch_and_post_ft(bot: discord.Client):
 
     from modules import api_provider  # late import to avoid circular dependency
 
+    _ensure_ft_state_current_date()
     current_time = italy_now()
 
     if api_provider.is_espn_healthy():
@@ -166,8 +223,8 @@ async def fetch_and_post_ft(bot: discord.Client):
                 continue
 
             match_details = finished_by_id[match_id]
-            await _post_ft_from_data(bot, match_details)
-            _already_announced_ft.add(match_id)
+            if await _post_ft_from_data(bot, match_details):
+                mark_ft_announced(match_id)
             del tracked_matches[match_id]
 
         # Orphan FT detection: matches that reached FT without being seen as LIVE
@@ -177,8 +234,8 @@ async def fetch_and_post_ft(bot: discord.Client):
             if mid in tracked_matches or mid in _already_announced_ft:
                 continue
             logger.info(f"ðŸ†• [Orphan FT] Announcing untracked FT match {mid}.")
-            await _post_ft_from_data(bot, match)
-            _already_announced_ft.add(mid)
+            if await _post_ft_from_data(bot, match):
+                mark_ft_announced(mid)
 
     else:
         # â”€â”€ API-Football fallback path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -237,7 +294,8 @@ async def fetch_and_post_ft(bot: discord.Client):
                 "goals": match_details_raw.get("goals", {"home": "?", "away": "?"}),
                 "events": normalized_events,
             }
-            await _post_ft_from_data(bot, normalized)
+            if await _post_ft_from_data(bot, normalized):
+                mark_ft_announced(match_id)
             del tracked_matches[match_id]
 
 

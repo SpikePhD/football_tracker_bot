@@ -76,7 +76,7 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
             events.append({
                 "time": {"elapsed": clock_val},
                 "player": {"name": player_name},
-                "team": {"name": team_name},
+                "team": {"id": team_id, "name": team_name},
                 "type": "Goal",
                 "detail": "Normal Goal",
             })
@@ -84,7 +84,7 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
             events.append({
                 "time": {"elapsed": clock_val},
                 "player": {"name": player_name},
-                "team": {"name": team_name},
+                "team": {"id": team_id, "name": team_name},
                 "type": "Goal",
                 "detail": "Penalty",
             })
@@ -92,7 +92,7 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
             events.append({
                 "time": {"elapsed": clock_val},
                 "player": {"name": player_name},
-                "team": {"name": team_name},
+                "team": {"id": team_id, "name": team_name},
                 "type": "Goal",
                 "detail": "Own Goal",
             })
@@ -100,7 +100,7 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
             events.append({
                 "time": {"elapsed": clock_val},
                 "player": {"name": player_name},
-                "team": {"name": team_name},
+                "team": {"id": team_id, "name": team_name},
                 "type": "Card",
                 "detail": "Red Card",
             })
@@ -140,6 +140,8 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
             away.get("team", {}).get("displayName")
             or away.get("team", {}).get("name", "Away")
         )
+        home_team_id = home.get("team", {}).get("id")
+        away_team_id = away.get("team", {}).get("id")
 
         # Status
         status_obj = espn_event.get("status", {})
@@ -180,8 +182,8 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
                 "status": {"short": status_short, "elapsed": elapsed_min},
             },
             "teams": {
-                "home": {"name": home_team_name},
-                "away": {"name": away_team_name},
+                "home": {"id": home_team_id, "name": home_team_name},
+                "away": {"id": away_team_id, "name": away_team_name},
             },
             "goals": {
                 "home": home_score,
@@ -506,6 +508,25 @@ async def fetch_scoreboard(
     date_str: YYYYMMDD format. Omit for today's matches.
     Returns empty list on any error.
     """
+    try:
+        result = await fetch_scoreboard_result(session, slug, date_str)
+        return result["events"]
+    except asyncio.TimeoutError:
+        logger.warning(f"espn_client: Timeout fetching {slug} scoreboard.")
+        return []
+    except Exception as e:
+        logger.warning(f"espn_client: Error fetching {slug} scoreboard: {e}")
+        return []
+
+
+async def fetch_scoreboard_result(
+    session: aiohttp.ClientSession,
+    slug: str,
+    date_str: str | None = None,
+) -> dict:
+    """
+    Fetch raw ESPN events and report whether the league request succeeded.
+    """
     url = f"{ESPN_BASE}/{slug}/scoreboard"
     if date_str:
         url += f"?dates={date_str}"
@@ -514,15 +535,15 @@ async def fetch_scoreboard(
         async with session.get(url, timeout=ESPN_TIMEOUT) as response:
             if response.status != 200:
                 logger.warning(f"espn_client: HTTP {response.status} for {slug} scoreboard.")
-                return []
+                return {"ok": False, "events": []}
             data = await response.json(content_type=None)
-            return data.get("events", [])
+            return {"ok": True, "events": data.get("events", [])}
     except asyncio.TimeoutError:
         logger.warning(f"espn_client: Timeout fetching {slug} scoreboard.")
-        return []
+        return {"ok": False, "events": []}
     except Exception as e:
         logger.warning(f"espn_client: Error fetching {slug} scoreboard: {e}")
-        return []
+        return {"ok": False, "events": []}
 
 
 async def fetch_all_leagues(
@@ -535,8 +556,20 @@ async def fetch_all_leagues(
     Returns a combined list of normalized match dicts.
     Raises no exceptions — errors per-league are logged and skipped.
     """
+    summary = await fetch_all_leagues_with_summary(session, slug_map, date_str)
+    return summary["matches"]
+
+
+async def fetch_all_leagues_with_summary(
+    session: aiohttp.ClientSession,
+    slug_map: dict,  # {league_id: slug}
+    date_str: str | None = None,
+) -> dict:
+    """
+    Concurrently fetch scoreboards and return normalized matches plus request health.
+    """
     tasks = [
-        fetch_scoreboard(session, slug, date_str)
+        fetch_scoreboard_result(session, slug, date_str)
         for slug in slug_map.values()
     ]
     league_ids = list(slug_map.keys())
@@ -544,13 +577,24 @@ async def fetch_all_leagues(
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     normalized: list[dict] = []
+    success_count = 0
+    failure_count = 0
     for league_id, result in zip(league_ids, results):
         if isinstance(result, Exception):
+            failure_count += 1
             logger.warning(f"espn_client: Exception for league {league_id}: {result}")
             continue
-        for event in result:
+        if result.get("ok"):
+            success_count += 1
+        else:
+            failure_count += 1
+        for event in result.get("events", []):
             match = _normalize_event(event, league_id)
             if match is not None:
                 normalized.append(match)
 
-    return normalized
+    return {
+        "matches": normalized,
+        "success_count": success_count,
+        "failure_count": failure_count,
+    }

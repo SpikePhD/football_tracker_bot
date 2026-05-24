@@ -176,34 +176,42 @@ async def _get_cached_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
     date_str = today.replace("-", "")  # YYYYMMDD
 
     try:
-        results = await espn_client.fetch_all_leagues(session, LEAGUE_SLUG_MAP, date_str)
+        summary = await espn_client.fetch_all_leagues_with_summary(session, LEAGUE_SLUG_MAP, date_str)
+        results = summary["matches"]
+        success_count = summary["success_count"]
+        failure_count = summary["failure_count"]
     except Exception as e:
         logger.error(f"[APIProvider] Unexpected error from espn_client: {e}", exc_info=True)
         results = []
+        success_count = 0
+        failure_count = len(LEAGUE_SLUG_MAP)
 
-    if results or _cache_date != today:
-        # Accept empty list as valid (no matches today) only on a new day;
-        # on the same day, an empty result after a non-empty cache suggests a transient failure.
-        if results:
-            _mark_espn_success()
-            _cache = results
-            _cache_date = today
-            _cache_ts = now
-            logger.info(f"[APIProvider] ESPN scoreboard fetched: {len(results)} matches across all leagues.")
-        elif _cache_date != today:
-            # New day, ESPN returned empty — could be genuinely no matches
-            _mark_espn_success()
-            _cache = []
-            _cache_date = today
-            _cache_ts = now
-            logger.info("[APIProvider] ESPN returned 0 matches for today (may be correct).")
-        else:
-            # Same day, empty result — treat as failure
-            logger.warning("[APIProvider] ESPN returned 0 matches (same day, previous cache had data) — treating as failure.")
-            _mark_espn_failure()
-    else:
-        # Empty on a new day where we have no prior cache — ambiguous
+    if success_count == 0:
+        logger.warning(
+            f"[APIProvider] ESPN scoreboard fetch had no successful league responses "
+            f"({failure_count} failed); treating as provider failure."
+        )
         _mark_espn_failure()
+        if _cache_date != today:
+            return []
+    elif results:
+        _mark_espn_success()
+        _cache = results
+        _cache_date = today
+        _cache_ts = now
+        logger.info(
+            f"[APIProvider] ESPN scoreboard fetched: {len(results)} matches "
+            f"({success_count} league responses ok, {failure_count} failed)."
+        )
+    else:
+        _mark_espn_success()
+        _cache = []
+        _cache_date = today
+        _cache_ts = now
+        logger.info(
+            f"[APIProvider] ESPN returned 0 matches for today "
+            f"({success_count} league responses ok, {failure_count} failed)."
+        )
 
     return _cache
 
@@ -546,4 +554,3 @@ async def fetch_tennis_upcoming(session: aiohttp.ClientSession, horizon_days: in
     """Tracked tennis matches upcoming within horizon_days."""
     matches = await _get_cached_tennis_scoreboard(session)
     return [m for m in matches if _is_future(m.get("start_time"), horizon_days)]
-
