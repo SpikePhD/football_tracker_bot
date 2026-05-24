@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -13,6 +14,15 @@ os.environ.setdefault("CHANNEL_ID", "123456789")
 
 
 class RegressionTests(unittest.TestCase):
+    def setUp(self):
+        api_provider = sys.modules.get("modules.api_provider")
+        if api_provider is not None:
+            api_provider._enrich_retry_states.clear()
+            api_provider._api_fixture_id_cache.clear()
+            api_provider._api_live_fixtures_cache = None
+            api_provider._api_live_fixtures_cache_ts = None
+            api_provider._api_fixture_events_cache.clear()
+
     def test_api_football_event_normalization_preserves_team_id(self):
         from utils.event_formatter import normalize_api_football_events
 
@@ -164,6 +174,85 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(resolved, 999999)
         live_fetch.assert_awaited_once_with(None)
         make_request.assert_not_awaited()
+
+    def test_live_mapping_reuses_cached_live_feed_for_multiple_fixtures(self):
+        from modules import api_provider
+
+        match_one = self._espn_match(fixture_id="737155")
+        match_two = self._espn_match(fixture_id="737156")
+        match_two["teams"]["home"]["name"] = "Milan"
+        match_two["teams"]["away"]["name"] = "Inter"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 999999, "date": "2026-05-24T13:00:00+00:00"},
+                    "league": {"id": 135},
+                    "teams": {
+                        "home": {"name": "Parma"},
+                        "away": {"name": "Sassuolo"},
+                    },
+                },
+                {
+                    "fixture": {"id": 999998, "date": "2026-05-24T13:00:00+00:00"},
+                    "league": {"id": 135},
+                    "teams": {
+                        "home": {"name": "AC Milan"},
+                        "away": {"name": "Internazionale"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with (
+                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value=live_payload)) as live_fetch,
+            ):
+                first = await api_provider.resolve_api_football_fixture_id(None, match_one)
+                second = await api_provider.resolve_api_football_fixture_id(None, match_two)
+                return first, second, live_fetch
+
+        first, second, live_fetch = asyncio.run(run())
+        self.assertEqual(first, 999999)
+        self.assertEqual(second, 999998)
+        self.assertEqual(live_fetch.await_count, 1)
+
+    def test_enrichment_reuses_complete_event_cache_without_refetching(self):
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="737155")
+        state = "737155:1:0:0"
+        api_goal = {
+            "time": {"elapsed": 26},
+            "player": {"name": "Scorer"},
+            "team": {"id": 50, "name": "Parma"},
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }
+
+        async def run():
+            api_provider._api_fixture_id_cache["737155"] = 999999
+            api_provider._enrich_retry_states[state] = {
+                "first_seen": datetime(2026, 5, 24, 15, 0, 0),
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "exhausted": False,
+            }
+            fetch_events = AsyncMock(return_value={"response": [api_goal]})
+            with (
+                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "fetch_fixture_events", fetch_events),
+            ):
+                first = await api_provider.enrich_fixture_events(None, match)
+                second = await api_provider.enrich_fixture_events(None, match)
+                return first, second, fetch_events
+
+        first, second, fetch_events = asyncio.run(run())
+        self.assertEqual(first["events"][0]["player"]["name"], "Scorer")
+        self.assertEqual(second["events"][0]["player"]["name"], "Scorer")
+        self.assertEqual(fetch_events.await_count, 1)
 
     def test_enrichment_does_not_use_espn_id_as_api_football_id(self):
         from modules import api_provider

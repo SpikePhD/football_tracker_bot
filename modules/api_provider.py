@@ -64,7 +64,12 @@ _enrich_tick_count: int = 0
 _enrich_retry_states: dict[str, dict] = {}
 _api_fixture_id_cache: dict[str, int] = {}
 _api_fixture_id_cache_date: str | None = None
+_api_live_fixtures_cache: dict | None = None
+_api_live_fixtures_cache_ts: datetime | None = None
+_api_fixture_events_cache: dict[int, dict] = {}
 API_ENRICH_RETRY_DELAYS_SEC = [10, 45, 120, 300, 900]
+API_LIVE_FIXTURES_CACHE_TTL_SEC = 60
+API_FIXTURE_EVENTS_CACHE_TTL_SEC = 90
 LIVE_STATUS_SHORTS = {"1H", "HT", "2H", "ET", "PEN"}
 
 
@@ -326,9 +331,13 @@ async def fetch_next_match_for_team(session: aiohttp.ClientSession, team_name: s
 
 def _reset_enrich_state_for_today() -> None:
     global _enrich_attempted_date, _api_fixture_id_cache_date
+    global _api_live_fixtures_cache, _api_live_fixtures_cache_ts
     today = get_italy_date_string()
     if _enrich_attempted_date != today:
         _enrich_retry_states.clear()
+        _api_fixture_events_cache.clear()
+        _api_live_fixtures_cache = None
+        _api_live_fixtures_cache_ts = None
         _enrich_attempted_date = today
     if _api_fixture_id_cache_date != today:
         _api_fixture_id_cache.clear()
@@ -424,6 +433,149 @@ def _is_live_espn_match(match: dict) -> bool:
     return status_short in LIVE_STATUS_SHORTS
 
 
+def _goal_event_count(events: list) -> int:
+    return sum(1 for e in events if e.get("type") == "Goal")
+
+
+def _fresh_age_seconds(fetched_at: datetime | None, now_local: datetime) -> float | None:
+    if fetched_at is None:
+        return None
+    return (now_local - fetched_at).total_seconds()
+
+
+async def _get_api_football_live_payload(session: aiohttp.ClientSession) -> dict | None:
+    global _api_live_fixtures_cache, _api_live_fixtures_cache_ts
+    now_local = italy_now()
+    age = _fresh_age_seconds(_api_live_fixtures_cache_ts, now_local)
+    if (
+        _api_live_fixtures_cache is not None
+        and age is not None
+        and age < API_LIVE_FIXTURES_CACHE_TTL_SEC
+    ):
+        logger.info(
+            f"[Enrich] Using cached API-Football /fixtures?live=all payload "
+            f"({age:.0f}s old)."
+        )
+        return _api_live_fixtures_cache
+
+    logger.info("[Enrich] Requesting API-Football /fixtures?live=all for live fixture mapping.")
+    payload = await api_client.fetch_live_fixtures_payload(session)
+    if payload and isinstance(payload.get("response"), list):
+        _api_live_fixtures_cache = payload
+        _api_live_fixtures_cache_ts = now_local
+        logger.info(
+            f"[Enrich] Cached API-Football /fixtures?live=all payload with "
+            f"{len(payload.get('response', []))} live fixture(s)."
+        )
+    return payload
+
+
+def _get_cached_complete_fixture_events(
+    api_fixture_id: int,
+    total_goals: int,
+    now_local: datetime,
+) -> list | None:
+    cached = _api_fixture_events_cache.get(api_fixture_id)
+    if not cached:
+        return None
+
+    age = _fresh_age_seconds(cached.get("fetched_at"), now_local)
+    if age is None or age >= API_FIXTURE_EVENTS_CACHE_TTL_SEC:
+        logger.info(
+            f"[Enrich] Cached events for API-Football fixture {api_fixture_id} "
+            f"are stale; will refresh on the next allowed attempt."
+        )
+        return None
+
+    events = cached.get("events", [])
+    cached_goals = _goal_event_count(events)
+    if cached_goals >= total_goals:
+        logger.info(
+            f"[Enrich] Using cached API-Football events for fixture {api_fixture_id} "
+            f"({age:.0f}s old, {cached_goals}/{total_goals} goals)."
+        )
+        return events
+
+    logger.info(
+        f"[Enrich] Cached API-Football events for fixture {api_fixture_id} "
+        f"are still incomplete ({cached_goals}/{total_goals} goals); "
+        f"will refresh on the next allowed attempt."
+    )
+    return None
+
+
+async def _fetch_fixture_events_for_enrichment(
+    session: aiohttp.ClientSession,
+    api_fixture_id: int,
+    total_goals: int,
+) -> tuple[list | None, bool]:
+    now_local = italy_now()
+    cached_events = _get_cached_complete_fixture_events(api_fixture_id, total_goals, now_local)
+    if cached_events is not None:
+        return cached_events, True
+
+    logger.info(f"[Enrich] Requesting API-Football events for fixture {api_fixture_id}.")
+    payload = await api_client.fetch_fixture_events(session, api_fixture_id)
+    if not payload:
+        return None, False
+
+    response = payload.get("response", [])
+    if not isinstance(response, list):
+        return None, False
+
+    events = normalize_api_football_events(response)
+    _api_fixture_events_cache[api_fixture_id] = {
+        "fetched_at": now_local,
+        "events": events,
+    }
+    logger.info(
+        f"[Enrich] Cached API-Football events for fixture {api_fixture_id} "
+        f"({len(events)} event(s), {_goal_event_count(events)}/{total_goals} goals)."
+    )
+    return events, False
+
+
+def _merge_enriched_events_if_better(
+    match: dict,
+    enriched_events: list,
+    total_goals: int,
+    goal_events: int,
+    api_fixture_id: int,
+    source_label: str,
+) -> dict | None:
+    events = match.get("events", [])
+    af_goals = _goal_event_count(enriched_events)
+    fixture_id = match.get("fixture", {}).get("id")
+
+    if af_goals <= goal_events:
+        logger.info(
+            f"[Enrich] {source_label} for API-Football fixture {api_fixture_id} "
+            f"has {af_goals} goal event(s) for ESPN fixture {fixture_id}; "
+            f"ESPN has {goal_events}. Keeping ESPN events."
+        )
+        return None
+
+    if abs(total_goals - af_goals) > abs(total_goals - goal_events):
+        logger.info(
+            f"[Enrich] {source_label} for API-Football fixture {api_fixture_id} "
+            f"has {af_goals}/{total_goals} goal events, farther from the score "
+            f"than ESPN's {goal_events}/{total_goals}. Keeping ESPN events."
+        )
+        return None
+
+    espn_non_goal_events = [e for e in events if e.get("type") != "Goal"]
+    api_non_goal_events = [e for e in enriched_events if e.get("type") != "Goal"]
+    if espn_non_goal_events and not api_non_goal_events:
+        enriched_events = [*enriched_events, *espn_non_goal_events]
+
+    logger.info(
+        f"[Enrich] ESPN fixture {fixture_id}: replaced/merged {len(events)} ESPN events "
+        f"with {len(enriched_events)} event(s) from {source_label} "
+        f"for API-Football fixture {api_fixture_id} ({af_goals}/{total_goals} goals)."
+    )
+    return {**match, "events": enriched_events}
+
+
 def _match_api_fixture_candidate(
     espn_match: dict,
     candidates: list,
@@ -476,7 +628,7 @@ async def _resolve_live_api_football_fixture_id(
     espn_fixture_id: str,
     league_id: int,
 ) -> int | None:
-    payload = await api_client.fetch_live_fixtures_payload(session)
+    payload = await _get_api_football_live_payload(session)
     candidates = payload.get("response", []) if payload else []
     if not isinstance(candidates, list) or not candidates:
         logger.info(
@@ -515,6 +667,10 @@ async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_m
         logger.info("[Enrich] Cannot resolve API-Football fixture ID: ESPN fixture ID missing.")
         return None
     if espn_fixture_id in _api_fixture_id_cache:
+        logger.info(
+            f"[Enrich] Using cached ESPN -> API-Football fixture mapping: "
+            f"{espn_fixture_id} -> {_api_fixture_id_cache[espn_fixture_id]}"
+        )
         return _api_fixture_id_cache[espn_fixture_id]
 
     try:
@@ -570,7 +726,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
 
     try:
         total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
-        goal_events = sum(1 for e in events if e.get("type") == "Goal")
+        goal_events = _goal_event_count(events)
         if goal_events >= total_goals:
             return match
         missing = total_goals - goal_events
@@ -583,10 +739,29 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
 
     global _enrich_attempted_date, _enrich_tick_key, _enrich_tick_count
     _reset_enrich_state_for_today()
+    now_local = italy_now()
+
+    cached_api_fixture_id = _api_fixture_id_cache.get(str(fixture_id))
+    if cached_api_fixture_id is not None:
+        cached_events = _get_cached_complete_fixture_events(
+            cached_api_fixture_id,
+            total_goals,
+            now_local,
+        )
+        if cached_events is not None:
+            merged = _merge_enriched_events_if_better(
+                match,
+                cached_events,
+                total_goals,
+                goal_events,
+                cached_api_fixture_id,
+                "cached API-Football events",
+            )
+            if merged is not None:
+                return merged
 
     enrich_state = f"{fixture_id}:{goals.get('home')}:{goals.get('away')}:{len(events)}"
     retry_state = _enrich_retry_states.get(enrich_state)
-    now_local = italy_now()
     if retry_state is None:
         retry_state = {
             "first_seen": now_local,
@@ -642,47 +817,33 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
             return match
 
         logger.info(
-            f"[Enrich] Fetching API-Football events for mapped fixture "
+            f"[Enrich] Loading API-Football events for mapped fixture "
             f"{api_fixture_id} (ESPN fixture {fixture_id}; {missing} missing goal(s))"
         )
-        payload = await api_client.fetch_fixture_events(session, api_fixture_id)
-        if not payload:
-            return match
-        response = payload.get("response", [])
-        if not isinstance(response, list):
-            return match
-
-        enriched_events = normalize_api_football_events(response)
-        af_goals = sum(1 for e in enriched_events if e.get("type") == "Goal")
-        if af_goals <= goal_events:
-            logger.info(
-                f"[Enrich] API-Football fixture {api_fixture_id} returned {af_goals} goal event(s) "
-                f"for ESPN fixture {fixture_id}; ESPN has {goal_events}. Keeping ESPN events."
-            )
-            if attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
-                retry_state["exhausted"] = True
-            return match
-
-        if abs(total_goals - af_goals) > abs(total_goals - goal_events):
-            logger.info(
-                f"[Enrich] API-Football fixture {api_fixture_id} has {af_goals}/{total_goals} "
-                f"goal events, farther from the score than ESPN's {goal_events}/{total_goals}. "
-                f"Keeping ESPN events."
-            )
-            return match
-
-        espn_non_goal_events = [e for e in events if e.get("type") != "Goal"]
-        api_non_goal_events = [e for e in enriched_events if e.get("type") != "Goal"]
-        if espn_non_goal_events and not api_non_goal_events:
-            enriched_events = [*enriched_events, *espn_non_goal_events]
-
-        retry_state["exhausted"] = True
-        logger.info(
-            f"[Enrich] ESPN fixture {fixture_id}: replaced/merged {len(events)} ESPN events "
-            f"with {len(enriched_events)} event(s) from API-Football fixture "
-            f"{api_fixture_id} ({af_goals}/{total_goals} goals)."
+        enriched_events, from_cache = await _fetch_fixture_events_for_enrichment(
+            session,
+            api_fixture_id,
+            total_goals,
         )
-        return {**match, "events": enriched_events}
+        if enriched_events is None:
+            return match
+
+        source_label = "cached API-Football events" if from_cache else "API-Football events"
+        merged = _merge_enriched_events_if_better(
+            match,
+            enriched_events,
+            total_goals,
+            goal_events,
+            api_fixture_id,
+            source_label,
+        )
+        if merged is not None:
+            retry_state["exhausted"] = True
+            return merged
+
+        if attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
+            retry_state["exhausted"] = True
+        return match
     except Exception as e:
         logger.warning(f"[Enrich] Failed to enrich ESPN fixture {fixture_id}: {e}")
         return match
