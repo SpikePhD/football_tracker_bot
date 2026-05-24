@@ -476,12 +476,12 @@ async def _resolve_live_api_football_fixture_id(
     espn_fixture_id: str,
     league_id: int,
 ) -> int | None:
-    payload = await api_client.fetch_live_fixtures_for_league(session, league_id)
+    payload = await api_client.fetch_live_fixtures_payload(session)
     candidates = payload.get("response", []) if payload else []
     if not isinstance(candidates, list) or not candidates:
         logger.info(
             f"[Enrich] No API-Football live fixture candidates for ESPN fixture "
-            f"{espn_fixture_id} in league {league_id}."
+            f"{espn_fixture_id}; /fixtures?live=all returned no live fixtures."
         )
         return None
 

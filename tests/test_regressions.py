@@ -112,7 +112,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(payload, {"response": []})
         self.assertIn("/fixtures/events?fixture=123", captured["url"])
 
-    def test_fetch_live_fixtures_for_league_uses_live_endpoint(self):
+    def test_fetch_live_fixtures_payload_uses_live_all_endpoint(self):
         from utils import api_client
 
         captured = {}
@@ -123,16 +123,24 @@ class RegressionTests(unittest.TestCase):
 
         async def run():
             with patch.object(api_client, "_make_request", fake_make_request):
-                return await api_client.fetch_live_fixtures_for_league(None, 135)
+                return await api_client.fetch_live_fixtures_payload(None)
 
         payload = asyncio.run(run())
         self.assertEqual(payload, {"response": []})
-        self.assertIn("/fixtures?live=135", captured["url"])
+        self.assertIn("/fixtures?live=all", captured["url"])
 
     def test_live_mapping_uses_api_football_live_feed_not_season_lookup(self):
         from modules import api_provider
 
         match = self._espn_match(fixture_id="737155")
+        other_live_fixture = {
+            "fixture": {"id": 111111, "date": "2026-05-24T13:00:00+00:00"},
+            "league": {"id": 39},
+            "teams": {
+                "home": {"name": "Parma"},
+                "away": {"name": "Sassuolo"},
+            },
+        }
         live_fixture = {
             "fixture": {"id": 999999, "date": "2026-05-24T13:00:00+00:00"},
             "league": {"id": 135},
@@ -146,7 +154,7 @@ class RegressionTests(unittest.TestCase):
             api_provider._reset_enrich_state_for_today()
             api_provider._api_fixture_id_cache.clear()
             with (
-                patch.object(api_provider.api_client, "fetch_live_fixtures_for_league", AsyncMock(return_value={"response": [live_fixture]})) as live_fetch,
+                patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value={"response": [other_live_fixture, live_fixture]})) as live_fetch,
                 patch.object(api_provider.api_client, "_make_request", AsyncMock(return_value={"response": []})) as make_request,
             ):
                 resolved = await api_provider.resolve_api_football_fixture_id(None, match)
@@ -154,7 +162,7 @@ class RegressionTests(unittest.TestCase):
 
         resolved, live_fetch, make_request = asyncio.run(run())
         self.assertEqual(resolved, 999999)
-        live_fetch.assert_awaited_once_with(None, 135)
+        live_fetch.assert_awaited_once_with(None)
         make_request.assert_not_awaited()
 
     def test_enrichment_does_not_use_espn_id_as_api_football_id(self):
