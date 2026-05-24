@@ -95,6 +95,14 @@ async def fetch_live_fixtures(session: aiohttp.ClientSession) -> list:
         return [f for f in fixtures if f["league"]["id"] in TRACKED_LEAGUE_IDS]
     return []
 
+async def fetch_live_fixtures_for_league(session: aiohttp.ClientSession, league_id: int) -> dict | None:
+    """
+    Fetches currently live fixtures for one API-Football league ID.
+    Returns the full JSON payload so callers can inspect the response shape.
+    """
+    url = f"https://v3.football.api-sports.io/fixtures?live={league_id}"
+    return await _make_request(session, url)
+
 async def fetch_fixture_by_id(session: aiohttp.ClientSession, fixture_id: int) -> dict | None:
     """
     Fetches a specific fixture by ID.

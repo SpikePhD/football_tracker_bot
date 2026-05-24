@@ -65,6 +65,7 @@ _enrich_retry_states: dict[str, dict] = {}
 _api_fixture_id_cache: dict[str, int] = {}
 _api_fixture_id_cache_date: str | None = None
 API_ENRICH_RETRY_DELAYS_SEC = [10, 45, 120, 300, 900]
+LIVE_STATUS_SHORTS = {"1H", "HT", "2H", "ET", "PEN"}
 
 
 # ── Health management ─────────────────────────────────────────────────────────
@@ -418,6 +419,90 @@ def _candidate_time_delta_minutes(espn_dt: datetime | None, candidate: dict) -> 
     return abs((candidate_dt - espn_dt).total_seconds()) / 60
 
 
+def _is_live_espn_match(match: dict) -> bool:
+    status_short = match.get("fixture", {}).get("status", {}).get("short")
+    return status_short in LIVE_STATUS_SHORTS
+
+
+def _match_api_fixture_candidate(
+    espn_match: dict,
+    candidates: list,
+    league_id: int,
+    max_delta_minutes: int = 120,
+) -> tuple[int | None, float]:
+    espn_home = espn_match.get("teams", {}).get("home", {}).get("name")
+    espn_away = espn_match.get("teams", {}).get("away", {}).get("name")
+    espn_dt = _espn_fixture_datetime(espn_match)
+
+    best: tuple[float, dict] | None = None
+    for candidate in candidates:
+        try:
+            candidate_league_id = int(candidate.get("league", {}).get("id"))
+        except (TypeError, ValueError):
+            continue
+        if candidate_league_id != league_id:
+            continue
+
+        delta_minutes = _candidate_time_delta_minutes(espn_dt, candidate)
+        if delta_minutes > max_delta_minutes:
+            continue
+
+        candidate_home = candidate.get("teams", {}).get("home", {}).get("name")
+        candidate_away = candidate.get("teams", {}).get("away", {}).get("name")
+        home_score = _name_similarity(espn_home, candidate_home)
+        away_score = _name_similarity(espn_away, candidate_away)
+        if home_score < 0.70 or away_score < 0.70:
+            continue
+
+        average_name_score = (home_score + away_score) / 2
+        time_score = max(0.0, 1.0 - (delta_minutes / max_delta_minutes))
+        confidence = (average_name_score * 0.8) + (time_score * 0.2)
+        if best is None or confidence > best[0]:
+            best = (confidence, candidate)
+
+    if best is None or best[0] < 0.78:
+        return None, 0.0
+
+    api_fixture_id = best[1].get("fixture", {}).get("id")
+    try:
+        return int(api_fixture_id), best[0]
+    except (TypeError, ValueError):
+        return None, best[0]
+
+
+async def _resolve_live_api_football_fixture_id(
+    session: aiohttp.ClientSession,
+    espn_match: dict,
+    espn_fixture_id: str,
+    league_id: int,
+) -> int | None:
+    payload = await api_client.fetch_live_fixtures_for_league(session, league_id)
+    candidates = payload.get("response", []) if payload else []
+    if not isinstance(candidates, list) or not candidates:
+        logger.info(
+            f"[Enrich] No API-Football live fixture candidates for ESPN fixture "
+            f"{espn_fixture_id} in league {league_id}."
+        )
+        return None
+
+    api_fixture_id, confidence = _match_api_fixture_candidate(espn_match, candidates, league_id)
+    if api_fixture_id is None:
+        home = espn_match.get("teams", {}).get("home", {}).get("name")
+        away = espn_match.get("teams", {}).get("away", {}).get("name")
+        logger.info(
+            f"[Enrich] No confident API-Football live mapping for ESPN fixture "
+            f"{espn_fixture_id} ({home} vs {away}, league {league_id})."
+        )
+        return None
+
+    _api_fixture_id_cache[espn_fixture_id] = api_fixture_id
+    logger.info(
+        f"[Enrich] Mapped ESPN fixture {espn_fixture_id} -> API-Football live fixture "
+        f"{api_fixture_id} (confidence {confidence:.2f})"
+    )
+    return api_fixture_id
+
+
 async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_match: dict) -> int | None:
     """
     Map an ESPN fixture ID to API-Football's fixture ID using date, league,
@@ -438,6 +523,9 @@ async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_m
         logger.info(f"[Enrich] Cannot resolve API-Football fixture for ESPN fixture {espn_fixture_id}: league ID missing.")
         return None
 
+    if _is_live_espn_match(espn_match):
+        return await _resolve_live_api_football_fixture_id(session, espn_match, espn_fixture_id, league_id)
+
     match_date = _espn_fixture_date(espn_match)
     season = _season_for_match(espn_match)
     url = (
@@ -453,51 +541,21 @@ async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_m
         )
         return None
 
-    espn_home = espn_match.get("teams", {}).get("home", {}).get("name")
-    espn_away = espn_match.get("teams", {}).get("away", {}).get("name")
-    espn_dt = _espn_fixture_datetime(espn_match)
-
-    best: tuple[float, dict] | None = None
-    for candidate in candidates:
-        try:
-            candidate_league_id = int(candidate.get("league", {}).get("id"))
-        except (TypeError, ValueError):
-            continue
-        if candidate_league_id != league_id:
-            continue
-        delta_minutes = _candidate_time_delta_minutes(espn_dt, candidate)
-        if delta_minutes > 120:
-            continue
-
-        candidate_home = candidate.get("teams", {}).get("home", {}).get("name")
-        candidate_away = candidate.get("teams", {}).get("away", {}).get("name")
-        home_score = _name_similarity(espn_home, candidate_home)
-        away_score = _name_similarity(espn_away, candidate_away)
-        if home_score < 0.70 or away_score < 0.70:
-            continue
-
-        average_name_score = (home_score + away_score) / 2
-        time_score = max(0.0, 1.0 - (delta_minutes / 120))
-        confidence = (average_name_score * 0.8) + (time_score * 0.2)
-        if best is None or confidence > best[0]:
-            best = (confidence, candidate)
-
-    if best is None or best[0] < 0.78:
+    api_fixture_id, confidence = _match_api_fixture_candidate(espn_match, candidates, league_id)
+    if api_fixture_id is None:
+        espn_home = espn_match.get("teams", {}).get("home", {}).get("name")
+        espn_away = espn_match.get("teams", {}).get("away", {}).get("name")
         logger.info(
             f"[Enrich] No confident API-Football mapping for ESPN fixture "
             f"{espn_fixture_id} ({espn_home} vs {espn_away}, league {league_id})."
         )
         return None
 
-    api_fixture_id = best[1].get("fixture", {}).get("id")
-    try:
-        api_fixture_id = int(api_fixture_id)
-    except (TypeError, ValueError):
-        logger.info(f"[Enrich] API-Football mapping for ESPN fixture {espn_fixture_id} had no usable fixture ID.")
-        return None
-
     _api_fixture_id_cache[espn_fixture_id] = api_fixture_id
-    logger.info(f"[Enrich] Mapped ESPN fixture {espn_fixture_id} -> API-Football fixture {api_fixture_id}")
+    logger.info(
+        f"[Enrich] Mapped ESPN fixture {espn_fixture_id} -> API-Football fixture "
+        f"{api_fixture_id} (confidence {confidence:.2f})"
+    )
     return api_fixture_id
 
 
