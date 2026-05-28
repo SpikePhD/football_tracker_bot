@@ -102,6 +102,19 @@ API_FALLBACK_POLL_INTERVAL_SEC = int(_expect(provider_cfg, "fallback_poll_interv
 API_SCOREBOARD_CACHE_TTL_SEC = int(_expect(provider_cfg, "scoreboard_cache_ttl_sec", int, "operations.api_provider"))
 API_ENRICH_MAX_CALLS_PER_TICK = int(_expect(provider_cfg, "enrich_max_calls_per_tick", int, "operations.api_provider"))
 API_ENRICH_GRACE_SEC = int(_expect(provider_cfg, "enrich_grace_sec", int, "operations.api_provider"))
+API_ENRICH_DAILY_CALL_BUDGET = int(_expect(provider_cfg, "enrich_daily_call_budget", int, "operations.api_provider"))
+API_ENRICH_NEGATIVE_MAPPING_TTL_SEC = int(_expect(provider_cfg, "enrich_negative_mapping_ttl_sec", int, "operations.api_provider"))
+API_ENRICH_INCOMPLETE_EVENTS_COOLDOWN_SEC = int(_expect(provider_cfg, "enrich_incomplete_events_cooldown_sec", int, "operations.api_provider"))
+_enrich_retry_delays_raw = _expect(provider_cfg, "enrich_retry_delays_sec", list, "operations.api_provider")
+if (
+    not _enrich_retry_delays_raw
+    or any(not isinstance(v, int) or v < 0 for v in _enrich_retry_delays_raw)
+):
+    raise RuntimeError(
+        "config.json key 'operations.api_provider.enrich_retry_delays_sec' "
+        "must be a non-empty list of non-negative integers."
+    )
+API_ENRICH_RETRY_DELAYS_SEC = [int(v) for v in _enrich_retry_delays_raw]
 
 LOG_FILE_PATH = _expect(log_cfg, "file_path", str, "log")
 LOG_FILE_MAX_BYTES = int(_expect(log_cfg, "file_max_bytes", int, "log"))

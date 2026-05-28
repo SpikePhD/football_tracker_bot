@@ -1,3 +1,21 @@
+**Football Tracker Bot v3.4.0**
+Author: SpikePhD
+Documentation Refresh & Enrichment Quota Controls:
+
+• Documentation:
+  • Rewrote README.md with a fuller description of Marco Van Botten as a football, tennis, operations, and Q&A Discord bot.
+  • Added current command coverage, configuration model, provider model, enrichment controls, runtime state notes, and development checks.
+  • Expanded OPERATIONS.md with provider-status diagnostics, enrichment log markers, and API-Football quota tuning guidance.
+  • Expanded DEVELOPER.md with the current module architecture and provider/enrichment rules.
+• API-Football Enrichment Controls:
+  • Added a configurable daily enrichment call budget.
+  • Added negative ESPN-to-API-Football mapping caching.
+  • Added cooldown handling for incomplete API-Football event responses.
+  • Made enrichment retry delays configurable.
+  • Reduced repeated best-known-event reuse logging for identical fixture states.
+• Validation:
+  • Added regression tests for enrichment budget, negative mapping cache, incomplete event cooldown, and repeated-log suppression.
+
 **Football Tracker Bot v3.3.0**
 Author: SpikePhD
 Local LLM Integration (`!ask`):

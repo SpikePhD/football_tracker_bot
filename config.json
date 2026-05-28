@@ -95,7 +95,11 @@
       "fallback_poll_interval_sec": 480,
       "scoreboard_cache_ttl_sec": 55,
       "enrich_max_calls_per_tick": 2,
-      "enrich_grace_sec": 10
+      "enrich_grace_sec": 10,
+      "enrich_daily_call_budget": 100,
+      "enrich_negative_mapping_ttl_sec": 900,
+      "enrich_incomplete_events_cooldown_sec": 180,
+      "enrich_retry_delays_sec": [60, 180, 600, 1200]
     }
   },
   "log": {
