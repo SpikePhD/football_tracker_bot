@@ -711,6 +711,223 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(memory["teams"]["100"]["players"]["Scorer"]["goals"], 1)
         self.assertEqual(len(memory["matches"]), 1)
 
+    def test_match_memory_update_repairs_existing_teams_missing_stats(self):
+        from modules import football_memory
+
+        match = {
+            "fixture": {
+                "id": "m2",
+                "date": "2026-05-24T18:00:00+00:00",
+                "status": {"short": "FT"},
+            },
+            "league": {"id": 135},
+            "teams": {
+                "home": {"id": "100", "name": "Home"},
+                "away": {"id": "200", "name": "Away"},
+            },
+            "goals": {"home": 1, "away": 1},
+            "events": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            memory_path.write_text(
+                json.dumps(
+                    {
+                        "metadata": {},
+                        "leagues": {},
+                        "teams": {
+                            "100": {"name": "Home", "coach": "Coach", "players": {}},
+                            "200": {"name": "Away", "coach": "Coach", "players": {}},
+                        },
+                        "matches": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(memory["teams"]["100"]["stats"]["draws"], 1)
+        self.assertEqual(memory["teams"]["100"]["stats"]["goals_for"], 1)
+        self.assertEqual(memory["teams"]["200"]["stats"]["draws"], 1)
+        self.assertEqual(memory["teams"]["200"]["stats"]["goals_against"], 1)
+
+    def test_match_memory_update_repairs_existing_teams_missing_players(self):
+        from modules import football_memory
+
+        match = {
+            "fixture": {
+                "id": "m3",
+                "date": "2026-05-24T18:00:00+00:00",
+                "status": {"short": "FT"},
+            },
+            "league": {"id": 135},
+            "teams": {
+                "home": {"id": "100", "name": "Home"},
+                "away": {"id": "200", "name": "Away"},
+            },
+            "goals": {"home": 1, "away": 0},
+            "events": [
+                {
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                    "player": {"name": "Scorer"},
+                    "team": {"id": "100", "name": "Home"},
+                    "time": {"elapsed": 10},
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            memory_path.write_text(
+                json.dumps(
+                    {
+                        "metadata": {},
+                        "leagues": {},
+                        "teams": {
+                            "100": {
+                                "name": "Home",
+                                "coach": "Coach",
+                                "stats": {"wins": 0, "draws": 0, "losses": 0, "goals_for": 0, "goals_against": 0},
+                            },
+                            "200": {
+                                "name": "Away",
+                                "coach": "Coach",
+                                "stats": {"wins": 0, "draws": 0, "losses": 0, "goals_for": 0, "goals_against": 0},
+                            },
+                        },
+                        "matches": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(memory["teams"]["100"]["stats"]["wins"], 1)
+        self.assertEqual(memory["teams"]["100"]["players"]["Scorer"]["goals"], 1)
+        self.assertEqual(memory["teams"]["200"]["players"], {})
+
+    def test_team_info_refresh_preserves_existing_team_stats(self):
+        from modules import football_memory
+
+        async def fake_update_team_info(session, team_id, slug):
+            return {
+                "name": "Home FC",
+                "coach": "New Coach",
+                "players": {
+                    "Scorer": {"position": "Forward"},
+                    "New Player": {"position": "Midfielder"},
+                },
+                "last_updated": "2026-05-24T20:00:00+00:00",
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            memory_path.write_text(
+                json.dumps(
+                    {
+                        "metadata": {},
+                        "leagues": {
+                            "135": {
+                                "standings": [{"team_id": "100"}],
+                            }
+                        },
+                        "teams": {
+                            "100": {
+                                "name": "Home",
+                                "coach": "Old Coach",
+                                "players": {
+                                    "Scorer": {"goals": 3, "assists": 1, "yellow_cards": 0, "red_cards": 0}
+                                },
+                                "stats": {"wins": 2, "draws": 1, "losses": 0, "goals_for": 7, "goals_against": 3},
+                                "last_updated": "old",
+                            }
+                        },
+                        "matches": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(football_memory, "MEMORY_PATH", memory_path),
+                patch.object(football_memory, "update_team_info", fake_update_team_info),
+            ):
+                asyncio.run(football_memory.update_team_info_only(None))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        team = memory["teams"]["100"]
+        self.assertEqual(team["name"], "Home FC")
+        self.assertEqual(team["coach"], "New Coach")
+        self.assertEqual(team["stats"], {"wins": 2, "draws": 1, "losses": 0, "goals_for": 7, "goals_against": 3})
+        self.assertEqual(team["players"]["Scorer"]["goals"], 3)
+        self.assertEqual(team["players"]["Scorer"]["position"], "Forward")
+        self.assertIn("New Player", team["players"])
+
+    def test_all_memory_refresh_preserves_existing_team_stats(self):
+        from modules import football_memory
+
+        async def fake_update_league_standings(session, league_id, slug):
+            if league_id != 135:
+                return None
+            return {
+                "name": "Serie A",
+                "standings": [{"team_id": "100"}],
+                "last_updated": "2026-05-24T20:00:00+00:00",
+            }
+
+        async def fake_update_team_info(session, team_id, slug):
+            return {
+                "name": "Home FC",
+                "coach": "New Coach",
+                "players": {
+                    "Scorer": {"position": "Forward"},
+                },
+                "last_updated": "2026-05-24T20:00:00+00:00",
+            }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            memory_path.write_text(
+                json.dumps(
+                    {
+                        "metadata": {},
+                        "leagues": {},
+                        "teams": {
+                            "100": {
+                                "name": "Home",
+                                "coach": "Old Coach",
+                                "players": {
+                                    "Scorer": {"goals": 4, "assists": 2, "yellow_cards": 1, "red_cards": 0}
+                                },
+                                "stats": {"wins": 3, "draws": 2, "losses": 1, "goals_for": 11, "goals_against": 6},
+                                "last_updated": "old",
+                            }
+                        },
+                        "matches": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(football_memory, "MEMORY_PATH", memory_path),
+                patch.object(football_memory, "TRACKED_LEAGUE_IDS", [135]),
+                patch.object(football_memory, "LEAGUE_SLUG_MAP", {135: "ita.1"}),
+                patch.object(football_memory, "update_league_standings", fake_update_league_standings),
+                patch.object(football_memory, "update_team_info", fake_update_team_info),
+            ):
+                asyncio.run(football_memory.update_all_memory(None))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        team = memory["teams"]["100"]
+        self.assertEqual(team["stats"], {"wins": 3, "draws": 2, "losses": 1, "goals_for": 11, "goals_against": 6})
+        self.assertEqual(team["players"]["Scorer"]["goals"], 4)
+        self.assertEqual(team["players"]["Scorer"]["position"], "Forward")
+
     def test_ft_handler_keeps_penalty_match_tracked_past_expected_ft(self):
         from modules import ft_handler
         from modules import api_provider

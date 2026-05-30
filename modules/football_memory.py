@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 # --- Paths and Constants ---
 MEMORY_PATH = Path("bot_memory/football_memory.json")
 MATCH_RETENTION_DAYS = 30  # Keep matches for last 30 days only
+TEAM_STATS_KEYS = ("wins", "draws", "losses", "goals_for", "goals_against")
+PLAYER_STATS_KEYS = ("goals", "assists", "yellow_cards", "red_cards")
 
 # --- ESPN Cache (12h TTL) ---
 _espn_cache: Dict[str, Any] = {}
@@ -41,6 +43,79 @@ def _default_memory() -> Dict[str, Any]:
         "teams": {},     # {team_id: {"name": str, "coach": str, "players": {player_name: {...}}, "stats": {...}, "last_updated": str}}
         "matches": {},   # {match_id: {"league_id": int, "home": {...}, "away": {...}, "score": {...}, "status": str, "date": str, "events": list}}
     }
+
+
+def _default_team_stats() -> Dict[str, int]:
+    return {key: 0 for key in TEAM_STATS_KEYS}
+
+
+def _default_player_stats() -> Dict[str, int]:
+    return {key: 0 for key in PLAYER_STATS_KEYS}
+
+
+def _normalize_player_record(player: Dict[str, Any] | None) -> Dict[str, Any]:
+    normalized = dict(player or {})
+    for key, default_value in _default_player_stats().items():
+        normalized[key] = int(normalized.get(key) or default_value)
+    return normalized
+
+
+def _normalize_players(players: Dict[str, Any] | None) -> Dict[str, Dict[str, Any]]:
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for player_name, player_data in (players or {}).items():
+        if not player_name:
+            continue
+        normalized[str(player_name)] = _normalize_player_record(
+            player_data if isinstance(player_data, dict) else {}
+        )
+    return normalized
+
+
+def _normalize_team_record(
+    team: Dict[str, Any] | None,
+    name: str = "Unknown",
+) -> Dict[str, Any]:
+    normalized = dict(team or {})
+    normalized["name"] = normalized.get("name") or name
+    normalized["coach"] = normalized.get("coach") or "Unknown"
+    normalized["players"] = _normalize_players(normalized.get("players"))
+
+    stats = dict(normalized.get("stats") or {})
+    default_stats = _default_team_stats()
+    for key, default_value in default_stats.items():
+        stats[key] = int(stats.get(key) or default_value)
+    normalized["stats"] = stats
+    normalized["last_updated"] = normalized.get("last_updated") or italy_now().isoformat()
+    return normalized
+
+
+def _merge_team_info(
+    existing_team: Dict[str, Any] | None,
+    refreshed_team: Dict[str, Any],
+) -> Dict[str, Any]:
+    merged = _normalize_team_record(
+        existing_team,
+        name=refreshed_team.get("name", "Unknown"),
+    )
+    merged["name"] = refreshed_team.get("name") or merged["name"]
+    merged["coach"] = refreshed_team.get("coach", merged.get("coach", "Unknown"))
+    merged["last_updated"] = refreshed_team.get("last_updated") or italy_now().isoformat()
+
+    players = merged["players"]
+    for player_name, roster_player in (refreshed_team.get("players") or {}).items():
+        if not player_name:
+            continue
+        current_player = players.get(str(player_name), {})
+        refreshed_player = dict(roster_player or {})
+        player_stats = {
+            key: int(current_player.get(key) or 0)
+            for key in PLAYER_STATS_KEYS
+        }
+        merged_player = _normalize_player_record({**current_player, **refreshed_player})
+        for key, value in player_stats.items():
+            merged_player[key] = value
+        players[str(player_name)] = merged_player
+    return merged
 
 
 def load_memory() -> Dict[str, Any]:
@@ -314,7 +389,10 @@ async def update_all_memory(session: Any) -> None:
     team_results = await asyncio.gather(*(job for _, job in team_jobs), return_exceptions=True)
     for team_id, result in zip(team_ids, team_results):
         if isinstance(result, dict):
-            memory["teams"][team_id] = result
+            memory["teams"][team_id] = _merge_team_info(
+                memory.get("teams", {}).get(team_id),
+                result,
+            )
 
     # Prune old matches (keep last 30 days)
     now = italy_now()
@@ -390,7 +468,10 @@ async def update_team_info_only(session: Any) -> None:
     results = await asyncio.gather(*(job for _, job in team_jobs), return_exceptions=True)
     for team_id, result in zip(team_ids, results):
         if isinstance(result, dict):
-            memory["teams"][team_id] = result
+            memory["teams"][team_id] = _merge_team_info(
+                memory.get("teams", {}).get(team_id),
+                result,
+            )
 
     memory["metadata"]["last_team_info_update"] = italy_now().isoformat()
     save_memory(memory)
@@ -426,26 +507,18 @@ async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> None:
     # Store match and count its team/player stats once.
     memory["matches"][match_id] = update_result["match"]
 
-    # Initialize teams if not present
-    if home_id not in memory["teams"]:
-        memory["teams"][home_id] = {
-            "name": match["teams"]["home"]["name"],
-            "coach": "Unknown",
-            "players": {},
-            "stats": {"wins": 0, "draws": 0, "losses": 0, "goals_for": 0, "goals_against": 0},
-            "last_updated": italy_now().isoformat(),
-        }
-    if away_id not in memory["teams"]:
-        memory["teams"][away_id] = {
-            "name": match["teams"]["away"]["name"],
-            "coach": "Unknown",
-            "players": {},
-            "stats": {"wins": 0, "draws": 0, "losses": 0, "goals_for": 0, "goals_against": 0},
-            "last_updated": italy_now().isoformat(),
-        }
+    # Initialize or repair team records before incrementing stats.
+    memory["teams"][home_id] = _normalize_team_record(
+        memory["teams"].get(home_id),
+        name=match["teams"]["home"]["name"],
+    )
+    memory["teams"][away_id] = _normalize_team_record(
+        memory["teams"].get(away_id),
+        name=match["teams"]["away"]["name"],
+    )
 
     # Update team stats
-    for stat in ["wins", "draws", "losses", "goals_for", "goals_against"]:
+    for stat in TEAM_STATS_KEYS:
         memory["teams"][home_id]["stats"][stat] += update_result["home_team"]["stats"][stat]
         memory["teams"][away_id]["stats"][stat] += update_result["away_team"]["stats"][stat]
 
@@ -455,13 +528,12 @@ async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> None:
             continue
         for player_name, stats in players.items():
             if player_name not in memory["teams"][team_id]["players"]:
-                memory["teams"][team_id]["players"][player_name] = {
-                    "goals": 0,
-                    "assists": 0,
-                    "yellow_cards": 0,
-                    "red_cards": 0,
-                }
-            for stat in ["goals", "assists", "yellow_cards", "red_cards"]:
+                memory["teams"][team_id]["players"][player_name] = _default_player_stats()
+            else:
+                memory["teams"][team_id]["players"][player_name] = _normalize_player_record(
+                    memory["teams"][team_id]["players"][player_name]
+                )
+            for stat in PLAYER_STATS_KEYS:
                 memory["teams"][team_id]["players"][player_name][stat] += stats[stat]
 
     save_memory(memory)
