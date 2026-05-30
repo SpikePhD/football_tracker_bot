@@ -711,6 +711,164 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(memory["teams"]["100"]["players"]["Scorer"]["goals"], 1)
         self.assertEqual(len(memory["matches"]), 1)
 
+    def test_ft_handler_keeps_penalty_match_tracked_past_expected_ft(self):
+        from modules import ft_handler
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="pen-1")
+        match["fixture"]["status"]["short"] = "PEN"
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            ft_handler.tracked_matches.clear()
+            ft_handler._already_announced_ft.clear()
+            ft_handler._ft_state_loaded = True
+            ft_handler._last_reset_date = "2026-05-24"
+            ft_handler.tracked_matches["pen-1"] = {
+                "exp_ft": datetime(2026, 5, 24, 20, 0, 0),
+                "initial_score_at_tracking": {"home": 1, "away": 1},
+            }
+            with (
+                patch.object(ft_handler, "italy_now", return_value=datetime(2026, 5, 24, 20, 45, 0)),
+                patch.object(api_provider, "is_espn_healthy", return_value=True),
+                patch.object(api_provider, "fetch_day", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "fetch_finished_today", AsyncMock(return_value=[])),
+                patch.object(ft_handler, "_post_ft_from_data", AsyncMock(return_value=True)) as post_ft,
+            ):
+                await ft_handler.fetch_and_post_ft(fake_bot)
+                return post_ft
+
+        post_ft = asyncio.run(run())
+        self.assertIn("pen-1", ft_handler.tracked_matches)
+        post_ft.assert_not_awaited()
+
+    def test_ft_handler_keeps_extra_time_match_tracked_past_expected_ft(self):
+        from modules import ft_handler
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="et-1")
+        match["fixture"]["status"]["short"] = "ET"
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            ft_handler.tracked_matches.clear()
+            ft_handler._already_announced_ft.clear()
+            ft_handler._ft_state_loaded = True
+            ft_handler._last_reset_date = "2026-05-24"
+            ft_handler.tracked_matches["et-1"] = {
+                "exp_ft": datetime(2026, 5, 24, 20, 0, 0),
+                "initial_score_at_tracking": {"home": 1, "away": 1},
+            }
+            with (
+                patch.object(ft_handler, "italy_now", return_value=datetime(2026, 5, 24, 20, 45, 0)),
+                patch.object(api_provider, "is_espn_healthy", return_value=True),
+                patch.object(api_provider, "fetch_day", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "fetch_finished_today", AsyncMock(return_value=[])),
+                patch.object(ft_handler, "_post_ft_from_data", AsyncMock(return_value=True)) as post_ft,
+            ):
+                await ft_handler.fetch_and_post_ft(fake_bot)
+                return post_ft
+
+        post_ft = asyncio.run(run())
+        self.assertIn("et-1", ft_handler.tracked_matches)
+        post_ft.assert_not_awaited()
+
+    def test_ft_handler_posts_drawn_ft_match(self):
+        from modules import ft_handler
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="draw-ft")
+        match["fixture"]["status"]["short"] = "FT"
+        match["goals"] = {"home": 1, "away": 1}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            saved_states = []
+            ft_handler.tracked_matches.clear()
+            ft_handler._already_announced_ft.clear()
+            ft_handler._ft_state_loaded = True
+            ft_handler._last_reset_date = "2026-05-24"
+            ft_handler.tracked_matches["draw-ft"] = {
+                "exp_ft": datetime(2026, 5, 24, 20, 0, 0),
+                "initial_score_at_tracking": {"home": 1, "away": 1},
+            }
+            with (
+                patch.object(ft_handler, "italy_now", return_value=datetime(2026, 5, 24, 20, 5, 0)),
+                patch.object(ft_handler, "save", lambda _filename, state: saved_states.append(state)),
+                patch.object(api_provider, "is_espn_healthy", return_value=True),
+                patch.object(api_provider, "fetch_day", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "fetch_finished_today", AsyncMock(return_value=[])),
+                patch.object(ft_handler, "_post_ft_from_data", AsyncMock(return_value=True)) as post_ft,
+            ):
+                await ft_handler.fetch_and_post_ft(fake_bot)
+                return post_ft, saved_states
+
+        post_ft, saved_states = asyncio.run(run())
+        self.assertNotIn("draw-ft", ft_handler.tracked_matches)
+        post_ft.assert_awaited_once_with(fake_bot, match)
+        self.assertIn("draw-ft", ft_handler._already_announced_ft)
+        self.assertEqual(saved_states[-1]["announced_ids"], ["draw-ft"])
+
+    def test_ft_handler_drops_missing_match_after_stale_grace(self):
+        from modules import ft_handler
+        from modules import api_provider
+
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            ft_handler.tracked_matches.clear()
+            ft_handler._already_announced_ft.clear()
+            ft_handler._ft_state_loaded = True
+            ft_handler._last_reset_date = "2026-05-24"
+            ft_handler.tracked_matches["missing-1"] = {
+                "exp_ft": datetime(2026, 5, 24, 20, 0, 0),
+                "initial_score_at_tracking": {"home": 1, "away": 0},
+            }
+            with (
+                patch.object(ft_handler, "italy_now", return_value=datetime(2026, 5, 24, 20, 45, 0)),
+                patch.object(api_provider, "is_espn_healthy", return_value=True),
+                patch.object(api_provider, "fetch_day", AsyncMock(return_value=[])),
+                patch.object(api_provider, "fetch_finished_today", AsyncMock(return_value=[])),
+                patch.object(ft_handler, "_post_ft_from_data", AsyncMock(return_value=True)) as post_ft,
+            ):
+                await ft_handler.fetch_and_post_ft(fake_bot)
+                return post_ft
+
+        post_ft = asyncio.run(run())
+        self.assertNotIn("missing-1", ft_handler.tracked_matches)
+        post_ft.assert_not_awaited()
+
+    def test_ft_handler_drops_terminal_non_ft_status_without_posting(self):
+        from modules import ft_handler
+        from modules import api_provider
+
+        match = self._espn_match(fixture_id="abd-1")
+        match["fixture"]["status"]["short"] = "ABD"
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            ft_handler.tracked_matches.clear()
+            ft_handler._already_announced_ft.clear()
+            ft_handler._ft_state_loaded = True
+            ft_handler._last_reset_date = "2026-05-24"
+            ft_handler.tracked_matches["abd-1"] = {
+                "exp_ft": datetime(2026, 5, 24, 20, 0, 0),
+                "initial_score_at_tracking": {"home": 1, "away": 1},
+            }
+            with (
+                patch.object(ft_handler, "italy_now", return_value=datetime(2026, 5, 24, 20, 45, 0)),
+                patch.object(api_provider, "is_espn_healthy", return_value=True),
+                patch.object(api_provider, "fetch_day", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "fetch_finished_today", AsyncMock(return_value=[])),
+                patch.object(ft_handler, "_post_ft_from_data", AsyncMock(return_value=True)) as post_ft,
+            ):
+                await ft_handler.fetch_and_post_ft(fake_bot)
+                return post_ft
+
+        post_ft = asyncio.run(run())
+        self.assertNotIn("abd-1", ft_handler.tracked_matches)
+        post_ft.assert_not_awaited()
+
     def _espn_match(self, fixture_id="737155", league_id=135):
         return {
             "fixture": {

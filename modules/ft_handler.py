@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 tracked_matches = {}  # {match_id: {"exp_ft": datetime, "initial_score_at_tracking": {...}}}
 _already_announced_ft: set = set()  # match IDs that have already received a FT announcement
+_past_expected_live_logged: set[str] = set()
 _FT_STATE_FILE = "ft_state.json"
 _FT_STATE_DEFAULT = {
     "announced_ids": [],
@@ -73,6 +74,7 @@ def clear_tracked_matches_today():
     global tracked_matches
     logger.info("ðŸ”„ Clearing 'tracked_matches' dictionary for the schedule cycle.")
     tracked_matches.clear()
+    _past_expected_live_logged.clear()
     _ensure_ft_state_current_date()
 
 
@@ -129,6 +131,24 @@ def track_match_for_ft(match_data: dict):
 
 def is_tracked_for_ft(match_id) -> bool:
     return str(match_id) in tracked_matches
+
+
+_LIVE_STATUSES = {"1H", "HT", "2H", "ET", "PEN"}
+_TERMINAL_NON_FT_STATUSES = {"PST", "CANC", "ABD", "AWD", "WO"}
+
+
+def _fixture_status_short(match: dict | None) -> str | None:
+    if not match:
+        return None
+    return match.get("fixture", {}).get("status", {}).get("short")
+
+
+def _is_live_status(status_short: str | None) -> bool:
+    return status_short in _LIVE_STATUSES
+
+
+def _is_terminal_non_ft_status(status_short: str | None) -> bool:
+    return status_short in _TERMINAL_NON_FT_STATUSES
 
 
 # â”€â”€ Shared FT posting logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -204,15 +224,46 @@ async def fetch_and_post_ft(bot: discord.Client):
 
     if api_provider.is_espn_healthy():
         # â”€â”€ ESPN path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-        finished = await api_provider.fetch_finished_today(bot.http_session)
+        all_matches = await api_provider.fetch_day(bot.http_session)
+        matches_by_id = {str(m["fixture"]["id"]): m for m in all_matches}
+        finished = [m for m in all_matches if _fixture_status_short(m) == "FT"]
         finished_by_id = {str(m["fixture"]["id"]): m for m in finished}
 
         for match_id, info in list(tracked_matches.items()):
             if current_time < info["exp_ft"]:
                 continue  # too early to expect FT
 
-            if match_id not in finished_by_id:
-                # Match not yet in FT â€” check if it's been suspiciously long
+            match_snapshot = matches_by_id.get(match_id)
+            status_short = _fixture_status_short(match_snapshot)
+
+            if status_short == "FT":
+                match_details = finished_by_id[match_id]
+                if await _post_ft_from_data(bot, match_details):
+                    mark_ft_announced(match_id)
+                del tracked_matches[match_id]
+                _past_expected_live_logged.discard(match_id)
+                continue
+
+            if _is_live_status(status_short):
+                if status_short in {"ET", "PEN"} and match_id not in _past_expected_live_logged:
+                    logger.info(
+                        f"Match ID {match_id} is past expected FT but still live "
+                        f"with ESPN status '{status_short}'. Keeping FT tracking active."
+                    )
+                    _past_expected_live_logged.add(match_id)
+                continue
+
+            if _is_terminal_non_ft_status(status_short):
+                logger.info(
+                    f"Match ID {match_id} ended with terminal non-FT status "
+                    f"'{status_short}'. Dropping from FT tracking."
+                )
+                del tracked_matches[match_id]
+                _past_expected_live_logged.discard(match_id)
+                continue
+
+            if match_id not in matches_by_id or status_short is None:
+                # Match not visible with a useful status; check if it's been suspiciously long.
                 elapsed = (current_time - info["exp_ft"]).total_seconds()
                 if elapsed > 1800:  # 30 min past expected FT with no result
                     logger.warning(
@@ -220,12 +271,17 @@ async def fetch_and_post_ft(bot: discord.Client):
                         f"in ESPN scoreboard. Dropping from tracking."
                     )
                     del tracked_matches[match_id]
+                    _past_expected_live_logged.discard(match_id)
                 continue
 
-            match_details = finished_by_id[match_id]
-            if await _post_ft_from_data(bot, match_details):
-                mark_ft_announced(match_id)
-            del tracked_matches[match_id]
+            elapsed = (current_time - info["exp_ft"]).total_seconds()
+            if elapsed > 1800:
+                logger.warning(
+                    f"âš ï¸ Match ID {match_id} is 30+ min past expected FT but has "
+                    f"unexpected ESPN status '{status_short}'. Dropping from tracking."
+                )
+                del tracked_matches[match_id]
+                _past_expected_live_logged.discard(match_id)
 
         # Orphan FT detection: matches that reached FT without being seen as LIVE
         # (e.g. bot was offline, or match finished before scheduler started polling).
