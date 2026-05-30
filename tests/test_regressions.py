@@ -121,6 +121,29 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(action["log_traceback"])
         self.assertIn("Command failed unexpectedly", action["user_message"])
 
+    def test_regression_guard_context_includes_previous_and_current_state(self):
+        from modules import live_loop
+
+        detail = live_loop._regression_guard_context(
+            match_id="m1",
+            previous_observed={"home": 2, "away": 1, "elapsed": 75, "events_count": 3},
+            current_score={"home": 1, "away": 1},
+            current_elapsed=60,
+            current_events_count=2,
+            state_key="m1_1-1_2",
+            reason="score,elapsed",
+        )
+
+        self.assertIn("match=m1", detail)
+        self.assertIn("reason=score,elapsed", detail)
+        self.assertIn("prev_score=2-1", detail)
+        self.assertIn("curr_score=1-1", detail)
+        self.assertIn("prev_elapsed=75", detail)
+        self.assertIn("curr_elapsed=60", detail)
+        self.assertIn("prev_events=3", detail)
+        self.assertIn("curr_events=2", detail)
+        self.assertIn("state_key=m1_1-1_2", detail)
+
     def test_espn_normalization_preserves_team_ids_on_match_and_events(self):
         from utils import espn_client
 
@@ -1123,12 +1146,15 @@ class RegressionTests(unittest.TestCase):
                 patch.object(api_provider, "fetch_finished_today", AsyncMock(return_value=[])),
                 patch.object(ft_handler, "_post_ft_from_data", AsyncMock(return_value=True)) as post_ft,
             ):
-                await ft_handler.fetch_and_post_ft(fake_bot)
-                return post_ft
+                with self.assertLogs("modules.ft_handler", level="WARNING") as captured:
+                    await ft_handler.fetch_and_post_ft(fake_bot)
+                return post_ft, captured.output
 
-        post_ft = asyncio.run(run())
+        post_ft, log_lines = asyncio.run(run())
         self.assertNotIn("missing-1", ft_handler.tracked_matches)
         post_ft.assert_not_awaited()
+        self.assertTrue(any("Warning: Match ID missing-1" in line for line in log_lines))
+        self.assertFalse(any("â" in line or "�" in line for line in log_lines))
 
     def test_ft_handler_drops_terminal_non_ft_status_without_posting(self):
         from modules import ft_handler

@@ -29,6 +29,29 @@ _TEXT_DEDUPE_WINDOW_SEC = 300
 _REGRESSION_CONFIRM_TICKS = 3
 
 
+def _regression_guard_context(
+    match_id: str,
+    previous_observed: dict,
+    current_score: dict,
+    current_elapsed: int | None,
+    current_events_count: int,
+    state_key: str,
+    reason: str,
+) -> str:
+    """Return a compact previous/current snapshot for regression diagnostics."""
+    prev_home = previous_observed.get("home")
+    prev_away = previous_observed.get("away")
+    curr_home = current_score.get("home")
+    curr_away = current_score.get("away")
+    return (
+        f"match={match_id} reason={reason} "
+        f"prev_score={prev_home}-{prev_away} curr_score={curr_home}-{curr_away} "
+        f"prev_elapsed={previous_observed.get('elapsed')} curr_elapsed={current_elapsed} "
+        f"prev_events={previous_observed.get('events_count')} curr_events={current_events_count} "
+        f"state_key={state_key}"
+    )
+
+
 def clear_already_posted_today():
     logger.info("Clearing live update state maps for the new day.")
     live_state_keys.clear()
@@ -111,6 +134,20 @@ async def run_live_loop(bot):
                 )
                 score_regressed = curr_home < prev_home or curr_away < prev_away
                 if score_regressed or (elapsed_regressed and curr_total <= prev_total):
+                    reason_parts = []
+                    if score_regressed:
+                        reason_parts.append("score")
+                    if elapsed_regressed and curr_total <= prev_total:
+                        reason_parts.append("elapsed")
+                    regression_context = _regression_guard_context(
+                        match_id=match_id,
+                        previous_observed=previous_observed,
+                        current_score={"home": curr_home, "away": curr_away},
+                        current_elapsed=elapsed if isinstance(elapsed, int) else None,
+                        current_events_count=len(events),
+                        state_key=state_key,
+                        reason=",".join(reason_parts),
+                    )
                     hold = _regression_hold.get(match_id)
                     if hold and hold.get("state_key") == state_key:
                         hold["ticks"] += 1
@@ -121,13 +158,14 @@ async def run_live_loop(bot):
                     if hold["ticks"] < _REGRESSION_CONFIRM_TICKS:
                         logger.info(
                             f"Regression guard: holding match {match_id} state "
-                            f"{state_key} (tick {hold['ticks']}/{_REGRESSION_CONFIRM_TICKS})."
+                            f"{state_key} (tick {hold['ticks']}/{_REGRESSION_CONFIRM_TICKS}); "
+                            f"{regression_context}."
                         )
                         continue
 
                     logger.warning(
                         f"Regression guard: accepting repeated regressive state for match {match_id} "
-                        f"after {hold['ticks']} ticks."
+                        f"after {hold['ticks']} ticks; {regression_context}."
                     )
                 else:
                     _regression_hold.pop(match_id, None)
@@ -138,6 +176,7 @@ async def run_live_loop(bot):
                     "home": int(score.get("home") or 0),
                     "away": int(score.get("away") or 0),
                     "elapsed": elapsed if isinstance(elapsed, int) else None,
+                    "events_count": len(events),
                 }
                 continue
 
@@ -162,6 +201,7 @@ async def run_live_loop(bot):
                         "home": int(score.get("home") or 0),
                         "away": int(score.get("away") or 0),
                         "elapsed": elapsed if isinstance(elapsed, int) else None,
+                        "events_count": len(events),
                     }
                     logger.info(
                         f"Text dedupe: suppressed repeated live content for match {match_id}."
@@ -183,6 +223,7 @@ async def run_live_loop(bot):
                     "home": int(score.get("home") or 0),
                     "away": int(score.get("away") or 0),
                     "elapsed": elapsed if isinstance(elapsed, int) else None,
+                    "events_count": len(events),
                 }
                 logger.info(f"Live update upserted for match {match_id}: {line_content}")
 

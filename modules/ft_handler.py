@@ -195,7 +195,7 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     if note:
         ft_message += note
         logger.warning(
-            f"âš ï¸ FT event mismatch for {home_team} vs {away_team}: "
+            f"Warning: FT event mismatch for {home_team} vs {away_team}: "
             f"score total={int(goals.get('home',0) or 0) + int(goals.get('away',0) or 0)}, "
             f"goal events={sum(1 for e in events if e.get('type') == 'Goal')}."
         )
@@ -267,7 +267,7 @@ async def fetch_and_post_ft(bot: discord.Client):
                 elapsed = (current_time - info["exp_ft"]).total_seconds()
                 if elapsed > 1800:  # 30 min past expected FT with no result
                     logger.warning(
-                        f"âš ï¸ Match ID {match_id} is 30+ min past expected FT but not showing as FT "
+                        f"Warning: Match ID {match_id} is 30+ min past expected FT but not showing as FT "
                         f"in ESPN scoreboard. Dropping from tracking."
                     )
                     del tracked_matches[match_id]
@@ -277,7 +277,7 @@ async def fetch_and_post_ft(bot: discord.Client):
             elapsed = (current_time - info["exp_ft"]).total_seconds()
             if elapsed > 1800:
                 logger.warning(
-                    f"âš ï¸ Match ID {match_id} is 30+ min past expected FT but has "
+                    f"Warning: Match ID {match_id} is 30+ min past expected FT but has "
                     f"unexpected ESPN status '{status_short}'. Dropping from tracking."
                 )
                 del tracked_matches[match_id]
@@ -303,19 +303,19 @@ async def fetch_and_post_ft(bot: discord.Client):
 
             payload = await api_provider.fetch_fixture(bot.http_session, match_id)
             if not payload:
-                logger.warning(f"âš ï¸ No payload for FT check of match ID {match_id}. Retrying next cycle.")
+                logger.warning(f"Warning: No payload for FT check of match ID {match_id}. Retrying next cycle.")
                 continue
 
             api_response_list = payload.get("response")
             if not isinstance(api_response_list, list) or not api_response_list:
-                logger.warning(f"âš ï¸ Empty or invalid response for FT check of match ID {match_id}.")
+                logger.warning(f"Warning: Empty or invalid response for FT check of match ID {match_id}.")
                 continue
 
             match_details_raw = api_response_list[0]
             fixture_status_short = match_details_raw.get("fixture", {}).get("status", {}).get("short")
 
             if fixture_status_short != "FT":
-                logger.info(f"â„¹ï¸ Match ID {match_id} status is '{fixture_status_short}', not FT yet.")
+                logger.info(f"Match ID {match_id} status is '{fixture_status_short}', not FT yet.")
                 if fixture_status_short in ("PST", "CANC", "ABD", "AWD", "WO"):
                     logger.info(f"Match ID {match_id} permanently finished as '{fixture_status_short}'. Dropping.")
                     del tracked_matches[match_id]
