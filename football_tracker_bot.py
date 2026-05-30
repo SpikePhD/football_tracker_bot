@@ -25,7 +25,7 @@ from utils.personality import greet_message
 from modules.power_manager import setup_power_management
 from modules.scheduler import schedule_day
 from modules.bot_mode import is_verbose, get_mode
-from modules.discord_poster import post_new_general_message
+from modules.discord_poster import post_new_general_message, post_new_message_to_context
 from modules.ft_handler import seed_already_announced_ft
 from cogs.matches import fetch_combined_matches_snapshot
 from cogs.version import get_version_info
@@ -87,6 +87,108 @@ async def cleanup_sessions():
     if hasattr(bot, 'http_session') and bot.http_session is not None and not bot.http_session.closed:
         await bot.http_session.close()
         logger.info("💨 Global aiohttp.ClientSession closed.")
+
+def _unwrap_command_error(error: commands.CommandError | Exception) -> Exception:
+    """Return the original exception behind discord.py command wrappers."""
+    if isinstance(error, commands.CommandInvokeError) and error.original is not None:
+        return error.original
+    return error
+
+
+def _format_command_error_context(ctx: commands.Context) -> str:
+    """Build a single-line command context for grep-friendly diagnostics."""
+    command = getattr(ctx, "command", None)
+    message = getattr(ctx, "message", None)
+    author = getattr(ctx, "author", None)
+    channel = getattr(ctx, "channel", None)
+    guild = getattr(ctx, "guild", None)
+    cog = getattr(command, "cog", None) if command is not None else None
+    attachments = getattr(message, "attachments", []) if message is not None else []
+
+    command_name = getattr(command, "name", None) or "unknown"
+    qualified_name = getattr(command, "qualified_name", None) or command_name
+    cog_name = getattr(cog, "qualified_name", None) or (cog.__class__.__name__ if cog else "none")
+    content = getattr(message, "content", "") if message is not None else ""
+
+    return " ".join(
+        [
+            f"command={command_name}",
+            f"qualified={qualified_name}",
+            f"cog={cog_name}",
+            f"author_id={getattr(author, 'id', None)}",
+            f"author_name={getattr(author, 'name', None)}",
+            f"author_display={getattr(author, 'display_name', None)}",
+            f"channel_id={getattr(channel, 'id', None)}",
+            f"channel_name={getattr(channel, 'name', None)}",
+            f"guild_id={getattr(guild, 'id', None)}",
+            f"guild_name={getattr(guild, 'name', None)}",
+            f"message_id={getattr(message, 'id', None)}",
+            f"attachments={len(attachments or [])}",
+            f"content={content!r}",
+        ]
+    )
+
+
+def _command_error_action(error: commands.CommandError | Exception) -> dict:
+    """Classify command errors for logging and optional user replies."""
+    original = _unwrap_command_error(error)
+
+    if isinstance(original, commands.CommandNotFound):
+        return {
+            "ignore": True,
+            "log_level": "debug",
+            "log_traceback": False,
+            "user_message": None,
+        }
+
+    if isinstance(original, commands.CommandOnCooldown):
+        return {
+            "ignore": False,
+            "log_level": "warning",
+            "log_traceback": False,
+            "user_message": f"Command is on cooldown. Try again in {original.retry_after:.0f}s.",
+        }
+
+    if isinstance(original, commands.MissingPermissions):
+        return {
+            "ignore": False,
+            "log_level": "warning",
+            "log_traceback": False,
+            "user_message": "You do not have permission to use that command.",
+        }
+
+    if isinstance(original, commands.NotOwner):
+        return {
+            "ignore": False,
+            "log_level": "warning",
+            "log_traceback": False,
+            "user_message": "Only the bot owner can use that command.",
+        }
+
+    if isinstance(original, commands.MissingRequiredArgument):
+        param_name = getattr(getattr(original, "param", None), "name", "unknown")
+        return {
+            "ignore": False,
+            "log_level": "warning",
+            "log_traceback": False,
+            "user_message": f"Missing required argument: `{param_name}`.",
+        }
+
+    if isinstance(original, commands.BadArgument):
+        return {
+            "ignore": False,
+            "log_level": "warning",
+            "log_traceback": False,
+            "user_message": "Invalid command argument. Check the command format and try again.",
+        }
+
+    return {
+        "ignore": False,
+        "log_level": "error",
+        "log_traceback": True,
+        "user_message": "Command failed unexpectedly. Check runtime logs for details.",
+    }
+
 
 # --- Task Management for Scheduler ---
 async def launch_daily_operations_manager(bot_instance: commands.Bot):
@@ -192,6 +294,36 @@ async def on_ready():
             logger.info("Task loop 'eleven_am_daily_trigger' has been started.")
         except RuntimeError as e:
              logger.error(f"❌ Failed to start 'eleven_am_daily_trigger': {e}. It might already be running or bot is closing.", exc_info=True)
+
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    """Log command failures with enough context to diagnose them from exported logs."""
+    original = _unwrap_command_error(error)
+    action = _command_error_action(error)
+    context = _format_command_error_context(ctx)
+
+    if action["ignore"]:
+        logger.debug(
+            "Ignored command error: %s error_type=%s error=%s",
+            context,
+            type(original).__name__,
+            original,
+        )
+        return
+
+    log_message = (
+        f"Command error: {context} "
+        f"error_type={type(original).__name__} error={original!r}"
+    )
+    if action["log_level"] == "warning":
+        logger.warning(log_message)
+    else:
+        exc_info = (type(original), original, original.__traceback__) if action["log_traceback"] else None
+        logger.error(log_message, exc_info=exc_info)
+
+    if action["user_message"]:
+        await post_new_message_to_context(ctx, content=action["user_message"])
 
 
 @bot.event

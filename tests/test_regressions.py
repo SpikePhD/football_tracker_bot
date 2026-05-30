@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
@@ -45,6 +46,80 @@ class RegressionTests(unittest.TestCase):
         ])
 
         self.assertEqual(events[0]["team"], {"id": 10, "name": "Home"})
+
+    def test_command_error_context_includes_full_content_and_discord_ids(self):
+        import football_tracker_bot
+
+        ctx = SimpleNamespace(
+            command=SimpleNamespace(
+                name="ask",
+                qualified_name="ask",
+                cog=SimpleNamespace(qualified_name="AskCog"),
+            ),
+            author=SimpleNamespace(id=111, name="Luca", display_name="Luca Display"),
+            channel=SimpleNamespace(id=222, name="bot-test"),
+            guild=SimpleNamespace(id=333, name="Guild Name"),
+            message=SimpleNamespace(
+                id=444,
+                content="!ask full command text with token=abc123",
+                attachments=[object(), object()],
+            ),
+        )
+
+        context = football_tracker_bot._format_command_error_context(ctx)
+
+        self.assertIn("command=ask", context)
+        self.assertIn("qualified=ask", context)
+        self.assertIn("cog=AskCog", context)
+        self.assertIn("author_id=111", context)
+        self.assertIn("author_name=Luca", context)
+        self.assertIn("channel_id=222", context)
+        self.assertIn("channel_name=bot-test", context)
+        self.assertIn("guild_id=333", context)
+        self.assertIn("guild_name=Guild Name", context)
+        self.assertIn("message_id=444", context)
+        self.assertIn("attachments=2", context)
+        self.assertIn("content='!ask full command text with token=abc123'", context)
+
+    def test_command_error_unwraps_command_invoke_error(self):
+        from discord.ext import commands
+        import football_tracker_bot
+
+        original = ValueError("boom")
+        wrapped = commands.CommandInvokeError(original)
+
+        self.assertIs(football_tracker_bot._unwrap_command_error(wrapped), original)
+
+    def test_command_error_action_classifies_expected_errors_as_warnings(self):
+        from discord.ext import commands
+        import football_tracker_bot
+
+        action = football_tracker_bot._command_error_action(commands.BadArgument("bad input"))
+
+        self.assertFalse(action["ignore"])
+        self.assertEqual(action["log_level"], "warning")
+        self.assertFalse(action["log_traceback"])
+        self.assertIn("Invalid command argument", action["user_message"])
+
+    def test_command_error_action_ignores_unknown_commands(self):
+        from discord.ext import commands
+        import football_tracker_bot
+
+        action = football_tracker_bot._command_error_action(commands.CommandNotFound("missing"))
+
+        self.assertTrue(action["ignore"])
+        self.assertIsNone(action["user_message"])
+        self.assertFalse(action["log_traceback"])
+
+    def test_command_error_action_classifies_unexpected_errors_for_traceback_logging(self):
+        import football_tracker_bot
+
+        action = football_tracker_bot._command_error_action(RuntimeError("boom"))
+
+        self.assertFalse(action["ignore"])
+        self.assertEqual(action["log_level"], "error")
+        self.assertTrue(action["log_traceback"])
+        self.assertIn("Command failed unexpectedly", action["user_message"])
 
     def test_espn_normalization_preserves_team_ids_on_match_and_events(self):
         from utils import espn_client
