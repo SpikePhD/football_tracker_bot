@@ -81,7 +81,7 @@ Enrichment protections:
 - incomplete API-Football event cooldown
 - best-known event snapshots to prevent ESPN event-data downgrades
 
-When changing this area, add or update regression tests in `tests/test_regressions.py`.
+When changing this area, add or update focused regression tests under `tests/`.
 
 ## Extension Notes
 
@@ -107,7 +107,7 @@ Add runtime state:
 ## Validation Before Push
 
 ```bash
-python -m unittest tests.test_regressions
+python -m unittest discover -s tests -p "test_*.py"
 python -m compileall config.py modules tests
 python -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))"
 python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))"
@@ -117,4 +117,4 @@ If tests fail because local dependencies are missing, run them through the proje
 
 ## Deferred Agent-Light Refactors
 
-Future medium-risk cleanup can split `tests/test_regressions.py`, `cogs/ask.py`, and `modules/api_provider.py` into smaller focused files. Do that only as a deliberate refactor with full regression coverage; this repo currently keeps those behavior-heavy modules intact.
+Future medium-risk cleanup can split `cogs/ask.py` and `modules/api_provider.py` into smaller focused files. Do that only as a deliberate refactor with full regression coverage; this repo currently keeps those behavior-heavy modules intact.

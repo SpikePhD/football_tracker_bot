@@ -158,7 +158,7 @@ auto_update.sh
 ## Development Checks
 
 ```bash
-python -m unittest tests.test_regressions
+python -m unittest discover -s tests -p "test_*.py"
 python -m compileall config.py modules tests
 python -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))"
 python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))"
