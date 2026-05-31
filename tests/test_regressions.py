@@ -188,6 +188,86 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(match["teams"]["away"]["id"], "200")
         self.assertEqual(match["events"][0]["team"], {"id": "100", "name": "Home"})
 
+    def test_espn_normalization_separates_shootout_penalties_and_preserves_winner(self):
+        from utils import espn_client
+
+        match = espn_client._normalize_event(
+            {
+                "id": "shootout-1",
+                "date": "2026-05-30T18:00Z",
+                "status": {
+                    "period": 5,
+                    "displayClock": "120:00",
+                    "type": {
+                        "state": "post",
+                        "name": "STATUS_FINAL_PEN",
+                        "description": "Final Score - After Penalties",
+                        "detail": "FT-Pens",
+                    },
+                },
+                "competitions": [
+                    {
+                        "competitors": [
+                            {
+                                "homeAway": "home",
+                                "score": "1",
+                                "winner": True,
+                                "team": {"id": "100", "displayName": "Home"},
+                            },
+                            {
+                                "homeAway": "away",
+                                "score": "1",
+                                "winner": False,
+                                "team": {"id": "200", "displayName": "Away"},
+                            },
+                        ],
+                        "details": [
+                            {
+                                "type": {"id": "98", "text": "Penalty - Scored"},
+                                "clock": {"value": 3840},
+                                "team": {"id": "100"},
+                                "athletesInvolved": [{"fullName": "Normal Penalty"}],
+                            },
+                            {
+                                "type": {"id": "104", "text": "Penalty - Scored"},
+                                "clock": {"value": 7200},
+                                "team": {"id": "100"},
+                                "athletesInvolved": [{"fullName": "Shootout Scorer"}],
+                            },
+                        ],
+                    }
+                ],
+            },
+            135,
+        )
+
+        self.assertEqual(match["fixture"]["status"]["short"], "FT")
+        self.assertEqual(match["fixture"]["status"]["detail"], "FT-Pens")
+        self.assertEqual(match["winner"], "Home")
+        self.assertEqual(match["events"][0]["type"], "Goal")
+        self.assertEqual(match["events"][0]["detail"], "Penalty")
+        self.assertEqual(match["events"][1]["type"], "PenaltyShootout")
+        self.assertEqual(match["events"][1]["detail"], "Scored")
+
+    def test_shootout_formatter_separates_match_goals_penalty_score_and_takers(self):
+        from utils.event_formatter import (
+            event_completeness_note,
+            format_match_events,
+            format_shootout_segments,
+        )
+
+        match = self._shootout_match()
+
+        normal_events = format_match_events(match["events"], "Home", "Away")
+        shootout_segments = format_shootout_segments(match, final=True)
+        note = event_completeness_note(match["goals"], match["events"])
+
+        self.assertEqual(normal_events, ["5' - Home Goal (H)", "64' - Away Goal (Penalty) (A)"])
+        self.assertEqual(shootout_segments[0], "After 90': 1 - 1")
+        self.assertEqual(shootout_segments[1], "Home win 4 - 3 on penalties")
+        self.assertIn("Pens scored: Home: H1, H2, H3, H4; Away: A1, A2, A3", shootout_segments)
+        self.assertEqual(note, "")
+
     def test_espn_all_leagues_summary_distinguishes_success_and_failure(self):
         from utils import espn_client
 
@@ -910,6 +990,26 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(memory["teams"]["100"]["players"]["Scorer"]["goals"], 1)
         self.assertEqual(memory["teams"]["200"]["players"], {})
 
+    def test_match_memory_ignores_shootout_penalties_for_team_and_player_stats(self):
+        from modules import football_memory
+
+        match = self._shootout_match()
+        match["fixture"]["status"]["short"] = "FT"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(memory["teams"]["100"]["stats"]["draws"], 1)
+        self.assertEqual(memory["teams"]["100"]["stats"]["goals_for"], 1)
+        self.assertEqual(memory["teams"]["100"]["players"]["Home Goal"]["goals"], 1)
+        self.assertNotIn("H1", memory["teams"]["100"]["players"])
+        self.assertEqual(memory["teams"]["200"]["stats"]["draws"], 1)
+        self.assertEqual(memory["teams"]["200"]["stats"]["goals_for"], 1)
+        self.assertNotIn("A1", memory["teams"]["200"]["players"])
+
     def test_team_info_refresh_preserves_existing_team_stats(self):
         from modules import football_memory
 
@@ -1187,6 +1287,99 @@ class RegressionTests(unittest.TestCase):
         self.assertNotIn("abd-1", ft_handler.tracked_matches)
         post_ft.assert_not_awaited()
 
+    def test_ft_post_after_penalties_includes_winner_score_and_not_shootout_as_goals(self):
+        from modules import ft_handler
+        from modules import api_provider
+
+        match = self._shootout_match()
+        match["fixture"]["status"]["short"] = "FT"
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 123})()
+
+        async def run():
+            with (
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(ft_handler, "update_match_in_memory", AsyncMock()),
+                patch.object(ft_handler, "post_new_general_message", AsyncMock(return_value=fake_message)) as post_msg,
+            ):
+                result = await ft_handler._post_ft_from_data(fake_bot, match)
+                return result, post_msg
+
+        result, post_msg = asyncio.run(run())
+        content = post_msg.await_args.kwargs["content"]
+
+        self.assertTrue(result)
+        self.assertIn("FT: Home 1 - 1 Away", content)
+        self.assertIn("Home win 4 - 3 on penalties", content)
+        self.assertIn("Pens scored: Home: H1, H2, H3, H4; Away: A1, A2, A3", content)
+        self.assertIn("5' - Home Goal", content)
+        self.assertNotIn("120' - H1", content)
+
+    def test_live_penalty_update_includes_penalty_score(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        match = self._shootout_match()
+        match["fixture"]["status"] = {"short": "PEN", "elapsed": 120}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 456})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert,
+            ):
+                await live_loop.run_live_loop(fake_bot)
+                return upsert
+
+        upsert = asyncio.run(run())
+        content = upsert.await_args.kwargs["content"]
+
+        self.assertIn("Football LIVE [PEN]: Home 1 - 1 Away", content)
+        self.assertIn("Penalties: Home 4 - 3 Away", content)
+        self.assertIn("Pens scored: Home: H1, H2, H3, H4; Away: A1, A2, A3", content)
+        self.assertNotIn("120' - H1", content)
+
+    def test_live_penalty_status_change_is_not_suppressed_by_score_event_dedupe(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        match = self._shootout_match()
+        match["fixture"]["status"] = {"short": "PEN", "elapsed": 120}
+        match["events"] = match["events"][:2]
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 789})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            live_loop.live_state_keys["shootout-1"] = "shootout-1_1-1_2"
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert,
+            ):
+                await live_loop.run_live_loop(fake_bot)
+                return upsert
+
+        upsert = asyncio.run(run())
+
+        self.assertTrue(upsert.await_count)
+        self.assertIn("Football LIVE [PEN]: Home 1 - 1 Away", upsert.await_args.kwargs["content"])
+
     def _espn_match(self, fixture_id="737155", league_id=135):
         return {
             "fixture": {
@@ -1201,6 +1394,57 @@ class RegressionTests(unittest.TestCase):
             },
             "goals": {"home": 1, "away": 0},
             "events": [],
+        }
+
+    def _shootout_match(self):
+        shootout_events = [
+            ("100", "Home", "H1"),
+            ("200", "Away", "A1"),
+            ("100", "Home", "H2"),
+            ("200", "Away", "A2"),
+            ("100", "Home", "H3"),
+            ("200", "Away", "A3"),
+            ("100", "Home", "H4"),
+        ]
+        return {
+            "fixture": {
+                "id": "shootout-1",
+                "date": "2026-05-30T18:00:00+00:00",
+                "status": {"short": "FT", "elapsed": 120, "detail": "FT-Pens"},
+            },
+            "league": {"id": 135},
+            "teams": {
+                "home": {"id": "100", "name": "Home"},
+                "away": {"id": "200", "name": "Away"},
+            },
+            "goals": {"home": 1, "away": 1},
+            "winner": "Home",
+            "events": [
+                {
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                    "player": {"name": "Home Goal"},
+                    "team": {"id": "100", "name": "Home"},
+                    "time": {"elapsed": 5},
+                },
+                {
+                    "type": "Goal",
+                    "detail": "Penalty",
+                    "player": {"name": "Away Goal"},
+                    "team": {"id": "200", "name": "Away"},
+                    "time": {"elapsed": 64},
+                },
+                *[
+                    {
+                        "type": "PenaltyShootout",
+                        "detail": "Scored",
+                        "player": {"name": player},
+                        "team": {"id": team_id, "name": team_name},
+                        "time": {"elapsed": 120},
+                    }
+                    for team_id, team_name, player in shootout_events
+                ],
+            ],
         }
 
 

@@ -6,7 +6,7 @@ from discord.ext import commands
 from config import LEAGUE_NAME_MAP, TENNIS_UPCOMING_DAYS
 from modules import api_provider
 from utils.time_utils import parse_utc_to_italy, italy_now
-from utils.event_formatter import format_match_events, event_completeness_note
+from utils.event_formatter import format_match_events, format_shootout_segments, event_completeness_note
 from modules.discord_poster import post_new_message_to_context
 from utils.tennis_formatter import format_tennis_snapshot_line
 
@@ -55,10 +55,14 @@ def build_football_section(fixtures: list) -> str:
                 ft_event_parts = format_match_events(events, home, away)
                 score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
                 note = event_completeness_note(goals, events)
+                shootout_segments = format_shootout_segments(m, final=True)
                 if ft_event_parts:
-                    lines.append(f"• FT: {score_str} ({'; '.join(ft_event_parts)}){note}")
+                    line = f"• FT: {score_str} ({'; '.join(ft_event_parts)})"
                 else:
-                    lines.append(f"• FT: {score_str}{note}")
+                    line = f"• FT: {score_str}"
+                if shootout_segments:
+                    line += " | " + " | ".join(shootout_segments)
+                lines.append(f"{line}{note}")
             else:
                 elapsed = m.get('fixture', {}).get('status', {}).get('elapsed')
                 if status == "HT":
@@ -72,10 +76,14 @@ def build_football_section(fixtures: list) -> str:
                 event_parts = format_match_events(events, home, away)
                 score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
                 note = event_completeness_note(goals, events)
+                shootout_segments = format_shootout_segments(m, final=False)
                 if event_parts:
-                    lines.append(f"• LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)}){note}")
+                    line = f"• LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)})"
                 else:
-                    lines.append(f"• LIVE [{minute_str}]: {score_str}{note}")
+                    line = f"• LIVE [{minute_str}]: {score_str}"
+                if shootout_segments:
+                    line += " | " + " | ".join(shootout_segments)
+                lines.append(f"{line}{note}")
 
     return "\n".join(lines)
 

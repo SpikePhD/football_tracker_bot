@@ -33,7 +33,7 @@ from utils import espn_client
 from utils import espn_tennis_client
 from utils import api_client
 from utils.time_utils import italy_now, get_italy_date_string, parse_utc_to_italy, get_current_season_year
-from utils.event_formatter import normalize_api_football_events
+from utils.event_formatter import is_shootout_event, normalize_api_football_events
 
 logger = logging.getLogger(__name__)
 
@@ -509,7 +509,7 @@ def _is_live_espn_match(match: dict) -> bool:
 
 
 def _goal_event_count(events: list) -> int:
-    return sum(1 for e in events if e.get("type") == "Goal")
+    return sum(1 for e in events if e.get("type") == "Goal" and not is_shootout_event(e))
 
 
 def _event_quality(events: list) -> tuple[int, int, int]:

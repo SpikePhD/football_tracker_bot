@@ -60,14 +60,16 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
     seen: set = set()  # deduplicate ESPN duplicate entries by (minute, player, type)
 
     for detail in details:
-        etype = detail.get("type", {}).get("text", "")
+        detail_type = detail.get("type", {})
+        etype = detail_type.get("text", "")
+        etype_id = str(detail_type.get("id", ""))
         athletes = detail.get("athletesInvolved", [])
         player_name = athletes[0].get("fullName", "N/A") if athletes else "N/A"
         clock_val = int(detail.get("clock", {}).get("value", 0)) // 60
         team_id = detail.get("team", {}).get("id")
         team_name = team_id_to_name.get(team_id, "Unknown")
 
-        dedup_key = (clock_val, player_name, etype)
+        dedup_key = (clock_val, player_name, etype, etype_id)
         if dedup_key in seen:
             continue
         seen.add(dedup_key)
@@ -79,6 +81,15 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
                 "team": {"id": team_id, "name": team_name},
                 "type": "Goal",
                 "detail": "Normal Goal",
+            })
+        elif etype_id == "104" and etype in ("Penalty - Scored", "Penalty"):
+            events.append({
+                "time": {"elapsed": clock_val},
+                "player": {"name": player_name},
+                "team": {"id": team_id, "name": team_name},
+                "type": "PenaltyShootout",
+                "detail": "Scored",
+                "shootout": True,
             })
         elif etype in ("Penalty - Scored", "Penalty"):
             events.append({
@@ -175,11 +186,25 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
         details = competition.get("details", [])
         events = _normalize_details(details, team_id_to_name)
 
+        winner = None
+        winner_competitor = next((c for c in competitors if c.get("winner") is True), None)
+        if winner_competitor:
+            winner = (
+                winner_competitor.get("team", {}).get("displayName")
+                or winner_competitor.get("team", {}).get("name")
+            )
+
         return {
             "fixture": {
                 "id": espn_event.get("id"),   # string, e.g. "737084"
                 "date": espn_event.get("date"),  # UTC ISO, e.g. "2026-04-04T13:00Z"
-                "status": {"short": status_short, "elapsed": elapsed_min},
+                "status": {
+                    "short": status_short,
+                    "elapsed": elapsed_min,
+                    "detail": status_type.get("detail") or "",
+                    "description": description or "",
+                    "name": status_name or "",
+                },
             },
             "teams": {
                 "home": {"id": home_team_id, "name": home_team_name},
@@ -191,6 +216,7 @@ def _normalize_event(espn_event: dict, league_id: int) -> dict | None:
             },
             "events": events,
             "league": {"id": league_id},
+            "winner": winner,
         }
 
     except Exception as e:

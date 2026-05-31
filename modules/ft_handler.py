@@ -8,7 +8,13 @@ from config import CHANNEL_ID
 from modules.bot_mode import is_silent
 from modules.storage import load, save
 from utils.time_utils import italy_now
-from utils.event_formatter import format_match_events, event_completeness_note, normalize_api_football_events
+from utils.event_formatter import (
+    format_match_events,
+    format_shootout_segments,
+    event_completeness_note,
+    is_shootout_event,
+    normalize_api_football_events,
+)
 from modules.discord_poster import post_new_general_message
 from modules.football_memory import update_match_in_memory
 
@@ -190,6 +196,9 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     ft_message = f"FT: {home_team} {goals.get('home', '?')} - {goals.get('away', '?')} {away_team}"
     if detail_lines:
         ft_message += f" ({'; '.join(detail_lines)})"
+    shootout_segments = format_shootout_segments(match_details, final=True)
+    if shootout_segments:
+        ft_message += " | " + " | ".join(shootout_segments)
 
     note = event_completeness_note(goals, events)
     if note:
@@ -197,7 +206,7 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
         logger.warning(
             f"Warning: FT event mismatch for {home_team} vs {away_team}: "
             f"score total={int(goals.get('home',0) or 0) + int(goals.get('away',0) or 0)}, "
-            f"goal events={sum(1 for e in events if e.get('type') == 'Goal')}."
+            f"goal events={sum(1 for e in events if e.get('type') == 'Goal' and not is_shootout_event(e))}."
         )
 
     logger.info(f"ðŸ“¢ Posting FT result: {ft_message}")

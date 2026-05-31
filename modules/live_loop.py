@@ -8,7 +8,7 @@ from config import CHANNEL_ID
 from modules import api_provider
 from modules.bot_mode import is_silent
 from utils.time_utils import italy_now
-from utils.event_formatter import format_match_events, event_completeness_note
+from utils.event_formatter import format_match_events, format_shootout_segments, event_completeness_note
 from modules.ft_handler import is_tracked_for_ft, track_match_for_ft
 from modules.discord_poster import upsert_live_message
 
@@ -73,9 +73,10 @@ def seed_already_posted(fixtures: list) -> None:
         if match.get("fixture", {}).get("status", {}).get("short") not in _LIVE_STATUSES:
             continue
         match_id = str(match["fixture"]["id"])
+        status_short = match.get("fixture", {}).get("status", {}).get("short")
         score = match.get("goals", {})
         events = match.get("events", [])
-        key = f"{match_id}_{score.get('home')}-{score.get('away')}_{len(events)}"
+        key = f"{match_id}_{status_short}_{score.get('home')}-{score.get('away')}_{len(events)}"
         live_state_keys[match_id] = key
         count += 1
     if count:
@@ -116,7 +117,8 @@ async def run_live_loop(bot):
             score = enriched["goals"]
             events = enriched.get("events", [])
             elapsed = enriched.get("fixture", {}).get("status", {}).get("elapsed")
-            state_key = f"{match_id}_{score['home']}-{score['away']}_{len(events)}"
+            status_short = enriched.get("fixture", {}).get("status", {}).get("short")
+            state_key = f"{match_id}_{status_short}_{score['home']}-{score['away']}_{len(events)}"
 
             previous_observed = _last_observed.get(match_id)
             if previous_observed:
@@ -183,9 +185,15 @@ async def run_live_loop(bot):
             event_strings = format_match_events(events, home, away)
             completeness = event_completeness_note(score, events)
 
-            line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
+            if status_short == "PEN":
+                line_content = f"⚽ Football LIVE [PEN]: {home} {score['home']} - {score['away']} {away}"
+            else:
+                line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
             if event_strings:
                 line_content += " (" + "; ".join(event_strings) + ")"
+            shootout_segments = format_shootout_segments(enriched, final=False)
+            if shootout_segments:
+                line_content += " | " + " | ".join(shootout_segments)
             if completeness:
                 line_content += completeness
 
@@ -225,7 +233,8 @@ async def run_live_loop(bot):
                     "elapsed": elapsed if isinstance(elapsed, int) else None,
                     "events_count": len(events),
                 }
-                logger.info(f"Live update upserted for match {match_id}: {line_content}")
+                safe_line_content = line_content.encode("ascii", "backslashreplace").decode("ascii")
+                logger.info(f"Live update upserted for match {match_id}: {safe_line_content}")
 
         # Clean stale map entries when a match is no longer live, after grace window.
         for mid in list(live_state_keys.keys()):

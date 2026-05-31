@@ -16,6 +16,7 @@ from config import (
     MEMORY_STALE_THRESHOLD_DAYS,
     ESPN_CACHE_TTL_SEC,
 )
+from utils.event_formatter import is_shootout_event
 from utils.time_utils import italy_now
 
 logger = logging.getLogger(__name__)
@@ -306,6 +307,8 @@ async def update_match_data(
     # --- Player Stats Updates (by name) ---
     player_stats_updates = {}
     for event in match.get("events", []):
+        if is_shootout_event(event):
+            continue
         event_type = event.get("type")
         player_name = event.get("player", {}).get("name")
         team_id = event.get("team", {}).get("id")
