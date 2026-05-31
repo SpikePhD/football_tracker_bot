@@ -1,86 +1,59 @@
-﻿# Agent Guide - Football Tracker Bot (Marco Van Botten)
+# Agent Guide - Football Tracker Bot
 
-Guidance for coding agents working in this repository.
+Read this file first. Keep context light: open deeper docs only when the task needs them.
 
 ## Purpose
 
-A Discord bot that posts football and tracked tennis updates into one channel.
+Discord bot for one channel:
 
-- Primary provider: ESPN
-- Secondary provider: API-Football (fallback/enrichment)
-- Deployment target: Raspberry Pi + systemd service
+- Football and tracked tennis updates
+- ESPN primary provider
+- API-Football fallback/enrichment
+- Raspberry Pi + `systemd` deployment
+
+## Read Routing
+
+- `DEVELOPER.md` - architecture, coding rules, extension notes, validation
+- `OPERATIONS.md` - Pi service, logs, update, troubleshooting workflows
+- `README.md` - user-facing setup, commands, project map
+- `CHANGELOG.md` - release-note or `!changelog` work only
+
+Do not preload `docs/archive/`, `bot_memory/`, `inject_memory/`, `__pycache__/`, logs, dumps, or generated exports unless the task explicitly requires them.
 
 ## Configuration Contract
 
-Use the 3-file split:
-
-- `.env` -> secrets only
-- `config.json` -> non-secret behavior knobs
-- `.env.deploy` -> deployment script variables
+- `.env` - secrets only
+- `config.json` - committed non-secret behavior knobs
+- `.env.deploy` - deployment script variables
 
 Do not place secrets in `config.json`.
-
-## Architecture Snapshot
-
-```text
-football_tracker_bot.py
-  -> loads cogs
-  -> starts scheduler/task loops
-  -> manages shared HTTP session
-
-modules/
-  scheduler.py      daily orchestration
-  live_loop.py      live updates + dedup
-  ft_handler.py     final result tracking/posting
-  tennis_loop.py    tennis polling/announcements
-  api_provider.py   ESPN primary, fallback/enrichment policy
-  discord_poster.py unified message sending
-  storage.py        runtime JSON state in bot_memory/
-```
 
 ## Hard Rules
 
 - Route command replies through `post_new_message_to_context(...)`.
-- Route proactive posts through `discord_poster` helpers.
+- Route proactive posts through `modules/discord_poster.py` helpers.
 - Do not create new `aiohttp` sessions; use the shared bot session.
 - Prefer `modules/api_provider.py` for fixture data access paths.
 - Keep runtime persistence in `bot_memory/` only.
 - Keep `inject_memory/` read-only from runtime logic.
+- Use module loggers (`logging.getLogger(__name__)`); avoid `print()` in production code.
+- Do not duplicate updater shell logic in Python; `update.sh` is canonical.
 
-## Data/State Notes
+## Extension Notes
 
-- `bot_memory/` is gitignored and persists across deployments.
-- `config.json` is committed and intentionally non-secret.
-- `.env` and `.env.deploy` are gitignored.
+- Add a competition by updating tracked IDs/slugs in `config.json` and `config.example.json`; change `config.py` only if schema validation changes.
+- Add a command as a small cog under `cogs/`, with `async def setup(bot): await bot.add_cog(...)`.
+- Add runtime state through `modules/storage.py`, and make deploy/update defaults safe and non-overwriting.
 
-## Logging Expectations
+## Architecture Snapshot
 
-- Use module loggers (`logging.getLogger(__name__)`).
-- Keep logs structured and grep-friendly.
-- Avoid `print()` in production code.
-
-## When Extending
-
-### Add a competition
-
-- Update tracked IDs/slugs in config surfaces (`config.json` + loader validation as needed).
-- Keep naming centralized; avoid per-cog constants.
-
-### Add a new command cog
-
-- Add file in `cogs/`
-- Keep command behavior small and explicit
-- Validate with local compile/import checks
-
-### Add new runtime state
-
-- Use `modules/storage.py`
-- Ensure defaults are safely created during deploy/update flows
-
-## What to Avoid
-
-- Direct low-level provider calls in random modules/cogs when provider orchestration exists
-- Duplicated configuration constants in multiple files
-- Backward-compat shims unless explicitly requested
-- Destructive repo operations unless explicitly requested
-- Duplicating updater shell logic in Python when `update.sh` is the canonical path
+```text
+football_tracker_bot.py  loads cogs, starts loops, owns shared HTTP session
+modules/scheduler.py     daily orchestration
+modules/live_loop.py     live updates + dedup
+modules/ft_handler.py    final result tracking/posting
+modules/tennis_loop.py   tennis polling/announcements
+modules/api_provider.py  ESPN primary, fallback/enrichment policy
+modules/discord_poster.py unified message sending
+modules/storage.py       runtime JSON state in bot_memory/
+```

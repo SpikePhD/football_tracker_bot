@@ -114,3 +114,7 @@ python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').
 ```
 
 If tests fail because local dependencies are missing, run them through the project virtualenv.
+
+## Deferred Agent-Light Refactors
+
+Future medium-risk cleanup can split `tests/test_regressions.py`, `cogs/ask.py`, and `modules/api_provider.py` into smaller focused files. Do that only as a deliberate refactor with full regression coverage; this repo currently keeps those behavior-heavy modules intact.
