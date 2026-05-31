@@ -1,8 +1,17 @@
 # Marco Van Botten - Football Tracker Bot
 
-Marco Van Botten is a Discord bot for tracking selected football competitions and tennis players in one channel. It posts daily fixture summaries, live score updates, final results, tracked tennis updates, provider status, operational logs, and football Q&A answers.
+Marco Van Botten is a single-channel Discord bot for tracked football and tennis updates. It posts daily fixture summaries, live score updates, final results, provider status, runtime logs, and football Q&A answers.
 
-The bot is designed for a Raspberry Pi deployment with `systemd`, but it also runs locally for development.
+The deployment target is a Raspberry Pi running a `systemd` service, with ESPN as the primary football provider and API-Football reserved for fallback/enrichment.
+
+## Canonical Docs
+
+- `README.md` - project overview, setup, commands, and file map
+- `OPERATIONS.md` - Raspberry Pi service, update, logging, and troubleshooting workflows
+- `DEVELOPER.md` - architecture, coding rules, and validation checks
+- `AGENTS.md` - instructions for coding agents working in this repo
+- `CHANGELOG.md` - current release notes shown by `!changelog`
+- `docs/archive/CHANGELOG-legacy.md` - older release history
 
 ## What It Tracks
 
@@ -16,29 +25,11 @@ Default football coverage includes Serie A, Coppa Italia, Supercoppa Italiana, P
 
 ## Data Providers
 
-Football uses a provider hierarchy:
+Football data flows through `modules/api_provider.py`.
 
-- ESPN is the primary provider for fixtures, live polling, and full-time detection.
-- API-Football is the secondary provider for fallback mode and sparse event enrichment.
-
-ESPN is queried first because it does not require an API key and has been the most reliable source for this bot. API-Football is protected by quota controls because the free plan has a daily call limit.
-
-The enrichment system only calls API-Football when ESPN has an incomplete goal-event list, for example when the score is `1-0` but ESPN has not supplied the scorer event yet. It uses retry delays, per-tick caps, a daily budget, mapping caches, incomplete-response cooldowns, and best-known event reuse to avoid wasting calls.
-
-## Core Features
-
-- Grouped daily fixture snapshots via `!matches`
-- Live football message upserts with scoreline, minute, goals, and cards
-- Final result posts with scorer details where available
-- Tennis tracking for live, upcoming, and finished matches
-- Morning broadcast controls with `!goodmorning`
-- Broadcast modes: verbose, normal, and silent
-- Provider status command showing ESPN or API-Football fallback state
-- `!ask` football assistant with web search, trusted-source preference, live fixture tools, next-match lookup, and football memory
-- Runtime football memory export and refresh commands for admins
-- Runtime log export through Discord
-- Discord-triggered update command for Raspberry Pi deployment
-- Automatic update script support
+- ESPN is primary for fixtures, live polling, and full-time detection.
+- API-Football is secondary for provider fallback and sparse event enrichment.
+- Enrichment is bounded by retry delays, per-tick caps, daily call budgets, mapping caches, incomplete-response cooldowns, and best-known event reuse.
 
 ## Commands
 
@@ -49,7 +40,7 @@ The enrichment system only calls API-Football when ESPN has an incomplete goal-e
 | `!competitions` | - | List tracked football competitions |
 | `!next <team>` | - | Show a team's next scheduled match |
 | `!hi` | `!hello` | Health/greeting check |
-| `!changelog` | - | Show changelog |
+| `!changelog` | - | Show current changelog |
 | `!version` | `!ver`, `!commit` | Show running version and last update |
 | `!api` | `!apistatus`, `!provider` | Current football data provider status |
 | `!goodmorning` | `!gm` | Morning broadcast settings |
@@ -66,58 +57,31 @@ The enrichment system only calls API-Football when ESPN has an incomplete goal-e
 | `!update` | `!pull` | Run `update.sh` and restart the service |
 | `!commands` | `!cmds`, `!help` | List available commands |
 
-Mode commands require Discord `manage_guild` permission. Memory commands require bot owner permission. `!update` is intentionally available to channel users and can restart the bot.
+Mode commands require Discord `manage_guild` permission. Memory commands require bot owner permission. `!update` is intentionally available to channel users and may restart the bot.
 
-## Configuration Model
+## Configuration
 
 The repository uses a 3-file split:
 
-- `.env` contains secrets only.
-- `config.json` contains committed, non-secret behavior knobs.
-- `.env.deploy` contains deployment script variables.
+- `.env` - secrets only (`BOT_TOKEN`, `API_KEY`, `SECONDARY_API_KEY`, `CHANNEL_ID`, `LLM_API_KEY`)
+- `config.json` - committed non-secret behavior knobs
+- `.env.deploy` - deployment script variables (`SERVICE_NAME`, `GIT_BRANCH`)
 
-Do not put secrets in `config.json`.
+Do not put secrets in `config.json`. Start from `.env.example`, `.env.deploy.example`, and `config.example.json`.
 
-### `.env`
+Important `config.json` sections:
 
-```env
-BOT_TOKEN=...
-API_KEY=...
-SECONDARY_API_KEY=...
-CHANNEL_ID=...
-LLM_API_KEY=...
-```
+- `bot` - bot name/profile
+- `tracking` - football league IDs, ESPN slugs, tennis players
+- `operations` - polling, caching, live edit window, provider/enrichment behavior
+- `log` - file logging and Discord log export limits
+- `memory` - football memory freshness and ESPN cache settings
+- `llm` - non-secret assistant endpoint, model, and persona prompt
+- `search` - trusted domains for football web search
 
-`API_KEY` and `SECONDARY_API_KEY` are for API-Football compatibility and fallback/enrichment paths. `LLM_API_KEY` is used by the external LLM endpoint configured in `config.json`.
+## Local Setup
 
-### `config.json`
-
-Use `config.example.json` as the starting point. Important sections:
-
-- `bot`: bot name
-- `tracking`: football league IDs, ESPN slugs, tennis players
-- `operations`: polling, caching, live edit window, provider behavior
-- `log`: file logging and Discord log export limits
-- `memory`: stale-memory and ESPN cache settings
-- `llm`: non-secret assistant endpoint, model, and persona prompt
-- `search`: trusted domains for football web search
-
-API-Football enrichment controls live under `operations.api_provider`:
-
-```json
-{
-  "enrich_max_calls_per_tick": 2,
-  "enrich_grace_sec": 10,
-  "enrich_daily_call_budget": 100,
-  "enrich_negative_mapping_ttl_sec": 900,
-  "enrich_incomplete_events_cooldown_sec": 180,
-  "enrich_retry_delays_sec": [60, 180, 600, 1200]
-}
-```
-
-These settings keep enrichment bounded while still allowing the full free daily API-Football quota to be used if needed.
-
-## Quick Setup
+Linux/macOS:
 
 ```bash
 git clone https://github.com/SpikePhD/football_tracker_bot.git
@@ -131,26 +95,33 @@ cp config.example.json config.json
 python football_tracker_bot.py
 ```
 
-On Windows:
+Windows:
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\activate
 pip install -r requirements.txt
+copy .env.example .env
+copy .env.deploy.example .env.deploy
+copy config.example.json config.json
 python football_tracker_bot.py
 ```
 
 ## Deployment
 
-The target deployment is Raspberry Pi plus `systemd`.
+For a first Raspberry Pi install, run:
 
-Default service name:
-
-```text
-marco_van_botten
+```bash
+bash install.sh
 ```
 
-Useful commands:
+For an existing deployment:
+
+```bash
+bash update.sh
+```
+
+Useful service commands:
 
 ```bash
 sudo systemctl restart marco_van_botten
@@ -158,21 +129,11 @@ sudo systemctl status marco_van_botten --no-pager -l
 sudo journalctl -u marco_van_botten -f
 ```
 
-Manual update:
-
-```bash
-bash update.sh
-```
-
-Discord update:
-
-```text
-!update
-```
+See `OPERATIONS.md` for the canonical runbook.
 
 ## Runtime State
 
-Runtime state is stored in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, and other generated state.
+Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, and generated exports.
 
 `inject_memory/` is repo-controlled reference material and should be treated as read-only by runtime logic.
 
@@ -185,8 +146,11 @@ config.json
 cogs/
 modules/
 utils/
+tests/
 bot_memory/      runtime state, gitignored
 inject_memory/   repo-controlled reference data
+docs/archive/    archived documentation/history
+install.sh
 update.sh
 auto_update.sh
 ```
@@ -199,12 +163,3 @@ python -m compileall config.py modules tests
 python -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))"
 python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))"
 ```
-
-## Notes For Contributors
-
-- Route command replies through `post_new_message_to_context(...)`.
-- Route proactive posts through `modules/discord_poster.py`.
-- Use the shared bot HTTP session; do not create ad-hoc `aiohttp` sessions.
-- Prefer `modules/api_provider.py` for fixture data access.
-- Keep runtime persistence in `bot_memory/`.
-- Keep `inject_memory/` read-only from runtime code.
