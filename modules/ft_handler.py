@@ -78,7 +78,7 @@ def mark_ft_announced(match_id) -> None:
 
 def clear_tracked_matches_today():
     global tracked_matches
-    logger.info("ðŸ”„ Clearing 'tracked_matches' dictionary for the schedule cycle.")
+    logger.info("Clearing 'tracked_matches' dictionary for the schedule cycle.")
     tracked_matches.clear()
     _past_expected_live_logged.clear()
     _ensure_ft_state_current_date()
@@ -102,7 +102,7 @@ def seed_already_announced_ft(fixtures: list) -> None:
                     continue
                 count += 1
     if count:
-        logger.info(f"ðŸŒ± Seeded {count} already-FT match IDs (will not re-announce).")
+        logger.info(f"Seeded {count} already-FT match IDs (will not re-announce).")
 
 
 def track_match_for_ft(match_data: dict):
@@ -126,7 +126,7 @@ def track_match_for_ft(match_data: dict):
         home = match_data.get("teams", {}).get("home", {}).get("name", "Home Team")
         away = match_data.get("teams", {}).get("away", {}).get("name", "Away Team")
         logger.info(
-            f"ðŸ†• Tracking {home} vs {away} (ID: {match_id}) for FT. "
+            f"Tracking {home} vs {away} (ID: {match_id}) for FT. "
             f"Expected check around {expected_ft_check_time.strftime('%H:%M')}"
         )
     except KeyError as e:
@@ -157,7 +157,7 @@ def _is_terminal_non_ft_status(status_short: str | None) -> bool:
     return status_short in _TERMINAL_NON_FT_STATUSES
 
 
-# â”€â”€ Shared FT posting logic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Shared FT posting logic
 
 async def _post_ft_from_data(bot: discord.Client, match_details: dict):
     """Build and send the FT result message from a normalized match dict."""
@@ -209,18 +209,18 @@ async def _post_ft_from_data(bot: discord.Client, match_details: dict):
             f"goal events={sum(1 for e in events if e.get('type') == 'Goal' and not is_shootout_event(e))}."
         )
 
-    logger.info(f"ðŸ“¢ Posting FT result: {ft_message}")
+    logger.info(f"Posting FT result: {ft_message}")
     sent = await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
     return sent is not None
 
 
-# â”€â”€ Main FT detection (dual-path) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# Main FT detection (dual-path)
 
 async def fetch_and_post_ft(bot: discord.Client):
     """
     Check tracked matches for Full-Time status and post results.
 
-    ESPN mode (primary): reads finished matches from the cached scoreboard â€” no extra API call.
+    ESPN mode (primary): reads finished matches from the cached scoreboard; no extra API call.
     Fallback mode: calls API-Football per tracked match after expected FT time.
     """
     if is_silent():
@@ -232,7 +232,7 @@ async def fetch_and_post_ft(bot: discord.Client):
     current_time = italy_now()
 
     if api_provider.is_espn_healthy():
-        # â”€â”€ ESPN path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # ESPN path
         all_matches = await api_provider.fetch_day(bot.http_session)
         matches_by_id = {str(m["fixture"]["id"]): m for m in all_matches}
         finished = [m for m in all_matches if _fixture_status_short(m) == "FT"]
@@ -298,17 +298,17 @@ async def fetch_and_post_ft(bot: discord.Client):
             mid = str(match["fixture"]["id"])
             if mid in tracked_matches or mid in _already_announced_ft:
                 continue
-            logger.info(f"ðŸ†• [Orphan FT] Announcing untracked FT match {mid}.")
+            logger.info(f"[Orphan FT] Announcing untracked FT match {mid}.")
             if await _post_ft_from_data(bot, match):
                 mark_ft_announced(mid)
 
     else:
-        # â”€â”€ API-Football fallback path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # API-Football fallback path
         for match_id, info in list(tracked_matches.items()):
             if current_time < info["exp_ft"]:
                 continue
 
-            logger.info(f"ðŸ” [Fallback] Checking FT status for match ID {match_id}")
+            logger.info(f"[Fallback] Checking FT status for match ID {match_id}")
 
             payload = await api_provider.fetch_fixture(bot.http_session, match_id)
             if not payload:

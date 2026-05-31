@@ -32,6 +32,25 @@ class RegressionTests(unittest.TestCase):
             api_provider._enrich_api_call_count_date = None
             api_provider._enrich_budget_exhausted_logged_date = None
 
+    def test_production_python_sources_do_not_contain_mojibake_markers(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        production_paths = [
+            repo_root / "football_tracker_bot.py",
+            *(repo_root / "modules").glob("*.py"),
+            *(repo_root / "cogs").glob("*.py"),
+            *(repo_root / "utils").glob("*.py"),
+        ]
+        mojibake_markers = ("ðŸ", "â€”", "â€“", "â„", "â", "âš", "âœ", "ï¸", "�")
+        offenders = []
+
+        for path in production_paths:
+            text = path.read_text(encoding="utf-8")
+            for marker in mojibake_markers:
+                if marker in text:
+                    offenders.append(f"{path.relative_to(repo_root)} contains {marker!r}")
+
+        self.assertEqual(offenders, [])
+
     def test_api_football_event_normalization_preserves_team_id(self):
         from utils.event_formatter import normalize_api_football_events
 
