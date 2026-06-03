@@ -312,8 +312,8 @@ async def fetch_next_team_fixture_espn(
     Returns a normalised match dict or None.
     """
     from datetime import datetime, timedelta, timezone
-    from utils.time_utils import italy_now
-    now = italy_now().astimezone(timezone.utc)
+    from utils.time_utils import bot_now
+    now = bot_now().astimezone(timezone.utc)
     team_id_str = str(espn_team_id)
 
     # Build reverse slug→league_id map

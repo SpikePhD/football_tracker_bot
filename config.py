@@ -1,6 +1,7 @@
 ﻿import json
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 
@@ -63,6 +64,25 @@ def _expect(cfg: dict, key: str, expected_type, parent: str = ""):
     return value
 
 
+def _expect_int_range(cfg: dict, key: str, minimum: int, parent: str = "") -> int:
+    value = int(_expect(cfg, key, int, parent))
+    scope = f"{parent}.{key}" if parent else key
+    if value < minimum:
+        raise RuntimeError(f"config.json key '{scope}' must be >= {minimum}.")
+    return value
+
+
+def _validate_timezone_name(value: str) -> str:
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as e:
+        raise RuntimeError(
+            f"config.json key 'operations.timezone' is invalid: {value!r}. "
+            "Use an IANA timezone name such as 'Europe/Rome'."
+        ) from e
+    return value
+
+
 _PUBLIC = _load_public_config()
 
 bot_cfg = _expect(_PUBLIC, "bot", dict)
@@ -93,6 +113,13 @@ TENNIS_PRE_ANNOUNCE_HOURS = int(_expect(ops_cfg, "tennis_pre_announce_hours", in
 LIVE_UPDATE_EDIT_WINDOW_MESSAGES = int(
     _expect(ops_cfg, "live_update_edit_window_messages", int, "operations")
 )
+OPERATIONS_TIMEZONE = _validate_timezone_name(_expect(ops_cfg, "timezone", str, "operations"))
+FOOTBALL_PREMATCH_WINDOW_HOURS = _expect_int_range(ops_cfg, "football_prematch_window_hours", 0, "operations")
+FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS = _expect_int_range(ops_cfg, "football_match_lookup_window_hours", 1, "operations")
+FOOTBALL_FINISHED_RETENTION_HOURS = _expect_int_range(ops_cfg, "football_finished_retention_hours", 1, "operations")
+FOOTBALL_STATE_RETENTION_HOURS = _expect_int_range(ops_cfg, "football_state_retention_hours", 1, "operations")
+FOOTBALL_EXPECTED_FT_MINUTES = _expect_int_range(ops_cfg, "football_expected_ft_minutes", 1, "operations")
+FOOTBALL_MAX_LIVE_DURATION_HOURS = _expect_int_range(ops_cfg, "football_max_live_duration_hours", 1, "operations")
 
 provider_cfg = _expect(ops_cfg, "api_provider", dict, "operations")
 API_FAILURE_THRESHOLD = int(_expect(provider_cfg, "failure_threshold", int, "operations.api_provider"))

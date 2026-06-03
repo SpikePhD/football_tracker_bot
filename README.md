@@ -30,12 +30,27 @@ Football data flows through `modules/api_provider.py`.
 - ESPN is primary for fixtures, live polling, and full-time detection.
 - API-Football is secondary for provider fallback and sparse event enrichment.
 - Enrichment is bounded by retry delays, per-tick caps, daily call budgets, mapping caches, incomplete-response cooldowns, and best-known event reuse.
+- Football fixture lookup uses rolling UTC-aware windows and dedupes by fixture ID across provider dates.
+
+## Football Lifecycle
+
+Football match lifecycle is UTC-first and fixture-ID-first. The bot tracks a fixture by provider fixture ID, UTC kickoff, provider status, retention windows, and persisted state in `bot_memory/match_state.json`.
+
+The configured timezone is not used to decide whether a football match is active, finished, stale, or eligible for memory updates. It is used only for display, logs, local daily summaries, and scheduled human-facing routines. This prevents cross-midnight tournament fixtures from being dropped when the configured local date changes.
+
+Important lifecycle behavior:
+
+- live and FT state survives local midnight, restarts, provider outages, and Discord reconnects
+- FT announcements are exactly-once per fixture ID
+- football memory updates are exactly-once per fixture ID and retry independently from FT posts
+- live message IDs are fixture-ID based and can be replaced if a Discord message is stale or deleted
+- old terminal or stale fixtures are pruned by retention windows, not midnight clears
 
 ## Commands
 
 | Command | Aliases | Description |
 |---|---|---|
-| `!matches` | - | Today's tracked football and tennis events |
+| `!matches` | - | Current tracked football and local-day tennis events |
 | `!tennis` | - | Tracked tennis: live now, upcoming, and today's finished matches |
 | `!competitions` | - | List tracked football competitions |
 | `!next <team>` | - | Show a team's next scheduled match |
@@ -78,6 +93,16 @@ Important `config.json` sections:
 - `memory` - football memory freshness and ESPN cache settings
 - `llm` - non-secret assistant endpoint, model, and persona prompt
 - `search` - trusted domains for football web search
+
+Key `operations` timezone/lifecycle settings:
+
+- `timezone` - display and scheduled-routine timezone, default `Europe/Rome`
+- `football_prematch_window_hours` - when near-kickoff fixtures become active
+- `football_match_lookup_window_hours` - rolling provider lookup horizon
+- `football_finished_retention_hours` - how long terminal fixtures remain relevant
+- `football_state_retention_hours` - stale state retention for non-terminal records
+- `football_expected_ft_minutes` - expected FT check offset from UTC kickoff
+- `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
 
 ## Local Setup
 
@@ -133,7 +158,7 @@ See `OPERATIONS.md` for the canonical runbook.
 
 ## Runtime State
 
-Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, and generated exports.
+Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state.
 
 `inject_memory/` is repo-controlled reference material and should be treated as read-only by runtime logic.
 
@@ -159,7 +184,7 @@ auto_update.sh
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
-python -m compileall config.py modules tests
+python -m compileall config.py modules utils cogs tests football_tracker_bot.py
 python -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))"
 python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))"
 ```

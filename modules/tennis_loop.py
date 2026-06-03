@@ -7,7 +7,7 @@ from modules import api_provider
 from modules.bot_mode import is_silent
 from modules.discord_poster import post_new_general_message, upsert_live_message
 from modules.storage import load, save
-from utils.time_utils import italy_now, parse_utc_to_italy
+from utils.time_utils import bot_now, to_bot_tz
 from utils.tennis_formatter import (
     format_tennis_final_message,
     format_tennis_live_message,
@@ -30,22 +30,22 @@ _state_loaded = False
 _last_reset_date: str | None = None
 
 
-def _is_today_italy(start_time: str | None) -> bool:
+def _is_tennis_local_today(start_time: str | None) -> bool:
     if not start_time:
         return False
     try:
-        return parse_utc_to_italy(start_time).date() == italy_now().date()
+        return to_bot_tz(start_time).date() == bot_now().date()
     except Exception:
         return False
 
 
-def _is_tomorrow_italy(start_time: str | None) -> bool:
-    """Check if a match is scheduled for tomorrow in Italy timezone."""
+def _is_tennis_local_tomorrow(start_time: str | None) -> bool:
+    """Check if a match is scheduled for tomorrow in Bot Timezone."""
     if not start_time:
         return False
     try:
-        match_date = parse_utc_to_italy(start_time).date()
-        tomorrow = italy_now().date() + timedelta(days=1)
+        match_date = to_bot_tz(start_time).date()
+        tomorrow = bot_now().date() + timedelta(days=1)
         return match_date == tomorrow
     except Exception:
         return False
@@ -56,8 +56,8 @@ def _is_within_window(start_time: str | None, hours: int = 48) -> bool:
     if not start_time:
         return False
     try:
-        match_dt = parse_utc_to_italy(start_time)
-        now = italy_now()
+        match_dt = to_bot_tz(start_time)
+        now = bot_now()
         return now <= match_dt <= now + timedelta(hours=hours)
     except Exception:
         return False
@@ -88,9 +88,9 @@ def _persist_state() -> None:
 def clear_tennis_state_today() -> None:
     global _last_reset_date
     _load_state_once()
-    today_str = italy_now().date().isoformat()
+    today_str = bot_now().date().isoformat()
     if _last_reset_date == today_str:
-        logger.info("Tennis state already cleared for today; keeping dedup IDs.")
+        logger.info("Tennis state already prepared for the local day; keeping dedup IDs.")
         return
     pre_announced_ids.clear()
     final_announced_ids.clear()
@@ -130,8 +130,8 @@ async def run_tennis_loop(bot) -> None:
         # This prevents posting matches from days ago or far in the future
         is_relevant = (
             status_short in ("LIVE", "FT") or
-            _is_today_italy(start_time) or
-            _is_tomorrow_italy(start_time) or
+            _is_tennis_local_today(start_time) or
+            _is_tennis_local_tomorrow(start_time) or
             _is_within_window(start_time, hours=48)
         )
         
@@ -172,7 +172,7 @@ async def run_tennis_loop(bot) -> None:
         if status_short == "FT":
             # Only post FT results for matches that started today or very recently
             # This prevents re-posting old FT matches after restart
-            if not _is_today_italy(start_time):
+            if not _is_tennis_local_today(start_time):
                 logger.debug(f"Skipping FT match {match_id} - not started today")
                 continue
             if track_id not in final_announced_ids:

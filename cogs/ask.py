@@ -1,4 +1,4 @@
-# cogs/ask.py
+﻿# cogs/ask.py
 import json
 import logging
 import re
@@ -19,7 +19,7 @@ from config import (
     TRUSTED_SPORT_DOMAINS,
     WEB_SEARCH_MIN_TRUSTED_RESULTS,
 )
-from utils.time_utils import italy_now, parse_utc_to_italy
+from utils.time_utils import bot_now, to_bot_tz
 from modules import api_provider
 from modules.discord_poster import post_new_message_to_context
 from modules.football_memory import (
@@ -61,8 +61,8 @@ TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "get_todays_fixtures",
-            "description": "Get today's tracked football fixtures (live and upcoming) from the bot's live feed.",
+            "name": "get_current_fixtures",
+            "description": "Get currently relevant tracked football fixtures from the bot lifecycle window.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
@@ -133,7 +133,7 @@ class Ask(commands.Cog):
         from modules.football_memory import update_all_memory
         async with ctx.typing():
             await update_all_memory(self.bot.http_session)
-        await post_new_message_to_context(ctx, content="✅ Football memory refreshed.")
+        await post_new_message_to_context(ctx, content="OK: Football memory refreshed.")
 
     @commands.command(
         name="dump_memory",
@@ -168,14 +168,14 @@ class Ask(commands.Cog):
 
     async def _run_llm(self, question: str, history: deque) -> str:
         if not LLM_API_KEY:
-            return "⚠️ LLM_API_KEY is not set. Add it to your .env file."
+            return "Warning: LLM_API_KEY is not set. Add it to your .env file."
 
         # --- Memory Integration ---
         memory = load_memory()
         staleness_warning = check_memory_staleness(memory)
         memory_context = self._format_memory_context(question, memory)
 
-        today = italy_now().strftime("%A, %B %d, %Y")
+        today = bot_now().strftime("%A, %B %d, %Y")
         system_content = (
             f"{LLM_SYSTEM_PROMPT}\n"
             f"Today's date is {today}.\n"
@@ -219,12 +219,12 @@ class Ask(commands.Cog):
                     timeout=aiohttp.ClientTimeout(total=60),
                 ) as resp:
                     if resp.status == 401:
-                        return "⚠️ LLM API key is invalid. Check LLM_API_KEY in your .env."
+                        return "Warning: LLM API key is invalid. Check LLM_API_KEY in your .env."
                     if resp.status == 429:
-                        return "⚠️ LLM rate limit hit. Try again in a moment."
+                        return "Warning: LLM rate limit hit. Try again in a moment."
                     if resp.status != 200:
                         text = await resp.text()
-                        return f"⚠️ LLM API error (HTTP {resp.status}): {text[:200]}"
+                        return f"Warning: LLM API error (HTTP {resp.status}): {text[:200]}"
                     data = await resp.json()
 
                 msg = data["choices"][0]["message"]
@@ -259,13 +259,13 @@ class Ask(commands.Cog):
                         "tool_call_id": tc["id"],
                     })
 
-            return "⚠️ Too many tool-call rounds. Try rephrasing your question."
+            return "Warning: Too many tool-call rounds. Try rephrasing your question."
         except aiohttp.ServerTimeoutError:
             logger.warning("ask: LLM API timed out after 60s")
-            return "⚠️ LLM API timed out (>60s). Try again."
+            return "Warning: LLM API timed out (>60s). Try again."
         except Exception as e:
             logger.warning(f"ask: LLM error: {type(e).__name__}: {e}")
-            return f"⚠️ LLM error ({type(e).__name__}): {e or 'check logs'}"
+            return f"Warning: LLM error ({type(e).__name__}): {e or 'check logs'}"
 
     def _attach_sources(self, content: str, sources: list[dict]) -> str:
         # Don't attach sources for jokes, personal advice, or opinions
@@ -401,11 +401,11 @@ class Ask(commands.Cog):
             except Exception as e:
                 return {"content": f"Search failed: {e}", "sources": []}
 
-        if name == "get_todays_fixtures":
+        if name == "get_current_fixtures":
             try:
                 matches = await api_provider.fetch_day(session)
                 if not matches:
-                    return {"content": "No fixtures found for today.", "sources": []}
+                    return {"content": "No currently relevant fixtures found.", "sources": []}
                 lines = []
                 for m in matches[:15]:
                     home = m["teams"]["home"]["name"]
@@ -429,9 +429,9 @@ class Ask(commands.Cog):
                 home = fixture["teams"]["home"]["name"]
                 away = fixture["teams"]["away"]["name"]
                 date_utc = fixture["fixture"]["date"]
-                date_italy = parse_utc_to_italy(date_utc).strftime("%A, %B %d, %Y at %H:%M (Italy Time)")
+                date_local = to_bot_tz(date_utc).strftime("%A, %B %d, %Y at %H:%M (Bot Time)")
                 league = LEAGUE_NAME_MAP.get(fixture["league"]["id"], "Unknown")
-                return {"content": f"{home} vs {away} - {date_italy} ({league})", "sources": []}
+                return {"content": f"{home} vs {away} - {date_local} ({league})", "sources": []}
             except Exception as e:
                 return {"content": f"Next match fetch failed: {e}", "sources": []}
 

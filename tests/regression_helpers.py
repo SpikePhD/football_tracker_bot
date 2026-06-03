@@ -12,6 +12,11 @@ def reset_api_provider_state() -> None:
         return
 
     api_provider._enrich_retry_states.clear()
+    api_provider._football_scoreboard_cache.clear()
+    api_provider._api_football_date_cache.clear()
+    api_provider._cache = []
+    api_provider._cache_date = None
+    api_provider._cache_ts = None
     api_provider._api_fixture_id_cache.clear()
     api_provider._api_live_fixtures_cache = None
     api_provider._api_live_fixtures_cache_ts = None

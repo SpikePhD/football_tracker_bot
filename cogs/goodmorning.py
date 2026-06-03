@@ -8,13 +8,13 @@ import re
 from discord.ext import commands, tasks
 
 from cogs.matches import fetch_combined_matches_snapshot
-from config import CHANNEL_ID
+from config import CHANNEL_ID, OPERATIONS_TIMEZONE
 from modules.bot_mode import get_mode, is_verbose
 from modules.discord_poster import post_new_general_message, post_new_message_to_context
 from modules.ft_handler import seed_already_announced_ft
 from modules.storage import load, save
 from utils.personality import get_greeting
-from utils.time_utils import italy_now
+from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ _DEFAULTS = {
     "enabled": True,
     "hour": 6,
     "minute": 30,
-    "timezone": "Europe/Rome",
+    "timezone": OPERATIONS_TIMEZONE,
 }
 
 
@@ -36,7 +36,7 @@ def _save(cfg: dict) -> None:
 
 
 def _parse_time(time_str: str) -> tuple[int, int]:
-    """Parse HH:MM or HH,MM in Europe/Rome time."""
+    """Parse HH:MM or HH,MM in configured bot time."""
     parts = re.split(r"[:,]", time_str.strip())
     if len(parts) != 2:
         raise ValueError(f"Invalid time `{time_str}`. Use HH:MM, for example `7:00`.")
@@ -69,7 +69,7 @@ class GoodMorning(commands.Cog):
         if not cfg.get("enabled", False):
             return
 
-        now = italy_now()
+        now = bot_now()
         if now.hour != cfg["hour"] or now.minute != cfg["minute"]:
             return
 
@@ -91,7 +91,7 @@ class GoodMorning(commands.Cog):
             sent = await post_new_general_message(self.bot, CHANNEL_ID, content=content)
             if sent is not None:
                 seed_already_announced_ft(football_fixtures)
-            logger.info(f"Morning message sent at {now.strftime('%H:%M')} Europe/Rome.")
+            logger.info(f"Morning message sent at {now.strftime('%H:%M')} {OPERATIONS_TIMEZONE}.")
         except Exception as e:
             logger.error(f"GoodMorning: failed to send message: {e}", exc_info=True)
 
@@ -104,7 +104,7 @@ class GoodMorning(commands.Cog):
         aliases=["gm"],
         help=(
             "Configure the scheduled morning message.\n"
-            "  !goodmorning ON HH:MM - enable at given Europe/Rome time\n"
+            "  !goodmorning ON HH:MM - enable at given configured bot time\n"
             "  !goodmorning OFF - disable\n"
             "  !goodmorning - show current setting"
         ),
@@ -124,7 +124,7 @@ class GoodMorning(commands.Cog):
                     ctx,
                     content=(
                         f"Morning message is **ON** - fires at "
-                        f"**{cfg['hour']:02d}:{cfg['minute']:02d} Europe/Rome**."
+                        f"**{cfg['hour']:02d}:{cfg['minute']:02d} {OPERATIONS_TIMEZONE}**."
                     ),
                 )
             else:
@@ -152,10 +152,13 @@ class GoodMorning(commands.Cog):
                     content="Usage: `!goodmorning ON HH:MM`\nExample: `!goodmorning ON 7:00`",
                 )
                 return
-            if tz_str and tz_str.lower() not in {"europe/rome", "italy", "rome"}:
+            if tz_str and tz_str != OPERATIONS_TIMEZONE:
                 await post_new_message_to_context(
                     ctx,
-                    content="Timezone is fixed to `Europe/Rome`; use `!goodmorning ON HH:MM`.",
+                    content=(
+                        f"Timezone is configured globally as `{OPERATIONS_TIMEZONE}`; "
+                        "use `!goodmorning ON HH:MM`."
+                    ),
                 )
                 return
             try:
@@ -167,7 +170,7 @@ class GoodMorning(commands.Cog):
             cfg["enabled"] = True
             cfg["hour"] = hour
             cfg["minute"] = minute
-            cfg["timezone"] = "Europe/Rome"
+            cfg["timezone"] = OPERATIONS_TIMEZONE
             cfg.pop("tz_offset_minutes", None)
             _save(cfg)
 
@@ -175,7 +178,7 @@ class GoodMorning(commands.Cog):
                 ctx,
                 content=(
                     f"Morning message **enabled** - will fire at "
-                    f"**{hour:02d}:{minute:02d} Europe/Rome**."
+                    f"**{hour:02d}:{minute:02d} {OPERATIONS_TIMEZONE}**."
                 ),
             )
             return

@@ -5,7 +5,7 @@
 import logging
 import re
 import unicodedata
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 import aiohttp
@@ -24,15 +24,24 @@ from config import (
     API_FALLBACK_POLL_INTERVAL_SEC,
     API_RETRY_INTERVAL_SEC,
     API_SCOREBOARD_CACHE_TTL_SEC,
+    FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS,
     LEAGUE_SLUG_MAP,
     TENNIS_CACHE_TTL_SEC,
     TENNIS_UPCOMING_DAYS,
     build_league_slugs,
 )
+from modules import match_lifecycle
 from utils import espn_client
 from utils import espn_tennis_client
 from utils import api_client
-from utils.time_utils import italy_now, get_italy_date_string, parse_utc_to_italy, get_current_season_year
+from utils.time_utils import (
+    bot_now,
+    get_current_season_year,
+    get_bot_local_date_string,
+    parse_provider_utc,
+    to_bot_tz,
+    utc_now,
+)
 from utils.event_formatter import is_shootout_event, normalize_api_football_events
 
 logger = logging.getLogger(__name__)
@@ -48,12 +57,14 @@ FALLBACK_POLL_INTERVAL = API_FALLBACK_POLL_INTERVAL_SEC
 
 _espn_healthy: bool = True
 _consecutive_failures: int = 0
-_retry_after: datetime | None = None   # wall-clock datetime (Italy tz)
+_retry_after: datetime | None = None
 
 # ── Scoreboard cache ──────────────────────────────────────────────────────────
 
+_football_scoreboard_cache: dict[str, dict] = {}
+_api_football_date_cache: dict[str, dict] = {}
 _cache: list[dict] = []
-_cache_date: str | None = None  # Italy date string (YYYY-MM-DD) the cache covers
+_cache_date: str | None = None
 _cache_ts: datetime | None = None
 CACHE_TTL_SEC = API_SCOREBOARD_CACHE_TTL_SEC
 
@@ -93,7 +104,7 @@ def is_espn_healthy() -> bool:
 
 
 def _retry_window_elapsed() -> bool:
-    return (not _espn_healthy) and (_retry_after is not None) and (italy_now() >= _retry_after)
+    return (not _espn_healthy) and (_retry_after is not None) and (bot_now() >= _retry_after)
 
 
 def _should_try_espn_now() -> bool:
@@ -115,7 +126,7 @@ def get_poll_interval() -> int:
 def get_status() -> dict:
     """Return a snapshot of the current provider state for !api command."""
     healthy = is_espn_healthy()
-    retry_local = _retry_after.astimezone(italy_now().tzinfo) if _retry_after else None
+    retry_local = _retry_after.astimezone(bot_now().tzinfo) if _retry_after else None
     return {
         "espn_healthy": healthy,
         "consecutive_failures": _consecutive_failures,
@@ -140,7 +151,7 @@ def _mark_espn_success() -> None:
 def _mark_espn_failure() -> None:
     global _espn_healthy, _consecutive_failures, _retry_after
     if not _espn_healthy:
-        _retry_after = italy_now() + timedelta(seconds=RETRY_INTERVAL_SEC)
+        _retry_after = bot_now() + timedelta(seconds=RETRY_INTERVAL_SEC)
         retry_str = _retry_after.strftime("%H:%M")
         logger.warning(
             f"🟡 [APIProvider] ESPN retry probe failed while on fallback. "
@@ -158,7 +169,7 @@ def _mark_espn_failure() -> None:
             )
         else:
             _espn_healthy = False
-            _retry_after = italy_now() + timedelta(seconds=RETRY_INTERVAL_SEC)
+            _retry_after = bot_now() + timedelta(seconds=RETRY_INTERVAL_SEC)
             retry_str = _retry_after.strftime("%H:%M")
             logger.error(
                 f"🔴 [APIProvider] ESPN unreachable after {FAILURE_THRESHOLD} consecutive failures. "
@@ -173,28 +184,22 @@ def _mark_espn_failure() -> None:
 
 # ── Scoreboard cache ──────────────────────────────────────────────────────────
 
-async def _get_cached_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
-    """
-    Returns today's full scoreboard (all leagues, all statuses).
-    Cached for CACHE_TTL_SEC seconds; invalidated at Italy midnight.
-    Calls espn_client.fetch_all_leagues on miss, manages health state.
-    """
+async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provider_date: str) -> list[dict]:
+    """Return one ESPN provider-date scoreboard with TTL caching."""
     global _cache, _cache_date, _cache_ts
 
-    today = get_italy_date_string()
-    now = italy_now()
+    now = bot_now()
+    cached = _football_scoreboard_cache.get(provider_date)
+    if cached is None and _cache_date == provider_date and _cache_ts is not None:
+        cached = {"matches": _cache, "fetched_at": _cache_ts}
+    if cached and (now - cached["fetched_at"]).total_seconds() < CACHE_TTL_SEC:
+        return cached["matches"]
 
-    # Cache hit: same day and not expired
-    if (
-        _cache_date == today
-        and _cache_ts is not None
-        and (now - _cache_ts).total_seconds() < CACHE_TTL_SEC
-    ):
-        return _cache
-
-    # Cache miss: fetch fresh data
-    logger.info(f"[APIProvider] Fetching ESPN scoreboard for {today} ({len(LEAGUE_SLUG_MAP)} leagues concurrently)…")
-    date_str = today.replace("-", "")  # YYYYMMDD
+    logger.info(
+        f"[APIProvider] Fetching ESPN scoreboard for {provider_date} "
+        f"({len(LEAGUE_SLUG_MAP)} leagues concurrently)..."
+    )
+    date_str = provider_date.replace("-", "")
 
     try:
         summary = await espn_client.fetch_all_leagues_with_summary(session, LEAGUE_SLUG_MAP, date_str)
@@ -217,114 +222,153 @@ async def _get_cached_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
             f"({failure_count} failed); treating as provider failure."
         )
         _mark_espn_failure()
-        if _cache_date != today:
+        if not cached:
             return []
-    elif results:
-        _mark_espn_success()
-        if failure_count > 0 and _cache_date == today:
+        return cached["matches"]
+
+    _mark_espn_success()
+    if results:
+        if failure_count > 0 and cached:
             stale_matches = [
-                m for m in _cache
+                m for m in cached["matches"]
                 if m.get("league", {}).get("id") in failed_league_ids
             ]
-            _cache = [
-                *results,
-                *stale_matches,
-            ]
+            matches = [*results, *stale_matches]
             logger.warning(
-                f"[APIProvider] ESPN partial refresh merged with stale same-day cache: "
+                f"[APIProvider] ESPN partial refresh merged with stale cache for {provider_date}: "
                 f"{len(succeeded_league_ids)} league(s) fresh, "
                 f"{len(failed_league_ids)} league(s) preserved."
             )
         else:
-            _cache = results
-        _cache_date = today
-        _cache_ts = now
-        logger.info(
-            f"[APIProvider] ESPN scoreboard fetched: {len(_cache)} matches "
-            f"({success_count} league responses ok, {failure_count} failed)."
+            matches = results
+    elif failure_count > 0 and cached:
+        matches = [
+            m for m in cached["matches"]
+            if m.get("league", {}).get("id") in failed_league_ids
+        ]
+        logger.warning(
+            f"[APIProvider] ESPN partial refresh returned no fresh matches; "
+            f"preserved {len(matches)} stale match(es) from failed league(s)."
         )
     else:
-        _mark_espn_success()
-        if failure_count > 0 and _cache_date == today:
-            _cache = [
-                m for m in _cache
-                if m.get("league", {}).get("id") in failed_league_ids
-            ]
-            logger.warning(
-                f"[APIProvider] ESPN partial refresh returned no fresh matches; "
-                f"preserved {len(_cache)} stale match(es) from failed league(s)."
-            )
-        else:
-            _cache = []
-        _cache_date = today
-        _cache_ts = now
-        logger.info(
-            f"[APIProvider] ESPN returned {len(_cache)} matches for today "
-            f"({success_count} league responses ok, {failure_count} failed)."
+        matches = []
+
+    _football_scoreboard_cache[provider_date] = {"matches": matches, "fetched_at": now}
+    _cache = matches
+    _cache_date = provider_date
+    _cache_ts = now
+    logger.info(
+        f"[APIProvider] ESPN scoreboard for {provider_date}: {len(matches)} matches "
+        f"({success_count} league responses ok, {failure_count} failed)."
+    )
+    return matches
+
+
+async def _get_cached_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
+    """Compatibility wrapper for the configured display date."""
+    return await _get_cached_scoreboard_for_date(session, get_bot_local_date_string())
+
+
+def _provider_dates_for_window(start_utc: datetime, end_utc: datetime) -> list[str]:
+    start_day = to_bot_tz(start_utc).date()
+    end_day = to_bot_tz(end_utc).date()
+    dates = []
+    day = start_day
+    while day <= end_day:
+        dates.append(day.isoformat())
+        day += timedelta(days=1)
+    return list(dict.fromkeys(dates))
+
+
+def _dedupe_by_fixture_id(matches: list[dict]) -> list[dict]:
+    deduped: dict[str, dict] = {}
+    for match in matches:
+        fixture_id = match_lifecycle.fixture_identity(match)
+        if fixture_id is not None:
+            deduped[str(fixture_id)] = match
+    return list(deduped.values())
+
+
+async def _fetch_api_football_date(session: aiohttp.ClientSession, provider_date: str) -> list[dict]:
+    now = bot_now()
+    cached = _api_football_date_cache.get(provider_date)
+    if cached and (now - cached["fetched_at"]).total_seconds() < CACHE_TTL_SEC:
+        return cached["matches"]
+
+    matches = await api_client.fetch_fixtures_by_date(session, provider_date)
+    _api_football_date_cache[provider_date] = {"matches": matches, "fetched_at": now}
+    return matches
+
+
+async def fetch_football_window(
+    session: aiohttp.ClientSession,
+    start_utc: datetime,
+    end_utc: datetime,
+) -> list[dict]:
+    provider_dates = _provider_dates_for_window(start_utc, end_utc)
+    if _should_try_espn_now():
+        date_results = await asyncio.gather(
+            *(_get_cached_scoreboard_for_date(session, provider_date) for provider_date in provider_dates)
         )
+        matches = _dedupe_by_fixture_id([m for result in date_results for m in result])
+        if not _espn_healthy:
+            logger.warning("[APIProvider] ESPN became unhealthy during window fetch.")
+            return []
+    else:
+        if api_client.is_quota_exceeded_today():
+            logger.warning("[APIProvider] API-Football quota exhausted. Skipping fallback window fetch.")
+            return []
+        date_results = await asyncio.gather(
+            *(_fetch_api_football_date(session, provider_date) for provider_date in provider_dates)
+        )
+        matches = _dedupe_by_fixture_id([m for result in date_results for m in result])
 
-    return _cache
+    start_utc = start_utc.astimezone(timezone.utc)
+    end_utc = end_utc.astimezone(timezone.utc)
+    filtered = []
+    for match in matches:
+        kickoff = match_lifecycle.fixture_kickoff_utc(match)
+        if match_lifecycle.is_live(match):
+            filtered.append(match)
+        elif kickoff and start_utc <= kickoff <= end_utc:
+            filtered.append(match)
+        elif match_lifecycle.is_recently_finished(match, utc_now()):
+            filtered.append(match)
+    return _dedupe_by_fixture_id(filtered)
 
 
-# ── Public API surface ────────────────────────────────────────────────────────
+async def fetch_relevant_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
+    now_utc = now_utc or utc_now()
+    start_utc = now_utc - timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
+    end_utc = now_utc + timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
+    return await fetch_football_window(session, start_utc, end_utc)
+
 
 async def fetch_day(session: aiohttp.ClientSession) -> list[dict]:
-    """
-    All of today's tracked matches (any status).
-    ESPN primary, API-Football fallback.
-    """
-    if _should_try_espn_now():
-        return await _get_cached_scoreboard(session)
-    if api_client.is_quota_exceeded_today():
-        logger.warning("🟡 [APIProvider] API-Football quota exhausted for today. Skipping fallback day fetch.")
-        return []
-    logger.info("🟡 [APIProvider] Running on API-FOOTBALL fallback. Fetching day fixtures...")
-    return await api_client.fetch_day_fixtures(session)
+    """Display snapshot wrapper over the rolling football lookup."""
+    return await fetch_relevant_football(session, utc_now())
 
 
 async def fetch_live(session: aiohttp.ClientSession) -> list[dict]:
-    """
-    Currently in-progress matches only.
-    ESPN primary, API-Football fallback.
-    """
-    if _should_try_espn_now():
-        all_matches = await _get_cached_scoreboard(session)
-        live_statuses = {"1H", "HT", "2H", "ET", "PEN"}
-        live = [m for m in all_matches if m["fixture"]["status"]["short"] in live_statuses]
-        if not _espn_healthy:
-            # Health switched to fallback during the scoreboard fetch
-            logger.warning("🟡 [APIProvider] ESPN became unhealthy during fetch_live. Will use fallback next cycle.")
-            return []
-        return live
-
-    retry_str = _retry_after.strftime("%H:%M") if _retry_after else "N/A"
-    if api_client.is_quota_exceeded_today():
-        logger.warning("🟡 [APIProvider] API-Football quota exhausted for today. Skipping fallback live fetch.")
-        return []
-    logger.info(f"🟡 [APIProvider] Running on API-FOOTBALL fallback. ESPN retry at {retry_str}.")
-    return await api_client.fetch_live_fixtures(session)
+    """Currently in-progress matches from the rolling football lookup."""
+    matches = await fetch_relevant_football(session, utc_now())
+    return [m for m in matches if match_lifecycle.is_live(m)]
 
 
-async def fetch_finished_today(session: aiohttp.ClientSession) -> list[dict]:
-    """
-    ESPN mode only: all matches that have reached FT status today.
-    Returns empty list when in fallback mode (ft_handler uses its own path).
-    """
-    if not is_espn_healthy():
-        return []
-    all_matches = await _get_cached_scoreboard(session)
-    return [m for m in all_matches if m["fixture"]["status"]["short"] == "FT"]
+async def fetch_finished_recent(session: aiohttp.ClientSession) -> list[dict]:
+    """Recently terminal football fixtures visible inside the rolling lookup."""
+    matches = await fetch_relevant_football(session, utc_now())
+    return [m for m in matches if match_lifecycle.is_ft(m)]
 
 
 async def fetch_fixture(session: aiohttp.ClientSession, fixture_id) -> dict | None:
     """
-    Fetch a single fixture by ID. Used by ft_handler in fallback mode only.
-    Delegates to API-Football (ESPN doesn't have a per-event endpoint we use here).
+    Fetch a single fixture by ID. Used by FT recovery and fallback checks.
+    Delegates to API-Football.
     """
     if api_client.is_quota_exceeded_today():
         return None
     return await api_client.fetch_fixture_by_id(session, fixture_id)
-
 
 async def fetch_next_match_for_team(session: aiohttp.ClientSession, team_name: str) -> dict | None:
     """
@@ -344,7 +388,7 @@ def _reset_enrich_state_for_today() -> None:
     global _api_live_fixtures_cache, _api_live_fixtures_cache_ts
     global _enrich_api_call_count_date, _enrich_api_call_count
     global _enrich_budget_exhausted_logged_date
-    today = get_italy_date_string()
+    today = get_bot_local_date_string()
     if _enrich_attempted_date != today:
         _enrich_retry_states.clear()
         _api_fixture_events_cache.clear()
@@ -368,19 +412,19 @@ def _consume_enrichment_api_call(call_label: str) -> bool:
 
     _reset_enrich_state_for_today()
     if API_ENRICH_DAILY_CALL_BUDGET <= 0:
-        if _enrich_budget_exhausted_logged_date != get_italy_date_string():
+        if _enrich_budget_exhausted_logged_date != get_bot_local_date_string():
             logger.info("[Enrich] API-Football enrichment disabled: daily call budget is 0.")
-            _enrich_budget_exhausted_logged_date = get_italy_date_string()
+            _enrich_budget_exhausted_logged_date = get_bot_local_date_string()
         return False
 
     if _enrich_api_call_count >= API_ENRICH_DAILY_CALL_BUDGET:
-        if _enrich_budget_exhausted_logged_date != get_italy_date_string():
+        if _enrich_budget_exhausted_logged_date != get_bot_local_date_string():
             logger.info(
                 f"[Enrich] API-Football enrichment daily call budget exhausted "
                 f"({_enrich_api_call_count}/{API_ENRICH_DAILY_CALL_BUDGET}); "
                 f"skipping {call_label}."
             )
-            _enrich_budget_exhausted_logged_date = get_italy_date_string()
+            _enrich_budget_exhausted_logged_date = get_bot_local_date_string()
         return False
 
     _enrich_api_call_count += 1
@@ -408,7 +452,7 @@ def _remember_negative_api_fixture_mapping(espn_fixture_id: str, reason: str) ->
     if API_ENRICH_NEGATIVE_MAPPING_TTL_SEC <= 0:
         return
 
-    expires_at = italy_now() + timedelta(seconds=API_ENRICH_NEGATIVE_MAPPING_TTL_SEC)
+    expires_at = bot_now() + timedelta(seconds=API_ENRICH_NEGATIVE_MAPPING_TTL_SEC)
     _api_fixture_id_negative_cache[espn_fixture_id] = {
         "expires_at": expires_at,
         "reason": reason,
@@ -472,11 +516,11 @@ def _espn_fixture_date(match: dict) -> str:
     if fixture_dt:
         if fixture_dt.tzinfo is None:
             return fixture_dt.date().isoformat()
-        return fixture_dt.astimezone(italy_now().tzinfo).date().isoformat()
+        return fixture_dt.astimezone(bot_now().tzinfo).date().isoformat()
     raw_date = match.get("fixture", {}).get("date")
     if raw_date:
         return str(raw_date)[:10]
-    return get_italy_date_string()
+    return get_bot_local_date_string()
 
 
 def _season_for_match(match: dict) -> int:
@@ -530,7 +574,7 @@ def _fresh_age_seconds(fetched_at: datetime | None, now_local: datetime) -> floa
 
 async def _get_api_football_live_payload(session: aiohttp.ClientSession) -> dict | None:
     global _api_live_fixtures_cache, _api_live_fixtures_cache_ts
-    now_local = italy_now()
+    now_local = bot_now()
     age = _fresh_age_seconds(_api_live_fixtures_cache_ts, now_local)
     if (
         _api_live_fixtures_cache is not None
@@ -597,7 +641,7 @@ async def _fetch_fixture_events_for_enrichment(
     api_fixture_id: int,
     total_goals: int,
 ) -> tuple[list | None, bool]:
-    now_local = italy_now()
+    now_local = bot_now()
     cached_events = _get_cached_complete_fixture_events(api_fixture_id, total_goals, now_local)
     if cached_events is not None:
         return cached_events, True
@@ -664,7 +708,7 @@ def _remember_best_known_events(
         "score_total_at_capture": total_goals,
         "source": source_label,
         "api_fixture_id": api_fixture_id,
-        "updated_at": italy_now(),
+        "updated_at": bot_now(),
     }
     api_part = f", API-Football fixture {api_fixture_id}" if api_fixture_id is not None else ""
     logger.info(
@@ -853,7 +897,7 @@ async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_m
         )
         return _api_fixture_id_cache[espn_fixture_id]
 
-    now_local = italy_now()
+    now_local = bot_now()
     negative_mapping = _get_negative_api_fixture_mapping(espn_fixture_id, now_local)
     if negative_mapping is not None:
         expires_at = negative_mapping.get("expires_at")
@@ -936,7 +980,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
 
     global _enrich_attempted_date, _enrich_tick_key, _enrich_tick_count
     _reset_enrich_state_for_today()
-    now_local = italy_now()
+    now_local = bot_now()
 
     if goal_events >= total_goals:
         best_known = _apply_best_known_events_if_better(match, total_goals, goal_events)
@@ -1075,12 +1119,12 @@ async def enrich_fixtures(session: aiohttp.ClientSession, fixtures: list) -> lis
 async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
     """
     Returns tracked tennis matches from a rolling window around today.
-    Cached for TENNIS_CACHE_TTL_SEC seconds; invalidated at Italy midnight.
+    Cached for TENNIS_CACHE_TTL_SEC seconds; invalidated at configured local midnight.
     """
     global _tennis_cache, _tennis_cache_date, _tennis_cache_ts
 
-    today = get_italy_date_string()
-    now = italy_now()
+    today = get_bot_local_date_string()
+    now = bot_now()
 
     if (
         _tennis_cache_date == today
@@ -1089,7 +1133,7 @@ async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[
     ):
         return _tennis_cache
 
-    base_day = italy_now().date()
+    base_day = bot_now().date()
     date_params: list[str | None] = [
         None,
         (base_day - timedelta(days=1)).strftime("%Y%m%d"),
@@ -1158,11 +1202,11 @@ async def fetch_tennis_finished_today(session: aiohttp.ClientSession) -> list[di
     return [m for m in matches if m.get("status", {}).get("short") == "FT" and _is_today(m.get("start_time"))]
 
 
-def _match_dt_italy(start_time: str | None):
+def _match_dt_bot_tz(start_time: str | None):
     if not start_time:
         return None
     try:
-        return parse_utc_to_italy(start_time)
+        return to_bot_tz(start_time)
     except Exception:
         return None
 
@@ -1181,7 +1225,7 @@ def _tennis_identity_key(match: dict) -> str:
     date_part = ""
     if start_time:
         try:
-            date_part = parse_utc_to_italy(start_time).date().isoformat()
+            date_part = to_bot_tz(start_time).date().isoformat()
         except Exception:
             date_part = str(start_time)[:10]
     return f"{players[0]}|{players[1]}|{date_part}|{event_name}"
@@ -1211,23 +1255,23 @@ def _tennis_match_rank(match: dict) -> tuple:
 
 
 def _is_today(start_time: str | None) -> bool:
-    dt = _match_dt_italy(start_time)
-    return bool(dt and dt.date() == italy_now().date())
+    dt = _match_dt_bot_tz(start_time)
+    return bool(dt and dt.date() == bot_now().date())
 
 
 def _is_future(start_time: str | None, horizon_days: int = TENNIS_UPCOMING_DAYS) -> bool:
-    dt = _match_dt_italy(start_time)
+    dt = _match_dt_bot_tz(start_time)
     if not dt:
         return False
-    now = italy_now()
+    now = bot_now()
     return now < dt <= now + timedelta(days=horizon_days)
 
 
 def _is_past(start_time: str | None) -> bool:
-    dt = _match_dt_italy(start_time)
+    dt = _match_dt_bot_tz(start_time)
     if not dt:
         return False
-    return dt < italy_now()
+    return dt < bot_now()
 
 
 async def fetch_tennis_upcoming(session: aiohttp.ClientSession, horizon_days: int = TENNIS_UPCOMING_DAYS) -> list[dict]:

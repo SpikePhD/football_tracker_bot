@@ -1,5 +1,5 @@
 ﻿# utils/tennis_formatter.py
-from utils.time_utils import parse_utc_to_italy
+from utils.time_utils import to_bot_tz
 
 
 def _format_sets(sets: list[dict]) -> str:
@@ -27,15 +27,15 @@ def format_tennis_pre_message(match: dict) -> str:
     dt_text = "TBD"
     if start:
         try:
-            dt = parse_utc_to_italy(start)
+            dt = to_bot_tz(start)
             dt_text = dt.strftime('%A, %B %d, %Y at %H:%M')
         except Exception:
             dt_text = start
     return (
-        f"🎾 Tennis Upcoming: {match.get('player_a')} vs {match.get('player_b')} "
+        f"Tennis Upcoming: {match.get('player_a')} vs {match.get('player_b')} "
         f"({match.get('event_name')} - {match.get('tour')})\n"
         f"Round/Status: {match.get('round') or 'Scheduled'}\n"
-        f"Time: {dt_text} (Italy Time)"
+        f"Time: {dt_text} (Bot Time)"
     )
 
 
@@ -44,7 +44,7 @@ def format_tennis_live_message(match: dict) -> str:
     status = match.get("status", {})
     detail = status.get("detail") or status.get("description") or "LIVE"
     base = (
-        f"🎾 Tennis LIVE: {match.get('player_a')} vs {match.get('player_b')} "
+        f"Tennis LIVE: {match.get('player_a')} vs {match.get('player_b')} "
         f"({match.get('event_name')} - {match.get('tour')})"
     )
     if sets_str:
@@ -57,7 +57,7 @@ def format_tennis_final_message(match: dict) -> str:
     sets_str = _format_sets(match.get("sets") or [])
     winner = match.get("winner") or "Winner not available"
     msg = (
-        f"🎾 Tennis FT: {match.get('player_a')} vs {match.get('player_b')} "
+        f"Tennis FT: {match.get('player_a')} vs {match.get('player_b')} "
         f"({match.get('event_name')} - {match.get('tour')})\n"
         f"Winner: {winner}"
     )
@@ -78,23 +78,23 @@ def format_tennis_snapshot_line(match: dict) -> str:
 
     if status_short == "LIVE":
         detail = status.get("detail") or status.get("description") or "LIVE"
-        line = f"• LIVE [{detail}]: {player_a} vs {player_b}"
+        line = f"- LIVE [{detail}]: {player_a} vs {player_b}"
         if sets_str:
-            line += f" — Sets: {sets_str}"
+            line += f" - Sets: {sets_str}"
     elif status_short == "FT":
         winner = match.get("winner") or "Winner not available"
-        line = f"• FT: {player_a} vs {player_b} — Winner: {winner}"
+        line = f"- FT: {player_a} vs {player_b} - Winner: {winner}"
         if sets_str:
-            line += f" — Final sets: {sets_str}"
+            line += f" - Final sets: {sets_str}"
     else:
         start = match.get("start_time")
         time_text = "TBD"
         if start:
             try:
-                time_text = parse_utc_to_italy(start).strftime("%H:%M")
+                time_text = to_bot_tz(start).strftime("%H:%M")
             except Exception:
                 time_text = start
-        line = f"• {time_text} — {player_a} vs {player_b}"
+        line = f"- {time_text} - {player_a} vs {player_b}"
 
     context = " - ".join(part for part in (event, tour, round_name) if part)
     if context:

@@ -1,28 +1,38 @@
-# utils/time_utils.py
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
-from datetime import datetime, timedelta
-import pytz
+from config import OPERATIONS_TIMEZONE
 
-# Timezone for Italy
-italy_tz = pytz.timezone("Europe/Rome")
+bot_tz = ZoneInfo(OPERATIONS_TIMEZONE)
 
-def italy_now():
-    """Returns current datetime in Italy timezone."""
-    return datetime.now(italy_tz)
 
-def parse_utc_to_italy(utc_str):
-    """Takes a UTC time string and returns Italy-localized datetime."""
-    utc_time = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
-    return utc_time.astimezone(italy_tz)
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
-def get_italy_date_string():
-    """Returns today’s date as YYYY-MM-DD in Italy timezone."""
-    return italy_now().strftime("%Y-%m-%d")
+
+def bot_now() -> datetime:
+    return utc_now().astimezone(bot_tz)
+
+
+def parse_provider_utc(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def to_bot_tz(value: datetime | str) -> datetime:
+    if isinstance(value, str):
+        value = parse_provider_utc(value)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(bot_tz)
+
+
+def get_bot_local_date_string() -> str:
+    return bot_now().strftime("%Y-%m-%d")
+
 
 def get_current_season_year() -> int:
-    """
-    Determines the current football season year.
-    Assumes European league timing (e.g., season 2024 runs from mid-2024 to mid-2025).
-    """
-    now = italy_now()
+    now = bot_now()
     return now.year if now.month >= 8 else now.year - 1

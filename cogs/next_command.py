@@ -4,7 +4,7 @@ from discord.ext import commands
 
 from config import LEAGUE_NAME_MAP
 from modules import api_provider
-from utils.time_utils import parse_utc_to_italy
+from utils.time_utils import to_bot_tz
 from modules.discord_poster import post_new_message_to_context
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class NextCommand(commands.Cog):
             await post_new_message_to_context(ctx, content="Found a match but could not parse its date.")
             return
 
-        match_dt = parse_utc_to_italy(date_str)
+        match_dt = to_bot_tz(date_str)
         home_name = teams.get("home", {}).get("name", "?")
         away_name = teams.get("away", {}).get("name", "?")
         competition = LEAGUE_NAME_MAP.get(league_id, f"League {league_id}")
@@ -58,7 +58,7 @@ class NextCommand(commands.Cog):
                 f"-----------------------------------\n"
                 f"🆚 **Opponent:** {opponent}\n"
                 f"🗓️ **Date:** {match_dt.strftime('%A, %B %d, %Y')}\n"
-                f"⏰ **Time:** {match_dt.strftime('%H:%M')} (Italy Time)\n"
+                f"⏰ **Time:** {match_dt.strftime('%H:%M')} (Bot Time)\n"
                 f"🏆 **Competition:** {competition}\n"
                 f"🏟️ **Venue:** {venue_label}\n"
                 f"-----------------------------------"
@@ -69,7 +69,7 @@ class NextCommand(commands.Cog):
                 f"Next match: **{home_name} vs {away_name}**\n"
                 f"-----------------------------------\n"
                 f"🗓️ **Date:** {match_dt.strftime('%A, %B %d, %Y')}\n"
-                f"⏰ **Time:** {match_dt.strftime('%H:%M')} (Italy Time)\n"
+                f"⏰ **Time:** {match_dt.strftime('%H:%M')} (Bot Time)\n"
                 f"🏆 **Competition:** {competition}\n"
                 f"-----------------------------------"
             )

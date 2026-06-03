@@ -5,7 +5,7 @@ import logging
 from discord.ext import commands
 from modules import api_provider
 from modules.discord_poster import post_new_message_to_context
-from utils.time_utils import italy_now
+from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class ApiStatus(commands.Cog):
 
         espn_healthy = status["espn_healthy"]
         failures = status["consecutive_failures"]
-        retry_after = status["retry_after"]   # Italy-localized datetime or None
+        retry_after = status["retry_after"]   # bot-localized datetime or None
         interval = status["poll_interval"]
 
         if espn_healthy and failures == 0:
@@ -50,7 +50,7 @@ class ApiStatus(commands.Cog):
         else:
             # Fallback mode
             if retry_after:
-                now = italy_now()
+                now = bot_now()
                 remaining = retry_after - now
                 remaining_sec = max(0, int(remaining.total_seconds()))
                 rem_min, rem_sec = divmod(remaining_sec, 60)
@@ -66,7 +66,7 @@ class ApiStatus(commands.Cog):
                     provider_line,
                     f"Interval:  every {interval}s",
                     f"Failures:  {failures}",
-                    f"ESPN retry: {retry_str} (Italy time)",
+                    f"ESPN retry: {retry_str} (Bot Time)",
                 ]
             else:
                 lines = [

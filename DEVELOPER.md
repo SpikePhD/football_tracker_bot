@@ -17,13 +17,19 @@ football_tracker_bot.py
   -> owns the shared aiohttp session
 
 modules/scheduler.py
-  -> daily orchestration and periodic loop calls
+  -> long-running orchestration plus local daily routines
 
 modules/live_loop.py
   -> live football polling, enrichment, dedup, and upserts
 
 modules/ft_handler.py
   -> full-time tracking and final result posts
+
+modules/match_lifecycle.py
+  -> UTC-first football lifecycle decisions
+
+modules/match_state.py
+  -> atomic persisted football fixture state in bot_memory/match_state.json
 
 modules/tennis_loop.py
   -> tracked tennis polling and announcements
@@ -50,7 +56,8 @@ cogs/
 - Route proactive posts through `modules/discord_poster.py` helpers.
 - Do not create ad-hoc `aiohttp.ClientSession` instances.
 - Do not bypass `modules/api_provider.py` for fixture data access paths.
-- Keep user-facing time handling in Europe/Rome utilities.
+- Keep football lifecycle decisions UTC-first and fixture-ID-first.
+- Use the configured timezone only for display, logs, grouping, and scheduled human-facing routines.
 - Keep runtime state in `bot_memory/` via `modules/storage.py`.
 - Keep `inject_memory/` read-only from runtime code.
 - Keep secrets out of `config.json`.
@@ -74,7 +81,7 @@ Enrichment protections:
 
 - configured retry delays and grace period
 - per-tick call cap
-- per-Italy-day call budget
+- per configured-local-day enrichment call budget
 - live fixture payload cache
 - successful ESPN-to-API-Football fixture mapping cache
 - temporary failed-mapping cache
@@ -104,11 +111,13 @@ Add runtime state:
 2. Store it under `bot_memory/`.
 3. Ensure `install.sh` and `update.sh` create safe defaults without overwriting existing state.
 
+Football fixture lifecycle state is centralized in `modules/match_state.py`. Do not add new daily football state files or local-midnight clears. Use fixture IDs, UTC kickoff times, provider status, explicit retention windows, and `match_state.json` flags such as `ft_announced` and `memory_updated`.
+
 ## Validation Before Push
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
-python -m compileall config.py modules tests
+python -m compileall config.py modules utils cogs tests football_tracker_bot.py
 python -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))"
 python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))"
 ```

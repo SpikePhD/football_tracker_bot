@@ -17,7 +17,7 @@ from config import (
     ESPN_CACHE_TTL_SEC,
 )
 from utils.event_formatter import is_shootout_event
-from utils.time_utils import italy_now
+from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ def _normalize_team_record(
     for key, default_value in default_stats.items():
         stats[key] = int(stats.get(key) or default_value)
     normalized["stats"] = stats
-    normalized["last_updated"] = normalized.get("last_updated") or italy_now().isoformat()
+    normalized["last_updated"] = normalized.get("last_updated") or bot_now().isoformat()
     return normalized
 
 
@@ -100,7 +100,7 @@ def _merge_team_info(
     )
     merged["name"] = refreshed_team.get("name") or merged["name"]
     merged["coach"] = refreshed_team.get("coach", merged.get("coach", "Unknown"))
-    merged["last_updated"] = refreshed_team.get("last_updated") or italy_now().isoformat()
+    merged["last_updated"] = refreshed_team.get("last_updated") or bot_now().isoformat()
 
     players = merged["players"]
     for player_name, roster_player in (refreshed_team.get("players") or {}).items():
@@ -150,7 +150,7 @@ def _get_espn_cache(key: str) -> Optional[Any]:
     """Get cached ESPN response if still valid (TTL: ESPN_CACHE_TTL_SEC)."""
     if key not in _espn_cache or key not in _espn_cache_ts:
         return None
-    if (italy_now() - _espn_cache_ts[key]).total_seconds() > ESPN_CACHE_TTL_SEC:
+    if (bot_now() - _espn_cache_ts[key]).total_seconds() > ESPN_CACHE_TTL_SEC:
         del _espn_cache[key]
         del _espn_cache_ts[key]
         return None
@@ -160,7 +160,7 @@ def _get_espn_cache(key: str) -> Optional[Any]:
 def _set_espn_cache(key: str, data: Any) -> None:
     """Cache ESPN response with current timestamp."""
     _espn_cache[key] = data
-    _espn_cache_ts[key] = italy_now()
+    _espn_cache_ts[key] = bot_now()
 
 
 # --- Staleness Checks ---
@@ -174,7 +174,7 @@ def check_memory_staleness(memory: Dict[str, Any]) -> Optional[str]:
         return "⚠️ Memory not initialized. Use !refresh_memory."
     try:
         last_update = datetime.fromisoformat(last_update_str.replace("Z", "+00:00"))
-        if (italy_now() - last_update) > timedelta(days=MEMORY_STALE_THRESHOLD_DAYS):
+        if (bot_now() - last_update) > timedelta(days=MEMORY_STALE_THRESHOLD_DAYS):
             return f"⚠️ Memory outdated (last updated {last_update.strftime('%Y-%m-%d')})."
     except Exception as e:
         logger.warning(f"Failed to parse memory update timestamp: {e}")
@@ -204,7 +204,7 @@ async def update_league_standings(
         result = {
             "name": LEAGUE_NAME_MAP.get(league_id, f"League {league_id}"),
             "standings": standings,
-            "last_updated": italy_now().isoformat(),
+            "last_updated": bot_now().isoformat(),
         }
         _set_espn_cache(cache_key, result)
         return result
@@ -236,7 +236,7 @@ async def update_team_info(
             "name": roster.get("name", f"Team {team_id}"),
             "coach": roster.get("coach", "Unknown"),
             "players": roster.get("players", {}),
-            "last_updated": italy_now().isoformat(),
+            "last_updated": bot_now().isoformat(),
         }
         _set_espn_cache(cache_key, result)
         return result
@@ -398,7 +398,7 @@ async def update_all_memory(session: Any) -> None:
             )
 
     # Prune old matches (keep last 30 days)
-    now = italy_now()
+    now = bot_now()
     pruned_matches = {}
     for match_id, match_data in memory.get("matches", {}).items():
         match_date_str = match_data.get("date")
@@ -415,9 +415,9 @@ async def update_all_memory(session: Any) -> None:
 
     # Update metadata
     memory["metadata"] = {
-        "last_full_update": italy_now().isoformat(),
-        "last_standings_update": italy_now().isoformat(),
-        "last_team_info_update": italy_now().isoformat(),
+        "last_full_update": bot_now().isoformat(),
+        "last_standings_update": bot_now().isoformat(),
+        "last_team_info_update": bot_now().isoformat(),
     }
 
     save_memory(memory)
@@ -440,7 +440,7 @@ async def update_standings_only(session: Any) -> None:
         if isinstance(result, dict):
             memory["leagues"][str(league_id)] = result
 
-    memory["metadata"]["last_standings_update"] = italy_now().isoformat()
+    memory["metadata"]["last_standings_update"] = bot_now().isoformat()
     save_memory(memory)
     logger.info("League standings updated successfully.")
 
@@ -476,7 +476,7 @@ async def update_team_info_only(session: Any) -> None:
                 result,
             )
 
-    memory["metadata"]["last_team_info_update"] = italy_now().isoformat()
+    memory["metadata"]["last_team_info_update"] = bot_now().isoformat()
     save_memory(memory)
     logger.info("Team info updated successfully.")
 

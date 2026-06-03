@@ -23,13 +23,13 @@ from config import (
 )
 from utils.personality import greet_message
 from modules.power_manager import setup_power_management
-from modules.scheduler import schedule_day
+from modules.scheduler import run_local_daily_routines, run_operations_loop
 from modules.bot_mode import is_verbose, get_mode
 from modules.discord_poster import post_new_general_message, post_new_message_to_context
 from modules.ft_handler import seed_already_announced_ft
 from cogs.matches import fetch_combined_matches_snapshot
 from cogs.version import get_version_info
-from utils.time_utils import italy_tz
+from utils.time_utils import bot_tz
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ _configure_logging()
 intents = discord.Intents.default()
 intents.message_content = True # Ensure this is enabled if you use message content
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-current_day_scheduler_task: asyncio.Task | None = None
+operations_task: asyncio.Task | None = None
 _startup_completed = False
 
 # --- HTTP Session Management ---
@@ -191,44 +191,46 @@ def _command_error_action(error: commands.CommandError | Exception) -> dict:
 
 
 # --- Task Management for Scheduler ---
-async def launch_daily_operations_manager(bot_instance: commands.Bot):
-    """
-    Manages the lifecycle of the schedule_day task, ensuring only one instance runs.
-    """
-    global current_day_scheduler_task
+async def launch_operations_manager(bot_instance: commands.Bot):
+    """Start the long-running operations loop if it is not already active."""
+    global operations_task
 
-    # Ensure HTTP session is active before starting operations
     await ensure_http_session(bot_instance)
 
-    if current_day_scheduler_task and not current_day_scheduler_task.done():
-        logger.info("🔄 A daily operations schedule is already running. Attempting to cancel previous instance...")
-        current_day_scheduler_task.cancel()
+    if operations_task and not operations_task.done():
+        logger.info("Operations loop is already running.")
+        return
+
+    if operations_task and operations_task.done():
         try:
-            await current_day_scheduler_task
-        except asyncio.CancelledError:
-            logger.info("👍 Previous daily operations schedule task successfully cancelled.")
+            await operations_task
         except Exception as e:
-            logger.error(f"🚨 Error while awaiting cancellation of previous task: {e}", exc_info=True) # Added exc_info
+            logger.error(f"Previous operations task ended with error: {e}", exc_info=True)
 
-    logger.info("🚀 Launching new daily operations schedule task...")
-    current_day_scheduler_task = asyncio.create_task(schedule_day(bot_instance))
+    logger.info("Launching operations loop task...")
+    operations_task = asyncio.create_task(run_operations_loop(bot_instance))
 
-    try:
-        await current_day_scheduler_task
-    except asyncio.CancelledError:
-        logger.info("📅 Daily operations schedule task was cancelled (likely during shutdown or restart).")
-    except Exception as e:
-        logger.error(f"💥 Daily operations schedule task failed: {e}", exc_info=True) # Added exc_info
+    def _log_task_result(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            logger.info("Operations loop task was cancelled.")
+        except Exception as e:
+            logger.error(f"Operations loop task failed: {e}", exc_info=True)
 
-@tasks.loop(time=time(hour=0, minute=1, tzinfo=italy_tz))
+    operations_task.add_done_callback(_log_task_result)
+
+
+@tasks.loop(time=time(hour=0, minute=1, tzinfo=bot_tz))
 async def midnight_trigger():
-    logger.info("🌙 00:01 AM (Europe/Rome) – Midnight trigger: restarting daily operations for new day.")
-    await launch_daily_operations_manager(bot)
+    logger.info("00:01 configured bot timezone - running local daily routines.")
+    await run_local_daily_routines(bot)
 
-@tasks.loop(time=time(hour=11, minute=0, tzinfo=italy_tz))
+@tasks.loop(time=time(hour=11, minute=0, tzinfo=bot_tz))
 async def eleven_am_daily_trigger():
-    logger.info("⏰ 11:00 AM (Europe/Rome) – Triggering daily operations schedule manager.")
-    await launch_daily_operations_manager(bot)
+    logger.info("11:00 configured bot timezone - checking operations loop and daily routines.")
+    await launch_operations_manager(bot)
+    await run_local_daily_routines(bot)
 
 # --- Bot Events ---
 @bot.event
@@ -278,8 +280,8 @@ async def on_ready():
     else:
         logger.warning(f"ℹ️ Cogs directory '{cogs_path}' not found. No cogs loaded.") # Changed to warning
 
-    logger.info("🚀 Bot ready. Kicking off initial daily operations schedule manager.")
-    asyncio.create_task(launch_daily_operations_manager(bot))
+    logger.info("Bot ready. Starting operations loop.")
+    asyncio.create_task(launch_operations_manager(bot))
 
     if not midnight_trigger.is_running():
         try:
@@ -352,15 +354,15 @@ async def main():
         if eleven_am_daily_trigger.is_running():
             eleven_am_daily_trigger.cancel()
             logger.info("Task loop 'eleven_am_daily_trigger' cancelled.")
-        if current_day_scheduler_task and not current_day_scheduler_task.done():
-            current_day_scheduler_task.cancel()
-            logger.info("Current 'schedule_day' task cancelled.")
+        if operations_task and not operations_task.done():
+            operations_task.cancel()
+            logger.info("Operations loop task cancelled.")
             try:
-                await current_day_scheduler_task
+                await operations_task
             except asyncio.CancelledError:
-                logger.info("'schedule_day' task processed cancellation.")
+                logger.info("Operations loop task processed cancellation.")
             except Exception as e:
-                logger.error(f"Error during 'schedule_day' task cleanup: {e}", exc_info=True)
+                logger.error(f"Error during Operations loop task cleanup: {e}", exc_info=True)
         await cleanup_sessions()
         logger.info("👋 Bot has been shut down gracefully.")
 

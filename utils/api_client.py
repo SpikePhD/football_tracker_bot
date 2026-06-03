@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from .time_utils import get_current_season_year
 
 from config import API_KEY, TRACKED_LEAGUE_IDS
-from utils.time_utils import get_italy_date_string, italy_now
+from utils.time_utils import get_bot_local_date_string, bot_now
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,9 @@ _quota_exceeded_day: str | None = None
 
 
 def is_quota_exceeded_today() -> bool:
-    """Return True when API-Football daily quota is known to be exhausted for today's Italy date."""
+    """Return True when API-Football daily quota is known to be exhausted for today's bot local date."""
     global _quota_exceeded_day
-    today = get_italy_date_string()
+    today = get_bot_local_date_string()
     if _quota_exceeded_day and _quota_exceeded_day != today:
         _quota_exceeded_day = None
     return _quota_exceeded_day == today
@@ -47,7 +47,7 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
                     if isinstance(api_errors, dict):
                         request_err = str(api_errors.get("requests", "")).lower()
                         if "request limit" in request_err or "reached the request limit" in request_err:
-                            _quota_exceeded_day = get_italy_date_string()
+                            _quota_exceeded_day = get_bot_local_date_string()
                     logger.error(f"❌ API Error for {url}: {api_errors} | Status: {response.status} | Parameters: {data.get('parameters')}")
                     return None
 
@@ -57,7 +57,7 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
                 return data
 
             elif response.status == 429:
-                _quota_exceeded_day = get_italy_date_string()
+                _quota_exceeded_day = get_bot_local_date_string()
                 logger.warning(f"Rate limited! Status: {response.status} for {url}. Check API plan limits.")
                 return None
             else:
@@ -76,8 +76,13 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
         return None
 
 async def fetch_day_fixtures(session: aiohttp.ClientSession) -> list:
-    """Fetches fixtures for today, filtered by TRACKED_LEAGUE_IDS."""
-    url = f"https://v3.football.api-sports.io/fixtures?date={get_italy_date_string()}"
+    """Compatibility wrapper for the configured display date."""
+    return await fetch_fixtures_by_date(session, get_bot_local_date_string())
+
+
+async def fetch_fixtures_by_date(session: aiohttp.ClientSession, date_str: str) -> list:
+    """Fetch fixtures for one provider date, filtered by TRACKED_LEAGUE_IDS."""
+    url = f"https://v3.football.api-sports.io/fixtures?date={date_str}"
     payload = await _make_request(session, url)
 
     if payload and isinstance(payload.get("response"), list):
@@ -140,7 +145,7 @@ async def fetch_next_team_fixture(session: aiohttp.ClientSession, team_id: int) 
         # The API might already return them sorted, but explicit sort is safer.
         fixtures.sort(key=lambda f: f.get('fixture', {}).get('date', ''))
 
-        now_utc = italy_now().astimezone(timezone.utc)
+        now_utc = bot_now().astimezone(timezone.utc)
 
         for fixture_details in fixtures:
             fixture_obj = fixture_details.get('fixture', {})

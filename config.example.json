@@ -84,6 +84,13 @@
     }
   },
   "operations": {
+    "timezone": "Europe/Rome",
+    "football_prematch_window_hours": 2,
+    "football_match_lookup_window_hours": 72,
+    "football_finished_retention_hours": 12,
+    "football_state_retention_hours": 24,
+    "football_expected_ft_minutes": 112,
+    "football_max_live_duration_hours": 5,
     "tennis_cache_ttl_sec": 55,
     "tennis_upcoming_days": 7,
     "tennis_pre_announce_hours": 8,

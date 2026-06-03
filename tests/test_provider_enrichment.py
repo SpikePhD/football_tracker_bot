@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import os
 import unittest
 from datetime import datetime, timedelta
@@ -85,7 +85,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
 
         async def run():
             with (
-                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
                 patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value=live_payload)) as live_fetch,
             ):
                 first = await api_provider.resolve_api_football_fixture_id(None, match_one)
@@ -120,7 +120,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
             }
             fetch_events = AsyncMock(return_value={"response": [api_goal]})
             with (
-                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
                 patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
                 patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
                 patch.object(api_provider.api_client, "fetch_fixture_events", fetch_events),
@@ -165,7 +165,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 "updated_at": datetime(2026, 5, 24, 15, 0, 0),
             }
             with (
-                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 5, 0)),
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 5, 0)),
                 patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
                 patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": []})) as fetch_events,
             ):
@@ -222,7 +222,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 "api_fixture_id": 1391198,
                 "updated_at": datetime(2026, 5, 24, 22, 20, 0),
             }
-            with patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 22, 51, 0)):
+            with patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 22, 51, 0)):
                 return await api_provider.enrich_fixture_events(None, match)
 
         enriched = asyncio.run(run())
@@ -264,7 +264,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 "api_fixture_id": 999999,
                 "updated_at": datetime(2026, 5, 24, 15, 0, 0),
             }
-            with patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 5, 0)):
+            with patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 5, 0)):
                 return await api_provider.enrich_fixture_events(None, match)
 
         enriched = asyncio.run(run())
@@ -286,7 +286,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 "exhausted": False,
             }
             with (
-                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
                 patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
                 patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
                 patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=999999)),
@@ -319,10 +319,10 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=999999)),
                 patch.object(api_provider.api_client, "fetch_fixture_events", fetch_events),
             ):
-                with patch.object(api_provider, "italy_now", return_value=t0):
+                with patch.object(api_provider, "bot_now", return_value=t0):
                     await api_provider.enrich_fixture_events(None, match)
                     await api_provider.enrich_fixture_events(None, match)
-                with patch.object(api_provider, "italy_now", return_value=t0 + timedelta(seconds=11)):
+                with patch.object(api_provider, "bot_now", return_value=t0 + timedelta(seconds=11)):
                     await api_provider.enrich_fixture_events(None, match)
             return fetch_events.await_count
 
@@ -344,7 +344,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
             }
             fetch_events = AsyncMock(return_value={"response": []})
             with (
-                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
                 patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
                 patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
                 patch.object(api_provider, "API_ENRICH_DAILY_CALL_BUDGET", 0),
@@ -368,7 +368,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
             api_provider._reset_enrich_state_for_today()
             live_fetch = AsyncMock(return_value={"response": []})
             with (
-                patch.object(api_provider, "italy_now", return_value=t0),
+                patch.object(api_provider, "bot_now", return_value=t0),
                 patch.object(api_provider.api_client, "fetch_live_fixtures_payload", live_fetch),
             ):
                 first = await api_provider.resolve_api_football_fixture_id(None, match)
@@ -402,7 +402,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
             }
             fetch_events = AsyncMock(return_value={"response": []})
             with (
-                patch.object(api_provider, "italy_now", return_value=t0 + timedelta(seconds=60)),
+                patch.object(api_provider, "bot_now", return_value=t0 + timedelta(seconds=60)),
                 patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
                 patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
                 patch.object(api_provider, "API_ENRICH_INCOMPLETE_EVENTS_COOLDOWN_SEC", 180),
@@ -468,10 +468,10 @@ class ProviderEnrichmentTests(unittest.TestCase):
             }
 
         async def run():
-            today = api_provider.get_italy_date_string()
+            today = api_provider.get_bot_local_date_string()
             api_provider._cache = [cached_match]
             api_provider._cache_date = today
-            api_provider._cache_ts = api_provider.italy_now() - timedelta(seconds=api_provider.CACHE_TTL_SEC + 1)
+            api_provider._cache_ts = api_provider.bot_now() - timedelta(seconds=api_provider.CACHE_TTL_SEC + 1)
             with patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fake_summary):
                 return await api_provider._get_cached_scoreboard(None)
 
@@ -500,7 +500,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 "exhausted": False,
             }
             with (
-                patch.object(api_provider, "italy_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 1, 0)),
                 patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
                 patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
                 patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=999999)),

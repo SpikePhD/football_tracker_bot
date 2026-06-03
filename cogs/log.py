@@ -13,7 +13,7 @@ from config import (
     LOG_FILE_PATH,
 )
 from modules.discord_poster import post_new_message_to_context
-from utils.time_utils import italy_now
+from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
 
@@ -160,7 +160,7 @@ class LogCog(commands.Cog):
             return
 
         try:
-            today_str = italy_now().date().isoformat()
+            today_str = bot_now().date().isoformat()
             raw_lines = _read_today_lines(self.log_path, today_str)
 
             if mode in {"today", "recent"}:
@@ -173,7 +173,7 @@ class LogCog(commands.Cog):
             if not selected:
                 await post_new_message_to_context(
                     ctx,
-                    content=f"No matching log entries found for {today_str} (Italy date).",
+                    content=f"No matching log entries found for {today_str} (bot local date).",
                 )
                 return
 
