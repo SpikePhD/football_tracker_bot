@@ -113,9 +113,28 @@ async def upsert_live_message(
                 existing = None
 
             if existing is not None:
-                await existing.edit(content=content, suppress=True)
-                logger.info(f"DiscordPoster: Edited live message {message_id} in #{channel.name}")
-                return existing
+                try:
+                    await existing.edit(content=content, suppress=True)
+                except discord.NotFound:
+                    logger.warning(
+                        f"DiscordPoster: Live message {message_id} disappeared before edit in #{channel.name}; "
+                        "sending new message.",
+                        exc_info=True,
+                    )
+                except discord.Forbidden:
+                    raise
+                except discord.HTTPException as e:
+                    if getattr(e, "status", None) == 404:
+                        logger.warning(
+                            f"DiscordPoster: Live message {message_id} was unavailable during edit in #{channel.name}; "
+                            "sending new message.",
+                            exc_info=True,
+                        )
+                    else:
+                        raise
+                else:
+                    logger.info(f"DiscordPoster: Edited live message {message_id} in #{channel.name}")
+                    return existing
 
             logger.info(
                 f"DiscordPoster: Live message {message_id} is not within the last "

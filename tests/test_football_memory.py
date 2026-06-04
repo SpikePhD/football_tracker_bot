@@ -44,14 +44,52 @@ class FootballMemoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             memory_path = Path(tmpdir) / "football_memory.json"
             with patch.object(football_memory, "MEMORY_PATH", memory_path):
-                asyncio.run(football_memory.update_match_in_memory(None, match))
-                asyncio.run(football_memory.update_match_in_memory(None, match))
+                first = asyncio.run(football_memory.update_match_in_memory(None, match))
+                second = asyncio.run(football_memory.update_match_in_memory(None, match))
                 memory = json.loads(memory_path.read_text(encoding="utf-8"))
 
+        self.assertEqual(first, {"updated": True, "reason": "updated"})
+        self.assertEqual(second, {"updated": True, "reason": "updated_existing"})
         self.assertEqual(memory["teams"]["100"]["stats"]["wins"], 1)
         self.assertEqual(memory["teams"]["100"]["stats"]["goals_for"], 2)
         self.assertEqual(memory["teams"]["100"]["players"]["Scorer"]["goals"], 1)
         self.assertEqual(len(memory["matches"]), 1)
+
+    def test_match_memory_updates_terminal_penalty_result(self):
+        from modules import football_memory
+
+        match = shootout_match()
+        match["fixture"]["status"] = {
+            "short": "PEN",
+            "long": "Match Finished",
+            "elapsed": 120,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                result = asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, {"updated": True, "reason": "updated"})
+        self.assertEqual(memory["matches"]["shootout-1"]["status"], "PEN_DONE")
+        self.assertEqual(memory["teams"]["100"]["stats"]["draws"], 1)
+        self.assertEqual(memory["teams"]["200"]["stats"]["draws"], 1)
+
+    def test_match_memory_skips_non_ft_without_updating(self):
+        from modules import football_memory
+
+        match = shootout_match()
+        match["fixture"]["status"] = {"short": "2H", "elapsed": 80}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                result = asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8")) if memory_path.exists() else None
+
+        self.assertEqual(result, {"updated": False, "reason": "not_ft"})
+        self.assertIsNone(memory)
 
     def test_match_memory_update_repairs_existing_teams_missing_stats(self):
         from modules import football_memory

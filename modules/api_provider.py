@@ -321,7 +321,9 @@ async def fetch_football_window(
     session: aiohttp.ClientSession,
     start_utc: datetime,
     end_utc: datetime,
+    now_utc: datetime | None = None,
 ) -> list[dict]:
+    now_utc = now_utc or utc_now()
     provider_dates = _provider_dates_for_window(start_utc, end_utc)
     if _should_try_espn_now():
         date_results = await asyncio.gather(
@@ -349,7 +351,7 @@ async def fetch_football_window(
             filtered.append(match)
         elif kickoff and start_utc <= kickoff <= end_utc:
             filtered.append(match)
-        elif match_lifecycle.is_recently_finished(match, utc_now()):
+        elif match_lifecycle.is_recently_finished(match, now_utc):
             filtered.append(match)
     return _dedupe_by_fixture_id(filtered)
 
@@ -357,14 +359,14 @@ async def fetch_football_window(
 async def fetch_relevant_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
     now_utc = now_utc or utc_now()
     start_utc, end_utc = match_lifecycle.provider_window(now_utc)
-    return await fetch_football_window(session, start_utc, end_utc)
+    return await fetch_football_window(session, start_utc, end_utc, now_utc=now_utc)
 
 
 async def fetch_display_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
     now_utc = now_utc or utc_now()
     start_utc = now_utc - timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
     end_utc = now_utc + timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
-    return await fetch_football_window(session, start_utc, end_utc)
+    return await fetch_football_window(session, start_utc, end_utc, now_utc=now_utc)
 
 
 async def fetch_day(session: aiohttp.ClientSession) -> list[dict]:

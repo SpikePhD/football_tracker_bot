@@ -167,7 +167,11 @@ class UtcFootballLifecycleTests(unittest.TestCase):
 
             with (
                 patch.object(ft_handler, "post_new_general_message", AsyncMock(return_value=None)) as post_msg_retry,
-                patch.object(ft_handler, "update_match_in_memory", AsyncMock(return_value=None)) as update_memory_retry,
+                patch.object(
+                    ft_handler,
+                    "update_match_in_memory",
+                    AsyncMock(return_value={"updated": True, "reason": "updated"}),
+                ) as update_memory_retry,
             ):
                 await ft_handler.process_terminal_fixture(fake_bot, match, memory_dir=memory_dir)
                 second = match_state.get_fixture_state("independent-1", memory_dir=memory_dir)
@@ -221,6 +225,40 @@ class UtcFootballLifecycleTests(unittest.TestCase):
 
         self.assertEqual([m["fixture"]["id"] for m in matches], ["dup", "next"])
         self.assertEqual(fetch.await_count, 3)
+
+    def test_fetch_football_window_uses_injected_now_for_recent_finished_filter(self):
+        from modules import api_provider
+
+        finished = espn_match(fixture_id="recent-ft")
+        finished["fixture"]["date"] = "2026-06-03T20:00:00Z"
+        finished["fixture"]["status"] = {"short": "FT", "elapsed": 90}
+
+        async def run():
+            api_provider._football_scoreboard_cache.clear()
+            api_provider._cache = []
+            api_provider._cache_date = None
+            api_provider._cache_ts = None
+            with patch.object(
+                api_provider.espn_client,
+                "fetch_all_leagues_with_summary",
+                AsyncMock(return_value={
+                    "matches": [finished],
+                    "success_count": 1,
+                    "failure_count": 0,
+                    "succeeded_league_ids": [135],
+                    "failed_league_ids": [],
+                }),
+            ):
+                return await api_provider.fetch_football_window(
+                    None,
+                    datetime(2026, 6, 4, 20, 0, tzinfo=timezone.utc),
+                    datetime(2026, 6, 4, 21, 0, tzinfo=timezone.utc),
+                    now_utc=datetime(2026, 6, 4, 1, 0, tzinfo=timezone.utc),
+                )
+
+        matches = asyncio.run(run())
+
+        self.assertEqual([m["fixture"]["id"] for m in matches], ["recent-ft"])
 
     def test_fetch_relevant_football_uses_lifecycle_provider_window(self):
         from modules import api_provider, match_lifecycle

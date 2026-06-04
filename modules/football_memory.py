@@ -16,6 +16,7 @@ from config import (
     MEMORY_STALE_THRESHOLD_DAYS,
     ESPN_CACHE_TTL_SEC,
 )
+from modules import match_lifecycle
 from utils.event_formatter import is_shootout_event
 from utils.time_utils import bot_now
 
@@ -266,7 +267,7 @@ async def update_match_data(
             "home": match["goals"]["home"],
             "away": match["goals"]["away"],
         },
-        "status": match["fixture"]["status"]["short"],
+        "status": match_lifecycle.status_short(match),
         "date": match["fixture"]["date"],
         "events": match.get("events", []),
     }
@@ -481,21 +482,32 @@ async def update_team_info_only(session: Any) -> None:
     logger.info("Team info updated successfully.")
 
 
-async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> None:
+def _match_has_required_memory_data(match: Dict[str, Any]) -> bool:
+    return (
+        match.get("fixture", {}).get("id") is not None
+        and match.get("league", {}).get("id") is not None
+        and match.get("teams", {}).get("home", {}).get("id") is not None
+        and match.get("teams", {}).get("away", {}).get("id") is not None
+    )
+
+
+async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> dict:
     """
     Update memory with a Full-Time match.
     Called by ft_handler when a match reaches FT status.
     """
     memory = load_memory()
 
-    # Skip if not FT
-    if match["fixture"]["status"]["short"] != "FT":
-        return
+    if not match_lifecycle.is_ft(match):
+        return {"updated": False, "reason": "not_ft"}
+
+    if not _match_has_required_memory_data(match):
+        return {"updated": False, "reason": "missing_required_data"}
 
     # Process match data
     update_result = await update_match_data(session, match)
     if not update_result:
-        return
+        return {"updated": False, "reason": "missing_required_data"}
 
     match_id = str(match["fixture"]["id"])
     home_id = str(match["teams"]["home"]["id"])
@@ -505,7 +517,7 @@ async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> None:
         memory["matches"][match_id] = update_result["match"]
         save_memory(memory)
         logger.info(f"Updated stored FT match without recounting stats: {match_id}")
-        return
+        return {"updated": True, "reason": "updated_existing"}
 
     # Store match and count its team/player stats once.
     memory["matches"][match_id] = update_result["match"]
@@ -541,6 +553,7 @@ async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> None:
 
     save_memory(memory)
     logger.info(f"Updated memory with FT match: {match_id}")
+    return {"updated": True, "reason": "updated"}
 
 
 # --- Query Helpers ---

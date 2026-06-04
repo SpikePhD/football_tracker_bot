@@ -147,12 +147,19 @@ async def process_terminal_fixture(
     if match_lifecycle.is_ft(enriched) and not current.get("memory_updated"):
         if _has_required_memory_keys(enriched):
             try:
-                await update_match_in_memory(bot.http_session, enriched)
+                memory_result = await update_match_in_memory(bot.http_session, enriched)
             except Exception as e:
                 logger.error("Failed to update football memory for match %s: %s", fixture_id, e)
             else:
-                match_state.mark_memory_updated(fixture_id, memory_dir=memory_dir)
-                logger.info("Updated football memory with FT match: %s", fixture_id)
+                if memory_result.get("updated"):
+                    match_state.mark_memory_updated(fixture_id, memory_dir=memory_dir)
+                    logger.info("Updated football memory with FT match: %s", fixture_id)
+                else:
+                    logger.warning(
+                        "Football memory update skipped for FT fixture %s: %s.",
+                        fixture_id,
+                        memory_result.get("reason", "unknown"),
+                    )
         else:
             logger.warning(
                 "Skipping football memory update for FT fixture %s because required IDs are missing.",

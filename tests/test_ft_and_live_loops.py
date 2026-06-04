@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import tempfile
 import unittest
@@ -79,7 +80,11 @@ class FtAndLiveLoopTests(unittest.TestCase):
             with (
                 patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
                 patch.object(ft_handler, "post_new_general_message", AsyncMock(return_value=fake_message)) as post_msg,
-                patch.object(ft_handler, "update_match_in_memory", AsyncMock(return_value=None)) as update_memory,
+                patch.object(
+                    ft_handler,
+                    "update_match_in_memory",
+                    AsyncMock(return_value={"updated": True, "reason": "updated"}),
+                ) as update_memory,
             ):
                 await ft_handler.process_terminal_fixture(fake_bot, match, memory_dir=memory_dir)
                 await ft_handler.process_terminal_fixture(fake_bot, match, memory_dir=memory_dir)
@@ -94,6 +99,70 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertTrue(state["memory_updated"])
         post_msg.assert_awaited_once()
         update_memory.assert_awaited_once()
+
+    def test_api_football_terminal_penalty_result_updates_real_memory_before_flag(self):
+        from modules import api_provider, football_memory, ft_handler, match_state
+
+        match = shootout_match()
+        match["fixture"]["status"] = {
+            "short": "PEN",
+            "long": "Match Finished",
+            "elapsed": 120,
+        }
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 123})()
+
+        async def run(memory_dir: Path, memory_path: Path):
+            with (
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(ft_handler, "post_new_general_message", AsyncMock(return_value=fake_message)),
+                patch.object(football_memory, "MEMORY_PATH", memory_path),
+            ):
+                await ft_handler.process_terminal_fixture(fake_bot, match, memory_dir=memory_dir)
+                state = match_state.get_fixture_state("shootout-1", memory_dir=memory_dir)
+                return state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_dir = Path(tmp)
+            memory_path = memory_dir / "football_memory.json"
+            state = asyncio.run(run(memory_dir, memory_path))
+            memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertTrue(state["memory_updated"])
+        self.assertTrue(state["ft_announced"])
+        self.assertEqual(memory["matches"]["shootout-1"]["status"], "PEN_DONE")
+        self.assertEqual(memory["teams"]["100"]["stats"]["draws"], 1)
+
+    def test_memory_skip_keeps_memory_updated_false_for_retry(self):
+        from modules import api_provider, ft_handler, match_state
+
+        match = shootout_match()
+        match["fixture"]["status"] = {
+            "short": "PEN",
+            "long": "Match Finished",
+            "elapsed": 120,
+        }
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 123})()
+
+        async def run(memory_dir: Path):
+            with (
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(ft_handler, "post_new_general_message", AsyncMock(return_value=fake_message)),
+                patch.object(
+                    ft_handler,
+                    "update_match_in_memory",
+                    AsyncMock(return_value={"updated": False, "reason": "missing_required_data"}),
+                ),
+            ):
+                await ft_handler.process_terminal_fixture(fake_bot, match, memory_dir=memory_dir)
+                return match_state.get_fixture_state("shootout-1", memory_dir=memory_dir)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = asyncio.run(run(Path(tmp)))
+
+        self.assertTrue(state["ft_announced"])
+        self.assertFalse(state["memory_updated"])
 
     def test_live_penalty_update_includes_penalty_score(self):
         from modules import live_loop
