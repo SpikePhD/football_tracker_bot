@@ -339,6 +339,36 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         teams.assert_not_awaited()
         prune.assert_called_once()
 
+    def test_scheduler_wakes_for_fallback_live_endpoint_when_date_window_empty(self):
+        from modules import api_provider, scheduler
+
+        live_match = espn_match(fixture_id="fallback-live")
+        live_match["fixture"]["status"] = {"short": "1H", "elapsed": 12}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            api_provider._api_live_fixtures_cache = None
+            api_provider._api_live_fixtures_cache_ts = None
+            with (
+                patch.object(scheduler, "expected_ft_due_fixture_ids", return_value=[]),
+                patch.object(api_provider, "_espn_healthy", False),
+                patch.object(api_provider, "_retry_after", datetime(2026, 6, 4, 1, 0, tzinfo=timezone.utc)),
+                patch.object(api_provider, "fetch_relevant_football", AsyncMock(return_value=[])) as relevant,
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "fetch_live_fixtures", AsyncMock(return_value=[live_match])) as live_fetch,
+            ):
+                needed = await scheduler._football_poll_needed(
+                    fake_bot,
+                    datetime(2026, 6, 3, 22, 15, tzinfo=timezone.utc),
+                )
+                return needed, relevant, live_fetch
+
+        needed, relevant, live_fetch = asyncio.run(run())
+
+        self.assertTrue(needed)
+        relevant.assert_awaited_once()
+        live_fetch.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

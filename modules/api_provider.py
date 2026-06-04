@@ -372,15 +372,27 @@ async def fetch_day(session: aiohttp.ClientSession) -> list[dict]:
     return await fetch_display_football(session, utc_now())
 
 
-async def fetch_live(session: aiohttp.ClientSession) -> list[dict]:
+async def fetch_live(
+    session: aiohttp.ClientSession,
+    now_utc: datetime | None = None,
+    relevant_matches: list[dict] | None = None,
+) -> list[dict]:
     """Currently in-progress matches from the rolling football lookup."""
-    matches = await fetch_relevant_football(session, utc_now())
+    matches = list(relevant_matches) if relevant_matches is not None else await fetch_relevant_football(session, now_utc or utc_now())
     if not _espn_healthy:
         if api_client.is_quota_exceeded_today():
             logger.warning("[APIProvider] API-Football quota exhausted. Skipping fallback live endpoint fetch.")
         else:
             matches = _dedupe_by_fixture_id([*matches, *await _fetch_api_football_live_matches(session)])
     return [m for m in matches if match_lifecycle.is_live(m)]
+
+
+async def has_live_football(
+    session: aiohttp.ClientSession,
+    now_utc: datetime | None = None,
+    relevant_matches: list[dict] | None = None,
+) -> bool:
+    return bool(await fetch_live(session, now_utc=now_utc, relevant_matches=relevant_matches))
 
 
 async def fetch_finished_recent(session: aiohttp.ClientSession) -> list[dict]:

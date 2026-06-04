@@ -49,7 +49,14 @@ async def _football_poll_needed(bot, now_utc: datetime) -> bool:
         return True
 
     matches = await api_provider.fetch_relevant_football(bot.http_session, now_utc)
-    return any(match_lifecycle.should_track_fixture(match, now_utc) for match in matches)
+    if any(match_lifecycle.should_track_fixture(match, now_utc) for match in matches):
+        return True
+
+    return await api_provider.has_live_football(
+        bot.http_session,
+        now_utc=now_utc,
+        relevant_matches=matches,
+    )
 
 
 async def run_football_cycle(bot, now_utc: datetime | None = None) -> None:
