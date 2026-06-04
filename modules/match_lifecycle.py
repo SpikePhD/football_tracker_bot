@@ -43,7 +43,16 @@ def local_display_date(match: dict) -> str | None:
 def status_short(match: dict | None) -> str | None:
     if not match:
         return None
-    return match.get("fixture", {}).get("status", {}).get("short")
+    status = match.get("fixture", {}).get("status", {})
+    short = status.get("short")
+    if short == "PEN":
+        status_text = " ".join(
+            str(status.get(key) or "")
+            for key in ("long", "detail", "description", "name")
+        ).lower()
+        if ("finished" in status_text or "final" in status_text) and "progress" not in status_text:
+            return "PEN_DONE"
+    return short
 
 
 def is_live(match: dict | None) -> bool:

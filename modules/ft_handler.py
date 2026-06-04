@@ -166,7 +166,7 @@ async def process_terminal_fixture(
 
 
 def _normalize_api_football_match(match_details_raw: dict) -> dict:
-    fixture_status_short = match_details_raw.get("fixture", {}).get("status", {}).get("short")
+    fixture_status = match_details_raw.get("fixture", {}).get("status", {})
     home_team = match_details_raw.get("teams", {}).get("home", {}).get("name", "Home Team")
     away_team = match_details_raw.get("teams", {}).get("away", {}).get("name", "Away Team")
     raw_events = match_details_raw.get("events", [])
@@ -175,7 +175,11 @@ def _normalize_api_football_match(match_details_raw: dict) -> dict:
         "fixture": {
             "id": match_details_raw.get("fixture", {}).get("id"),
             "date": match_details_raw.get("fixture", {}).get("date"),
-            "status": {"short": fixture_status_short},
+            "status": {
+                "short": fixture_status.get("short"),
+                "long": fixture_status.get("long"),
+                "elapsed": fixture_status.get("elapsed"),
+            },
         },
         "league": {"id": match_details_raw.get("league", {}).get("id")},
         "teams": {

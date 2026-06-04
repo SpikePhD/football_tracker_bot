@@ -23,7 +23,6 @@ _last_observed: dict[str, dict] = {}
 _regression_hold: dict[str, dict] = {}
 _last_sent_content: dict[str, tuple[str, object]] = {}
 
-_LIVE_STATUSES = {"1H", "HT", "2H", "ET", "PEN"}
 _MISSING_GRACE_SEC = 180
 _TEXT_DEDUPE_WINDOW_SEC = 300
 _REGRESSION_CONFIRM_TICKS = 3
@@ -75,10 +74,10 @@ def seed_already_posted(fixtures: list) -> None:
     """
     count = 0
     for match in fixtures:
-        if match.get("fixture", {}).get("status", {}).get("short") not in _LIVE_STATUSES:
+        if not match_lifecycle.is_live(match):
             continue
         match_id = str(match["fixture"]["id"])
-        status_short = match.get("fixture", {}).get("status", {}).get("short")
+        status_short = match_lifecycle.status_short(match)
         score = match.get("goals", {})
         events = match.get("events", [])
         key = f"{match_id}_{status_short}_{score.get('home')}-{score.get('away')}_{len(events)}"
@@ -125,7 +124,7 @@ async def run_live_loop(bot):
             score = enriched["goals"]
             events = enriched.get("events", [])
             elapsed = enriched.get("fixture", {}).get("status", {}).get("elapsed")
-            status_short = enriched.get("fixture", {}).get("status", {}).get("short")
+            status_short = match_lifecycle.status_short(enriched)
             state_key = f"{match_id}_{status_short}_{score['home']}-{score['away']}_{len(events)}"
 
             previous_observed = _last_observed.get(match_id)

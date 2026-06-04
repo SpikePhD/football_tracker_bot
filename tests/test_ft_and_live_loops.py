@@ -63,6 +63,38 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertIn("5' - Home Goal", content)
         self.assertNotIn("120' - H1", content)
 
+    def test_api_football_terminal_penalty_status_posts_and_updates_memory_once(self):
+        from modules import api_provider, ft_handler, match_state
+
+        match = shootout_match()
+        match["fixture"]["status"] = {
+            "short": "PEN",
+            "long": "Match Finished",
+            "elapsed": 120,
+        }
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 123})()
+
+        async def run(memory_dir: Path):
+            with (
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(ft_handler, "post_new_general_message", AsyncMock(return_value=fake_message)) as post_msg,
+                patch.object(ft_handler, "update_match_in_memory", AsyncMock(return_value=None)) as update_memory,
+            ):
+                await ft_handler.process_terminal_fixture(fake_bot, match, memory_dir=memory_dir)
+                await ft_handler.process_terminal_fixture(fake_bot, match, memory_dir=memory_dir)
+                state = match_state.get_fixture_state("shootout-1", memory_dir=memory_dir)
+                return state, post_msg, update_memory
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state, post_msg, update_memory = asyncio.run(run(Path(tmp)))
+
+        self.assertEqual(state["last_status"], "PEN_DONE")
+        self.assertTrue(state["ft_announced"])
+        self.assertTrue(state["memory_updated"])
+        post_msg.assert_awaited_once()
+        update_memory.assert_awaited_once()
+
     def test_live_penalty_update_includes_penalty_score(self):
         from modules import live_loop
         from modules import api_provider

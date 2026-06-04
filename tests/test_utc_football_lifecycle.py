@@ -222,6 +222,87 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual([m["fixture"]["id"] for m in matches], ["dup", "next"])
         self.assertEqual(fetch.await_count, 3)
 
+    def test_fetch_relevant_football_uses_lifecycle_provider_window(self):
+        from modules import api_provider, match_lifecycle
+
+        now_utc = datetime(2026, 6, 3, 22, 15, tzinfo=timezone.utc)
+        expected_start, expected_end = match_lifecycle.provider_window(now_utc)
+
+        async def run():
+            with patch.object(api_provider, "fetch_football_window", AsyncMock(return_value=[])) as fetch_window:
+                await api_provider.fetch_relevant_football(None, now_utc)
+                return fetch_window
+
+        fetch_window = asyncio.run(run())
+        _, start_utc, end_utc = fetch_window.await_args.args
+        self.assertEqual(start_utc, expected_start)
+        self.assertEqual(end_utc, expected_end)
+
+    def test_fetch_relevant_default_window_keeps_provider_dates_bounded(self):
+        from modules import api_provider
+
+        live_match = espn_match(fixture_id="late-live")
+        live_match["fixture"]["date"] = "2026-06-03T21:30:00Z"
+        live_match["fixture"]["status"] = {"short": "2H", "elapsed": 74}
+
+        async def run():
+            api_provider._football_scoreboard_cache.clear()
+            api_provider._cache = []
+            api_provider._cache_date = None
+            api_provider._cache_ts = None
+            seen_dates = []
+
+            async def fake_scoreboard(_session, _slug_map, date_str):
+                seen_dates.append(date_str)
+                provider_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:]}"
+                return {
+                    "matches": [live_match] if provider_date == "2026-06-03" else [],
+                    "success_count": 1,
+                    "failure_count": 0,
+                    "succeeded_league_ids": [135],
+                    "failed_league_ids": [],
+                }
+
+            with patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", AsyncMock(side_effect=fake_scoreboard)):
+                matches = await api_provider.fetch_relevant_football(
+                    None,
+                    datetime(2026, 6, 3, 22, 15, tzinfo=timezone.utc),
+                )
+                return matches, seen_dates
+
+        matches, seen_dates = asyncio.run(run())
+
+        self.assertEqual([m["fixture"]["id"] for m in matches], ["late-live"])
+        self.assertEqual(seen_dates, ["20260603", "20260604"])
+
+    def test_fetch_live_merges_api_football_live_endpoint_on_fallback(self):
+        from modules import api_provider
+
+        date_live = espn_match(fixture_id="date-live")
+        date_live["fixture"]["status"] = {"short": "2H", "elapsed": 74}
+        direct_live = espn_match(fixture_id="direct-live")
+        direct_live["fixture"]["status"] = {"short": "1H", "elapsed": 23}
+        duplicate_direct = espn_match(fixture_id="date-live")
+        duplicate_direct["fixture"]["status"] = {"short": "2H", "elapsed": 75}
+
+        async def run():
+            api_provider._api_live_fixtures_cache = None
+            api_provider._api_live_fixtures_cache_ts = None
+            with (
+                patch.object(api_provider, "_espn_healthy", False),
+                patch.object(api_provider, "_retry_after", datetime(2026, 6, 4, 1, 0, tzinfo=timezone.utc)),
+                patch.object(api_provider, "utc_now", return_value=datetime(2026, 6, 3, 22, 15, tzinfo=timezone.utc)),
+                patch.object(api_provider, "fetch_relevant_football", AsyncMock(return_value=[date_live])),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "fetch_live_fixtures", AsyncMock(return_value=[duplicate_direct, direct_live])) as live_fetch,
+            ):
+                matches = await api_provider.fetch_live(None)
+                return matches, live_fetch
+
+        matches, live_fetch = asyncio.run(run())
+        self.assertEqual([m["fixture"]["id"] for m in matches], ["date-live", "direct-live"])
+        live_fetch.assert_awaited_once()
+
     def test_fetch_live_sees_previous_date_fixture_after_local_midnight(self):
         from modules import api_provider
 

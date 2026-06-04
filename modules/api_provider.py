@@ -91,7 +91,6 @@ _enrich_budget_exhausted_logged_date: str | None = None
 API_ENRICH_RETRY_DELAYS_SEC = CONFIG_API_ENRICH_RETRY_DELAYS_SEC
 API_LIVE_FIXTURES_CACHE_TTL_SEC = 60
 API_FIXTURE_EVENTS_CACHE_TTL_SEC = 90
-LIVE_STATUS_SHORTS = {"1H", "HT", "2H", "ET", "PEN"}
 
 
 # ── Health management ─────────────────────────────────────────────────────────
@@ -300,6 +299,24 @@ async def _fetch_api_football_date(session: aiohttp.ClientSession, provider_date
     return matches
 
 
+async def _fetch_api_football_live_matches(session: aiohttp.ClientSession) -> list[dict]:
+    global _api_live_fixtures_cache, _api_live_fixtures_cache_ts
+
+    now = bot_now()
+    if (
+        _api_live_fixtures_cache is not None
+        and _api_live_fixtures_cache_ts is not None
+        and (now - _api_live_fixtures_cache_ts).total_seconds() < API_LIVE_FIXTURES_CACHE_TTL_SEC
+    ):
+        response = _api_live_fixtures_cache.get("response")
+        return response if isinstance(response, list) else []
+
+    matches = await api_client.fetch_live_fixtures(session)
+    _api_live_fixtures_cache = {"response": matches}
+    _api_live_fixtures_cache_ts = now
+    return matches
+
+
 async def fetch_football_window(
     session: aiohttp.ClientSession,
     start_utc: datetime,
@@ -339,19 +356,30 @@ async def fetch_football_window(
 
 async def fetch_relevant_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
     now_utc = now_utc or utc_now()
+    start_utc, end_utc = match_lifecycle.provider_window(now_utc)
+    return await fetch_football_window(session, start_utc, end_utc)
+
+
+async def fetch_display_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
+    now_utc = now_utc or utc_now()
     start_utc = now_utc - timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
     end_utc = now_utc + timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
     return await fetch_football_window(session, start_utc, end_utc)
 
 
 async def fetch_day(session: aiohttp.ClientSession) -> list[dict]:
-    """Display snapshot wrapper over the rolling football lookup."""
-    return await fetch_relevant_football(session, utc_now())
+    """Display snapshot wrapper over the wider configured football lookup."""
+    return await fetch_display_football(session, utc_now())
 
 
 async def fetch_live(session: aiohttp.ClientSession) -> list[dict]:
     """Currently in-progress matches from the rolling football lookup."""
     matches = await fetch_relevant_football(session, utc_now())
+    if not _espn_healthy:
+        if api_client.is_quota_exceeded_today():
+            logger.warning("[APIProvider] API-Football quota exhausted. Skipping fallback live endpoint fetch.")
+        else:
+            matches = _dedupe_by_fixture_id([*matches, *await _fetch_api_football_live_matches(session)])
     return [m for m in matches if match_lifecycle.is_live(m)]
 
 
@@ -548,8 +576,7 @@ def _candidate_time_delta_minutes(espn_dt: datetime | None, candidate: dict) -> 
 
 
 def _is_live_espn_match(match: dict) -> bool:
-    status_short = match.get("fixture", {}).get("status", {}).get("short")
-    return status_short in LIVE_STATUS_SHORTS
+    return match_lifecycle.is_live(match)
 
 
 def _goal_event_count(events: list) -> int:
