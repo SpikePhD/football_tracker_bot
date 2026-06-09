@@ -4,8 +4,8 @@ from collections import defaultdict
 from datetime import timedelta
 from discord.ext import commands
 from config import LEAGUE_NAME_MAP, TENNIS_UPCOMING_DAYS
-from modules import api_provider
-from utils.time_utils import to_bot_tz, bot_now
+from modules import api_provider, match_lifecycle
+from utils.time_utils import to_bot_tz, bot_now, utc_now
 from utils.event_formatter import format_match_events, format_shootout_segments, event_completeness_note
 from modules.discord_poster import post_new_message_to_context
 from utils.tennis_formatter import format_tennis_snapshot_line
@@ -13,14 +13,129 @@ from utils.tennis_formatter import format_tennis_snapshot_line
 logger = logging.getLogger(__name__)
 
 
-def build_football_section(fixtures: list) -> str:
+def _football_sort_key(match: dict):
+    return match.get("fixture", {}).get("date") or ""
+
+
+def _football_local_date(match: dict):
+    kickoff = match_lifecycle.fixture_kickoff_utc(match)
+    return to_bot_tz(kickoff).date() if kickoff else None
+
+
+def filter_football_for_local_matchday(fixtures: list, now_utc) -> list:
+    """Public daily football snapshot: local today plus active/recent carry-over."""
+    local_today = to_bot_tz(now_utc).date()
+    filtered = []
+    for match in fixtures:
+        if match_lifecycle.is_live(match):
+            filtered.append(match)
+            continue
+
+        local_date = _football_local_date(match)
+        if local_date == local_today:
+            filtered.append(match)
+            continue
+
+        if (
+            local_date is not None
+            and local_date < local_today
+            and match_lifecycle.is_recently_finished(match, now_utc)
+        ):
+            filtered.append(match)
+
+    return sorted(filtered, key=_football_sort_key)
+
+
+def filter_upcoming_football_fixtures(fixtures: list, now_utc) -> list:
+    """Future not-started football fixtures for the explicit upcoming view."""
+    local_today = to_bot_tz(now_utc).date()
+    upcoming = []
+    for match in fixtures:
+        if match_lifecycle.is_live(match) or match_lifecycle.is_terminal(match):
+            continue
+        local_date = _football_local_date(match)
+        if local_date is not None and local_date > local_today:
+            upcoming.append(match)
+    return sorted(upcoming, key=_football_sort_key)
+
+
+def _format_football_fixture_line(match: dict) -> str:
+    ko_dt = to_bot_tz(match["fixture"]["date"])
+    status = match_lifecycle.status_short(match) or "N/A"
+    home = match.get("teams", {}).get("home", {}).get("name", "Home Team")
+    away = match.get("teams", {}).get("away", {}).get("name", "Away Team")
+    goals = match.get("goals", {"home": "?", "away": "?"})
+
+    if status == "NS":
+        return f"- {ko_dt.strftime('%H:%M')} - {home} vs {away}"
+    if match_lifecycle.is_ft(match):
+        events = match.get("events", [])
+        ft_event_parts = format_match_events(events, home, away)
+        score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
+        note = event_completeness_note(goals, events)
+        shootout_segments = format_shootout_segments(match, final=True)
+        if ft_event_parts:
+            line = f"- FT: {score_str} ({'; '.join(ft_event_parts)})"
+        else:
+            line = f"- FT: {score_str}"
+        if shootout_segments:
+            line += " | " + " | ".join(shootout_segments)
+        return f"{line}{note}"
+
+    elapsed = match.get("fixture", {}).get("status", {}).get("elapsed")
+    if status == "HT":
+        minute_str = "HT"
+    elif elapsed:
+        minute_str = f"{elapsed}'"
+    else:
+        minute_str = status
+
+    events = match.get("events", [])
+    event_parts = format_match_events(events, home, away)
+    score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
+    note = event_completeness_note(goals, events)
+    shootout_segments = format_shootout_segments(match, final=False)
+    if event_parts:
+        line = f"- LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)})"
+    else:
+        line = f"- LIVE [{minute_str}]: {score_str}"
+    if shootout_segments:
+        line += " | " + " | ".join(shootout_segments)
+    return f"{line}{note}"
+
+
+def build_football_section(
+    fixtures: list,
+    *,
+    empty_message: str = "No tracked football matches today.",
+    group_by_local_date: bool = False,
+    title: str = "**Football**",
+) -> str:
     """
     Format football fixtures into a grouped-by-competition Discord section.
     Returns the full message string (without a trailing newline).
     """
     if not fixtures:
-        return "**Football**\nNo tracked football matches in the current lifecycle window."
+        return f"{title}\n{empty_message}"
 
+    if group_by_local_date:
+        lines = [title]
+        by_date: dict[str, list] = defaultdict(list)
+        for match in fixtures:
+            local_date = _football_local_date(match)
+            by_date[local_date.isoformat() if local_date else "Date unknown"].append(match)
+
+        for local_date in sorted(by_date):
+            lines.append(f"\n**{local_date}**")
+            lines.extend(_build_football_competition_lines(by_date[local_date]))
+        return "\n".join(lines)
+
+    lines = [title]
+    lines.extend(_build_football_competition_lines(fixtures))
+    return "\n".join(lines)
+
+
+def _build_football_competition_lines(fixtures: list) -> list[str]:
     # Group by league ID
     groups: dict[int, list] = defaultdict(list)
     for m in fixtures:
@@ -33,59 +148,26 @@ def build_football_section(fixtures: list) -> str:
 
     sorted_league_ids = sorted(groups.keys(), key=group_sort_key)
 
-    lines = ["**Football**"]
+    lines = []
 
     for league_id in sorted_league_ids:
         league_name = LEAGUE_NAME_MAP.get(league_id, f"League {league_id}")
         lines.append(f"\n**{league_name}:**")
 
-        group_fixtures = sorted(groups[league_id], key=lambda m: m['fixture']['date'])
+        group_fixtures = sorted(groups[league_id], key=_football_sort_key)
         for m in group_fixtures:
-            ko_dt = to_bot_tz(m['fixture']['date'])
-            status = m.get('fixture', {}).get('status', {}).get('short', 'N/A')
-            home = m.get('teams', {}).get('home', {}).get('name', 'Home Team')
-            away = m.get('teams', {}).get('away', {}).get('name', 'Away Team')
-            goals = m.get('goals', {'home': '?', 'away': '?'})
+            lines.append(_format_football_fixture_line(m))
 
-            if status == "NS":
-                time_str = ko_dt.strftime("%H:%M")
-                lines.append(f"- {time_str} - {home} vs {away}")
-            elif status == "FT":
-                events = m.get('events', [])
-                ft_event_parts = format_match_events(events, home, away)
-                score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
-                note = event_completeness_note(goals, events)
-                shootout_segments = format_shootout_segments(m, final=True)
-                if ft_event_parts:
-                    line = f"- FT: {score_str} ({'; '.join(ft_event_parts)})"
-                else:
-                    line = f"- FT: {score_str}"
-                if shootout_segments:
-                    line += " | " + " | ".join(shootout_segments)
-                lines.append(f"{line}{note}")
-            else:
-                elapsed = m.get('fixture', {}).get('status', {}).get('elapsed')
-                if status == "HT":
-                    minute_str = "HT"
-                elif elapsed:
-                    minute_str = f"{elapsed}'"
-                else:
-                    minute_str = status
+    return lines
 
-                events = m.get('events', [])
-                event_parts = format_match_events(events, home, away)
-                score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
-                note = event_completeness_note(goals, events)
-                shootout_segments = format_shootout_segments(m, final=False)
-                if event_parts:
-                    line = f"- LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)})"
-                else:
-                    line = f"- LIVE [{minute_str}]: {score_str}"
-                if shootout_segments:
-                    line += " | " + " | ".join(shootout_segments)
-                lines.append(f"{line}{note}")
 
-    return "\n".join(lines)
+def build_upcoming_football_message(fixtures: list) -> str:
+    return build_football_section(
+        fixtures,
+        empty_message="No upcoming tracked football fixtures in the display window.",
+        group_by_local_date=True,
+        title="**Upcoming football fixtures:**",
+    )
 
 
 def build_tennis_section(matches: list) -> str:
@@ -132,8 +214,8 @@ def build_tennis_section(matches: list) -> str:
     return "\n".join(lines)
 
 
-def build_combined_matches_message(football_fixtures: list, tennis_matches: list) -> str:
-    current_time = bot_now()
+def build_combined_matches_message(football_fixtures: list, tennis_matches: list, now_utc=None) -> str:
+    current_time = to_bot_tz(now_utc) if now_utc else bot_now()
     return "\n\n".join([
         f"**Tracked sports ({current_time.strftime('%Y-%m-%d')}):**",
         build_football_section(football_fixtures),
@@ -147,12 +229,15 @@ async def build_combined_matches_message_from_api(session) -> str:
 
 
 async def fetch_combined_matches_snapshot(session) -> tuple[list, list, str]:
+    now = utc_now()
     football_fixtures = []
     tennis_matches = []
 
     try:
-        football_fixtures = await api_provider.fetch_day(session)
-        football_fixtures.sort(key=lambda m: m["fixture"]["date"])
+        football_fixtures = filter_football_for_local_matchday(
+            await api_provider.fetch_day(session),
+            now,
+        )
     except Exception as e:
         logger.error(f"Failed to fetch football snapshot: {e}", exc_info=True)
 
@@ -164,8 +249,14 @@ async def fetch_combined_matches_snapshot(session) -> tuple[list, list, str]:
     return (
         football_fixtures,
         tennis_matches,
-        build_combined_matches_message(football_fixtures, tennis_matches),
+        build_combined_matches_message(football_fixtures, tennis_matches, now_utc=now),
     )
+
+
+async def build_upcoming_football_message_from_api(session) -> str:
+    now = utc_now()
+    fixtures = await api_provider.fetch_day(session)
+    return build_upcoming_football_message(filter_upcoming_football_fixtures(fixtures, now))
 
 
 def _is_tennis_today(match: dict) -> bool:
@@ -202,6 +293,14 @@ class Matches(commands.Cog):
     )
     async def matches(self, ctx: commands.Context):
         content = await build_combined_matches_message_from_api(self.bot.http_session)
+        await post_new_message_to_context(ctx, content=content)
+
+    @commands.command(
+        name="upcoming",
+        help="List upcoming tracked football fixtures grouped by local date."
+    )
+    async def upcoming(self, ctx: commands.Context):
+        content = await build_upcoming_football_message_from_api(self.bot.http_session)
         await post_new_message_to_context(ctx, content=content)
 
 
