@@ -140,9 +140,33 @@ async def process_terminal_fixture(
     now_utc = now_utc or utc_now()
     match_state.migrate_ft_state_if_needed(memory_dir=memory_dir)
     enriched = await api_provider.enrich_fixture_events(bot.http_session, match_details)
+    status_payload = enriched.get("fixture", {}).get("status", {}) or {}
+    raw_status = status_payload.get("short")
+    normalized_status = match_lifecycle.status_short(enriched, log_normalization=True)
+    raw_status_text = " | ".join(
+        str(status_payload.get(key))
+        for key in ("long", "detail", "description", "name")
+        if status_payload.get(key)
+    )
+    provider = (
+        enriched.get("provider")
+        or enriched.get("source")
+        or enriched.get("fixture", {}).get("provider")
+        or "unknown"
+    )
+    logger.info(
+        "Terminal fixture processing snapshot: fixture_id=%s provider=%s raw_status=%s "
+        "normalized_status=%s raw_status_text=%r.",
+        match_lifecycle.fixture_identity(enriched),
+        provider,
+        raw_status,
+        normalized_status,
+        raw_status_text,
+    )
     fixture = match_state.upsert_fixture_from_match(enriched, now_utc, source="espn", memory_dir=memory_dir)
     fixture_id = fixture["fixture_id"]
     current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
+    memory_result = None
 
     if match_lifecycle.is_ft(enriched) and not current.get("memory_updated"):
         if _has_required_memory_keys(enriched):
@@ -150,6 +174,7 @@ async def process_terminal_fixture(
                 memory_result = await update_match_in_memory(bot.http_session, enriched)
             except Exception as e:
                 logger.error("Failed to update football memory for match %s: %s", fixture_id, e)
+                memory_result = {"updated": False, "reason": "failed_exception"}
             else:
                 if memory_result.get("updated"):
                     match_state.mark_memory_updated(fixture_id, memory_dir=memory_dir)
@@ -165,11 +190,29 @@ async def process_terminal_fixture(
                 "Skipping football memory update for FT fixture %s because required IDs are missing.",
                 fixture_id,
             )
+            memory_result = {"updated": False, "reason": "missing_required_data"}
+    elif match_lifecycle.is_ft(enriched):
+        memory_result = {"updated": True, "reason": "already_updated"}
 
     current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
+    ft_posted = None
     if match_lifecycle.is_ft(enriched) and not current.get("ft_announced"):
-        if await _post_ft_from_data(bot, enriched):
+        ft_posted = await _post_ft_from_data(bot, enriched)
+        if ft_posted:
             match_state.mark_ft_announced(fixture_id, memory_dir=memory_dir)
+        else:
+            logger.warning("FT announcement skipped or failed for fixture %s.", fixture_id)
+    elif match_lifecycle.is_ft(enriched):
+        ft_posted = "already_announced"
+    logger.info(
+        "Terminal fixture processing result: fixture_id=%s memory_update=%s ft_announcement=%s.",
+        fixture_id,
+        memory_result if memory_result is not None else "not_attempted",
+        "posted" if ft_posted is True else (
+            "already_announced" if ft_posted == "already_announced"
+            else ("skipped_or_failed" if ft_posted is False else "not_attempted")
+        ),
+    )
 
 
 def _normalize_api_football_match(match_details_raw: dict) -> dict:

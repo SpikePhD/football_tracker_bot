@@ -131,6 +131,21 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual(set(state["fixtures"]), {"old"})
         self.assertEqual(tmp_files, [])
 
+    def test_corrupt_match_state_loads_defaults_without_overwriting_file(self):
+        from modules import match_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_dir = Path(tmp)
+            path = memory_dir / "match_state.json"
+            path.write_text("{not valid json", encoding="utf-8")
+
+            with self.assertLogs("modules.match_state", level="ERROR") as logs:
+                state = match_state.load_match_state(memory_dir=memory_dir)
+
+            self.assertEqual(state["fixtures"], {})
+            self.assertEqual(path.read_text(encoding="utf-8"), "{not valid json")
+            self.assertTrue(any("is corrupt" in line for line in logs.output))
+
     def test_ft_state_migration_is_best_effort_and_keeps_legacy_file(self):
         from modules import match_state
 

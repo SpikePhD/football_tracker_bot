@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from config import (
@@ -8,6 +9,8 @@ from config import (
     FOOTBALL_STATE_RETENTION_HOURS,
 )
 from utils.time_utils import parse_provider_utc, to_bot_tz
+
+logger = logging.getLogger(__name__)
 
 LIVE_STATUSES = {"1H", "HT", "2H", "ET", "PEN"}
 FT_STATUSES = {"FT", "AET", "PEN_DONE"}
@@ -40,7 +43,7 @@ def local_display_date(match: dict) -> str | None:
     return to_bot_tz(kickoff).date().isoformat() if kickoff else None
 
 
-def status_short(match: dict | None) -> str | None:
+def status_short(match: dict | None, log_normalization: bool = False) -> str | None:
     if not match:
         return None
     status = match.get("fixture", {}).get("status", {})
@@ -51,6 +54,12 @@ def status_short(match: dict | None) -> str | None:
             for key in ("long", "detail", "description", "name")
         ).lower()
         if ("finished" in status_text or "final" in status_text) and "progress" not in status_text:
+            if log_normalization:
+                logger.info(
+                    "Normalized fixture %s provider status PEN to PEN_DONE from status text %r.",
+                    fixture_identity(match),
+                    status_text.strip(),
+                )
             return "PEN_DONE"
     return short
 
