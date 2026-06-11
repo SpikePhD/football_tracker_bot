@@ -188,13 +188,13 @@ class FtAndLiveLoopTests(unittest.TestCase):
                 patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
                 patch.object(live_loop.match_state, "update_live_message_id"),
                 patch.object(live_loop, "prune_live_state", return_value=[]),
-                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert,
+                patch.object(live_loop, "post_live_update", AsyncMock(return_value=fake_message)) as post_live,
             ):
                 await live_loop.run_live_loop(fake_bot)
-                return upsert
+                return post_live
 
-        upsert = asyncio.run(run())
-        content = upsert.await_args.kwargs["content"]
+        post_live = asyncio.run(run())
+        content = post_live.await_args.kwargs["content"]
 
         self.assertIn("Football LIVE [PEN]: Home 1 - 1 Away", content)
         self.assertIn("Penalties: Home 4 - 3 Away", content)
@@ -227,15 +227,75 @@ class FtAndLiveLoopTests(unittest.TestCase):
                 patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
                 patch.object(live_loop.match_state, "update_live_message_id"),
                 patch.object(live_loop, "prune_live_state", return_value=[]),
-                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert,
+                patch.object(live_loop, "post_live_update", AsyncMock(return_value=fake_message)) as post_live,
             ):
                 await live_loop.run_live_loop(fake_bot)
-                return upsert
+                return post_live
 
-        upsert = asyncio.run(run())
+        post_live = asyncio.run(run())
 
-        self.assertTrue(upsert.await_count)
-        self.assertIn("Football LIVE [PEN]: Home 1 - 1 Away", upsert.await_args.kwargs["content"])
+        self.assertTrue(post_live.await_count)
+        self.assertIn("Football LIVE [PEN]: Home 1 - 1 Away", post_live.await_args.kwargs["content"])
+
+    def test_live_score_and_event_changes_post_new_messages_instead_of_editing(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        base = espn_match(fixture_id="live-feed-1")
+        base["fixture"]["status"] = {"short": "1H", "elapsed": 9}
+        base["goals"] = {"home": 0, "away": 0}
+
+        goal = espn_match(fixture_id="live-feed-1")
+        goal["fixture"]["status"] = {"short": "1H", "elapsed": 10}
+        goal["goals"] = {"home": 1, "away": 0}
+        goal["events"] = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Scorer"},
+                "team": {"id": "50", "name": "Parma"},
+                "time": {"elapsed": 9},
+            }
+        ]
+
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        messages = [
+            type("FakeMessage", (), {"id": 100})(),
+            type("FakeMessage", (), {"id": 101})(),
+        ]
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(side_effect=[[base], [goal]])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(side_effect=[base, goal])),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop.match_state, "get_fixture_state", return_value={"live_message_id": 999}),
+                patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
+                patch.object(live_loop.match_state, "update_live_message_id") as update_live_id,
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+                patch.object(live_loop, "post_live_update", AsyncMock(side_effect=messages)) as post_live,
+            ):
+                await live_loop.run_live_loop(fake_bot)
+                await live_loop.run_live_loop(fake_bot)
+                return post_live, update_live_id
+
+        post_live, update_live_id = asyncio.run(run())
+
+        self.assertEqual(post_live.await_count, 2)
+        self.assertEqual(
+            [call.kwargs["content"] for call in post_live.await_args_list],
+            [
+                "⚽ Football LIVE: Parma 0 - 0 Sassuolo",
+                "⚽ Football LIVE: Parma 1 - 0 Sassuolo (9' - Scorer (H))",
+            ],
+        )
+        self.assertEqual([call.args[1] for call in update_live_id.call_args_list], [100, 101])
 
 
 if __name__ == "__main__":

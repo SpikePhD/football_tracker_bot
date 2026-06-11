@@ -10,7 +10,7 @@ from modules.bot_mode import is_silent
 from utils.time_utils import bot_now, utc_now
 from utils.event_formatter import format_match_events, format_shootout_segments, event_completeness_note
 from modules.ft_handler import is_tracked_for_ft, track_match_for_ft
-from modules.discord_poster import upsert_live_message
+from modules.discord_poster import post_live_update
 
 logger = logging.getLogger(__name__)
 
@@ -193,9 +193,9 @@ async def run_live_loop(bot):
             completeness = event_completeness_note(score, events)
 
             if status_short == "PEN":
-                line_content = f"? Football LIVE [PEN]: {home} {score['home']} - {score['away']} {away}"
+                line_content = f"⚽ Football LIVE [PEN]: {home} {score['home']} - {score['away']} {away}"
             else:
-                line_content = f"? Football LIVE: {home} {score['home']} - {score['away']} {away}"
+                line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
             if event_strings:
                 line_content += " (" + "; ".join(event_strings) + ")"
             shootout_segments = format_shootout_segments(enriched, final=False)
@@ -223,12 +223,9 @@ async def run_live_loop(bot):
                     )
                     continue
 
-            updated_message = await upsert_live_message(
+            updated_message = await post_live_update(
                 bot=bot,
                 channel_id=CHANNEL_ID,
-                message_id=live_message_ids.get(match_id) or (
-                    (match_state.get_fixture_state(match_id) or {}).get("live_message_id")
-                ),
                 content=line_content,
             )
 
