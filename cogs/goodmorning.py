@@ -12,6 +12,7 @@ from config import CHANNEL_ID, OPERATIONS_TIMEZONE
 from modules.bot_mode import get_mode, is_verbose
 from modules.discord_poster import post_new_general_message, post_new_message_to_context
 from modules.ft_handler import seed_already_announced_ft
+from modules.live_loop import seed_already_posted
 from modules.storage import load, save
 from utils.personality import get_greeting
 from utils.time_utils import bot_now
@@ -91,6 +92,7 @@ class GoodMorning(commands.Cog):
             sent = await post_new_general_message(self.bot, CHANNEL_ID, content=content)
             if sent is not None:
                 seed_already_announced_ft(football_fixtures)
+                seed_already_posted(football_fixtures)
             logger.info(f"Morning message sent at {now.strftime('%H:%M')} {OPERATIONS_TIMEZONE}.")
         except Exception as e:
             logger.error(f"GoodMorning: failed to send message: {e}", exc_info=True)

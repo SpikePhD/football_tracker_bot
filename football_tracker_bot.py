@@ -27,6 +27,7 @@ from modules.scheduler import run_local_daily_routines, run_operations_loop
 from modules.bot_mode import is_verbose, get_mode
 from modules.discord_poster import post_new_general_message, post_new_message_to_context
 from modules.ft_handler import seed_already_announced_ft
+from modules.live_loop import seed_already_posted
 from cogs.matches import fetch_combined_matches_snapshot
 from cogs.version import get_version_info
 from utils.time_utils import bot_tz
@@ -257,6 +258,7 @@ async def on_ready():
                 sent = await post_new_general_message(bot, CHANNEL_ID, content=content)
                 if sent is not None:
                     seed_already_announced_ft(football_fixtures)
+                    seed_already_posted(football_fixtures)
             except discord.Forbidden:
                 logger.error(f"❌ Missing permissions to send greeting message to channel ID: {CHANNEL_ID}.")
             except Exception as e:

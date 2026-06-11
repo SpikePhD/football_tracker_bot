@@ -24,8 +24,25 @@ _regression_hold: dict[str, dict] = {}
 _last_sent_content: dict[str, tuple[str, object]] = {}
 
 _MISSING_GRACE_SEC = 180
-_TEXT_DEDUPE_WINDOW_SEC = 300
 _REGRESSION_CONFIRM_TICKS = 3
+
+
+def _render_live_line(match: dict, home: str, away: str, score: dict, events: list, status_short: str) -> str:
+    event_strings = format_match_events(events, home, away)
+    completeness = event_completeness_note(score, events)
+
+    if status_short == "PEN":
+        line_content = f"⚽ Football LIVE [PEN]: {home} {score['home']} - {score['away']} {away}"
+    else:
+        line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
+    if event_strings:
+        line_content += " (" + "; ".join(event_strings) + ")"
+    shootout_segments = format_shootout_segments(match, final=False)
+    if shootout_segments:
+        line_content += " | " + " | ".join(shootout_segments)
+    if completeness:
+        line_content += completeness
+    return line_content
 
 
 def _regression_guard_context(
@@ -68,10 +85,11 @@ def prune_live_state(now_utc=None):
 
 def seed_already_posted(fixtures: list) -> None:
     """
-    Pre-populate live_state_keys with the current snapshot of any in-progress
-    matches from a startup fixture list. Prevents the first run_live_loop call
-    after startup from re-posting updates already shown in the startup message.
+    Pre-populate live dedupe state with the current snapshot of any in-progress
+    matches. Prevents run_live_loop from re-posting updates already shown in
+    startup or morning snapshot messages.
     """
+    now = bot_now()
     count = 0
     for match in fixtures:
         if not match_lifecycle.is_live(match):
@@ -80,8 +98,14 @@ def seed_already_posted(fixtures: list) -> None:
         status_short = match_lifecycle.status_short(match)
         score = match.get("goals", {})
         events = match.get("events", [])
+        home = match.get("teams", {}).get("home", {}).get("name", "Home Team")
+        away = match.get("teams", {}).get("away", {}).get("name", "Away Team")
         key = f"{match_id}_{status_short}_{score.get('home')}-{score.get('away')}_{len(events)}"
         live_state_keys[match_id] = key
+        _last_sent_content[match_id] = (
+            _render_live_line(match, home, away, score, events, status_short),
+            now,
+        )
         count += 1
     if count:
         logger.info(f"Seeded {count} in-progress match snapshot(s) into live_state_keys.")
@@ -189,28 +213,12 @@ async def run_live_loop(bot):
                 }
                 continue
 
-            event_strings = format_match_events(events, home, away)
-            completeness = event_completeness_note(score, events)
-
-            if status_short == "PEN":
-                line_content = f"⚽ Football LIVE [PEN]: {home} {score['home']} - {score['away']} {away}"
-            else:
-                line_content = f"⚽ Football LIVE: {home} {score['home']} - {score['away']} {away}"
-            if event_strings:
-                line_content += " (" + "; ".join(event_strings) + ")"
-            shootout_segments = format_shootout_segments(enriched, final=False)
-            if shootout_segments:
-                line_content += " | " + " | ".join(shootout_segments)
-            if completeness:
-                line_content += completeness
+            line_content = _render_live_line(enriched, home, away, score, events, status_short)
 
             last_sent = _last_sent_content.get(match_id)
             if last_sent:
                 last_content, sent_at = last_sent
-                if (
-                    last_content == line_content
-                    and (now - sent_at) <= timedelta(seconds=_TEXT_DEDUPE_WINDOW_SEC)
-                ):
+                if last_content == line_content:
                     live_state_keys[match_id] = state_key
                     _last_observed[match_id] = {
                         "home": int(score.get("home") or 0),
@@ -219,7 +227,8 @@ async def run_live_loop(bot):
                         "events_count": len(events),
                     }
                     logger.info(
-                        f"Text dedupe: suppressed repeated live content for match {match_id}."
+                        f"Text dedupe: suppressed repeated live content for match {match_id}; "
+                        f"last sent at {sent_at.strftime('%H:%M:%S')}."
                     )
                     continue
 
