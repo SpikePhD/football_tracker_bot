@@ -2,7 +2,7 @@
 import logging
 from datetime import timedelta
 
-from config import CHANNEL_ID
+from config import CHANNEL_ID, TENNIS_PRE_ANNOUNCE_HOURS
 from modules import api_provider
 from modules.bot_mode import is_silent
 from modules.discord_poster import post_new_general_message, upsert_live_message
@@ -11,6 +11,7 @@ from utils.time_utils import bot_now, to_bot_tz
 from utils.tennis_formatter import (
     format_tennis_final_message,
     format_tennis_live_message,
+    format_tennis_pre_message,
     tennis_live_state_key,
 )
 
@@ -59,6 +60,23 @@ def _is_within_window(start_time: str | None, hours: int = 48) -> bool:
         match_dt = to_bot_tz(start_time)
         now = bot_now()
         return now <= match_dt <= now + timedelta(hours=hours)
+    except Exception:
+        return False
+
+
+def should_pre_announce_tennis(match: dict, now=None) -> bool:
+    """Return true when an NS tennis match is inside the configured rolling window."""
+    if match.get("status", {}).get("short") != "NS":
+        return False
+
+    start_time = match.get("start_time")
+    if not start_time:
+        return False
+
+    try:
+        match_dt = to_bot_tz(start_time)
+        current = now or bot_now()
+        return current <= match_dt <= current + timedelta(hours=TENNIS_PRE_ANNOUNCE_HOURS)
     except Exception:
         return False
 
@@ -132,7 +150,8 @@ async def run_tennis_loop(bot) -> None:
             status_short in ("LIVE", "FT") or
             _is_tennis_local_today(start_time) or
             _is_tennis_local_tomorrow(start_time) or
-            _is_within_window(start_time, hours=48)
+            _is_within_window(start_time, hours=max(48, TENNIS_PRE_ANNOUNCE_HOURS)) or
+            should_pre_announce_tennis(match)
         )
         
         if not is_relevant:
@@ -140,8 +159,17 @@ async def run_tennis_loop(bot) -> None:
             continue
 
         if status_short == "NS":
-            # Pre-announcements intentionally disabled:
-            # tennis fixtures are still shown in daily snapshot/!matches.
+            if track_id in pre_announced_ids or not should_pre_announce_tennis(match):
+                continue
+            sent = await post_new_general_message(
+                bot,
+                CHANNEL_ID,
+                content=format_tennis_pre_message(match),
+            )
+            if sent is not None:
+                pre_announced_ids.add(track_id)
+                _persist_state()
+                logger.info(f"Tennis pre-announced for {track_id}.")
             continue
 
         if status_short == "LIVE":

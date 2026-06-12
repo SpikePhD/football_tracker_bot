@@ -5,6 +5,7 @@ from typing import Any
 from discord.ext import commands
 
 from config import (
+    FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS,
     FOOTBALL_EXPECTED_FT_MINUTES,
     FOOTBALL_FINISHED_RETENTION_HOURS,
     FOOTBALL_MAX_LIVE_DURATION_HOURS,
@@ -163,6 +164,7 @@ def build_lifecycle_summary(state: dict, now_utc: datetime) -> str:
         f"Provider: {provider}",
         f"Poll interval: {status.get('poll_interval')}s",
         f"Timezone: {OPERATIONS_TIMEZONE}",
+        f"Display lookup: +/-{FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS}h",
         (
             "Lifecycle windows: "
             f"prematch {FOOTBALL_PREMATCH_WINDOW_HOURS}h, "

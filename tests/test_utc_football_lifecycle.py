@@ -34,6 +34,34 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "operations.timezone"):
             config._validate_timezone_name("Not/A_Real_Zone")
 
+    def test_provider_team_aliases_normalize_and_validate(self):
+        import config
+
+        aliases = config._load_provider_team_aliases({
+            "U.S.A.": "United States",
+            "South Korea": "Korea Republic",
+        })
+
+        self.assertEqual(aliases["u s a"], "united states")
+        self.assertEqual(aliases["south korea"], "korea republic")
+        with self.assertRaisesRegex(RuntimeError, "provider_team_aliases"):
+            config._load_provider_team_aliases({"South Korea": 123})
+
+    def test_display_lookup_window_config_requires_new_key(self):
+        import config
+
+        self.assertEqual(
+            config._load_display_lookup_window_hours(
+                {"football_display_lookup_window_hours": 72}
+            ),
+            72,
+        )
+        with self.assertRaisesRegex(RuntimeError, "football_display_lookup_window_hours"):
+            config._load_display_lookup_window_hours(
+                {"football_match_lookup_window_hours": 48}
+            )
+        self.assertFalse(hasattr(config, "FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS"))
+
     def test_no_active_production_imports_use_italy_time_helpers(self):
         repo_root = Path(__file__).resolve().parents[1]
         offenders = []
@@ -290,6 +318,24 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         _, start_utc, end_utc = fetch_window.await_args.args
         self.assertEqual(start_utc, expected_start)
         self.assertEqual(end_utc, expected_end)
+
+    def test_fetch_display_football_uses_display_lookup_window(self):
+        from modules import api_provider
+
+        now_utc = datetime(2026, 6, 3, 22, 15, tzinfo=timezone.utc)
+
+        async def run():
+            with (
+                patch.object(api_provider, "FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS", 36),
+                patch.object(api_provider, "fetch_football_window", AsyncMock(return_value=[])) as fetch_window,
+            ):
+                await api_provider.fetch_display_football(None, now_utc)
+                return fetch_window
+
+        fetch_window = asyncio.run(run())
+        _, start_utc, end_utc = fetch_window.await_args.args
+        self.assertEqual(start_utc, now_utc - timedelta(hours=36))
+        self.assertEqual(end_utc, now_utc + timedelta(hours=36))
 
     def test_fetch_relevant_default_window_keeps_provider_dates_bounded(self):
         from modules import api_provider

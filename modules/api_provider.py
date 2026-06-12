@@ -24,8 +24,9 @@ from config import (
     API_FALLBACK_POLL_INTERVAL_SEC,
     API_RETRY_INTERVAL_SEC,
     API_SCOREBOARD_CACHE_TTL_SEC,
-    FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS,
+    FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS,
     LEAGUE_SLUG_MAP,
+    PROVIDER_TEAM_ALIASES,
     TENNIS_CACHE_TTL_SEC,
     TENNIS_UPCOMING_DAYS,
     build_league_slugs,
@@ -364,8 +365,8 @@ async def fetch_relevant_football(session: aiohttp.ClientSession, now_utc: datet
 
 async def fetch_display_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
     now_utc = now_utc or utc_now()
-    start_utc = now_utc - timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
-    end_utc = now_utc + timedelta(hours=FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS)
+    start_utc = now_utc - timedelta(hours=FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS)
+    end_utc = now_utc + timedelta(hours=FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS)
     return await fetch_football_window(session, start_utc, end_utc, now_utc=now_utc)
 
 
@@ -528,12 +529,17 @@ def _normalize_fixture_name(value: str | None) -> str:
     }
     tokens = [token for token in text.split() if token not in removable_tokens]
     text = " ".join(tokens) or text
+    text = PROVIDER_TEAM_ALIASES.get(text, text)
     return aliases.get(text, text)
 
 
 def _name_similarity(left: str | None, right: str | None) -> float:
     norm_left = _normalize_fixture_name(left)
     norm_right = _normalize_fixture_name(right)
+    return _normalized_name_similarity(norm_left, norm_right)
+
+
+def _normalized_name_similarity(norm_left: str, norm_right: str) -> float:
     if not norm_left or not norm_right:
         return 0.0
     if norm_left == norm_right:
@@ -840,35 +846,139 @@ def _match_api_fixture_candidate(
 ) -> tuple[int | None, float]:
     espn_home = espn_match.get("teams", {}).get("home", {}).get("name")
     espn_away = espn_match.get("teams", {}).get("away", {}).get("name")
+    espn_home_norm = _normalize_fixture_name(espn_home)
+    espn_away_norm = _normalize_fixture_name(espn_away)
     espn_dt = _espn_fixture_datetime(espn_match)
 
     best: tuple[float, dict] | None = None
     for candidate in candidates:
+        candidate_id = candidate.get("fixture", {}).get("id")
+        candidate_home = candidate.get("teams", {}).get("home", {}).get("name")
+        candidate_away = candidate.get("teams", {}).get("away", {}).get("name")
+        candidate_home_norm = _normalize_fixture_name(candidate_home)
+        candidate_away_norm = _normalize_fixture_name(candidate_away)
         try:
             candidate_league_id = int(candidate.get("league", {}).get("id"))
         except (TypeError, ValueError):
+            logger.debug(
+                "[Enrich] API-Football mapping candidate fixture_id=%s league=%r "
+                "espn='%s' vs '%s' candidate='%s' vs '%s' "
+                "espn_norm='%s' vs '%s' candidate_norm='%s' vs '%s' "
+                "home_score=0.00 away_score=0.00 confidence=0.00 reject_reason=invalid_league",
+                candidate_id,
+                candidate.get("league", {}).get("id"),
+                espn_home,
+                espn_away,
+                candidate_home,
+                candidate_away,
+                espn_home_norm,
+                espn_away_norm,
+                candidate_home_norm,
+                candidate_away_norm,
+            )
             continue
         if candidate_league_id != league_id:
+            logger.debug(
+                "[Enrich] API-Football mapping candidate fixture_id=%s league=%s "
+                "expected_league=%s espn='%s' vs '%s' candidate='%s' vs '%s' "
+                "espn_norm='%s' vs '%s' candidate_norm='%s' vs '%s' "
+                "home_score=0.00 away_score=0.00 confidence=0.00 reject_reason=league_mismatch",
+                candidate_id,
+                candidate_league_id,
+                league_id,
+                espn_home,
+                espn_away,
+                candidate_home,
+                candidate_away,
+                espn_home_norm,
+                espn_away_norm,
+                candidate_home_norm,
+                candidate_away_norm,
+            )
             continue
 
         delta_minutes = _candidate_time_delta_minutes(espn_dt, candidate)
         if delta_minutes > max_delta_minutes:
+            logger.debug(
+                "[Enrich] API-Football mapping candidate fixture_id=%s league=%s "
+                "kickoff_delta=%.1f max_delta=%s espn='%s' vs '%s' candidate='%s' vs '%s' "
+                "espn_norm='%s' vs '%s' candidate_norm='%s' vs '%s' "
+                "home_score=0.00 away_score=0.00 confidence=0.00 reject_reason=kickoff_delta",
+                candidate_id,
+                candidate_league_id,
+                delta_minutes,
+                max_delta_minutes,
+                espn_home,
+                espn_away,
+                candidate_home,
+                candidate_away,
+                espn_home_norm,
+                espn_away_norm,
+                candidate_home_norm,
+                candidate_away_norm,
+            )
             continue
 
-        candidate_home = candidate.get("teams", {}).get("home", {}).get("name")
-        candidate_away = candidate.get("teams", {}).get("away", {}).get("name")
-        home_score = _name_similarity(espn_home, candidate_home)
-        away_score = _name_similarity(espn_away, candidate_away)
-        if home_score < 0.70 or away_score < 0.70:
-            continue
-
+        home_score = _normalized_name_similarity(espn_home_norm, candidate_home_norm)
+        away_score = _normalized_name_similarity(espn_away_norm, candidate_away_norm)
         average_name_score = (home_score + away_score) / 2
         time_score = max(0.0, 1.0 - (delta_minutes / max_delta_minutes))
         confidence = (average_name_score * 0.8) + (time_score * 0.2)
+        if home_score < 0.70 or away_score < 0.70:
+            logger.debug(
+                "[Enrich] API-Football mapping candidate fixture_id=%s league=%s "
+                "kickoff_delta=%.1f espn='%s' vs '%s' candidate='%s' vs '%s' "
+                "espn_norm='%s' vs '%s' candidate_norm='%s' vs '%s' "
+                "home_score=%.2f away_score=%.2f confidence=%.2f reject_reason=name_similarity",
+                candidate_id,
+                candidate_league_id,
+                delta_minutes,
+                espn_home,
+                espn_away,
+                candidate_home,
+                candidate_away,
+                espn_home_norm,
+                espn_away_norm,
+                candidate_home_norm,
+                candidate_away_norm,
+                home_score,
+                away_score,
+                confidence,
+            )
+            continue
+
+        logger.debug(
+            "[Enrich] API-Football mapping candidate fixture_id=%s league=%s "
+            "kickoff_delta=%.1f espn='%s' vs '%s' candidate='%s' vs '%s' "
+            "espn_norm='%s' vs '%s' candidate_norm='%s' vs '%s' "
+            "home_score=%.2f away_score=%.2f confidence=%.2f reject_reason=none",
+            candidate_id,
+            candidate_league_id,
+            delta_minutes,
+            espn_home,
+            espn_away,
+            candidate_home,
+            candidate_away,
+            espn_home_norm,
+            espn_away_norm,
+            candidate_home_norm,
+            candidate_away_norm,
+            home_score,
+            away_score,
+            confidence,
+        )
         if best is None or confidence > best[0]:
             best = (confidence, candidate)
 
-    if best is None or best[0] < 0.78:
+    if best is None:
+        return None, 0.0
+    if best[0] < 0.78:
+        logger.debug(
+            "[Enrich] API-Football mapping best candidate fixture_id=%s confidence=%.2f "
+            "reject_reason=confidence_threshold",
+            best[1].get("fixture", {}).get("id"),
+            best[0],
+        )
         return None, 0.0
 
     api_fixture_id = best[1].get("fixture", {}).get("id")

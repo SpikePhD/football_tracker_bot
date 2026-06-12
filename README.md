@@ -78,7 +78,7 @@ Mode commands require Discord `manage_guild` permission. Memory commands require
 
 The repository uses a 3-file split:
 
-- `.env` - secrets only (`BOT_TOKEN`, `API_KEY`, `SECONDARY_API_KEY`, `CHANNEL_ID`, `LLM_API_KEY`)
+- `.env` - secrets only (`BOT_TOKEN`, `API_KEY`, `CHANNEL_ID`, `LLM_API_KEY`)
 - `config.json` - committed non-secret behavior knobs
 - `.env.deploy` - deployment script variables (`SERVICE_NAME`, `GIT_BRANCH`)
 
@@ -94,15 +94,17 @@ Important `config.json` sections:
 - `llm` - non-secret assistant endpoint, model, and persona prompt
 - `search` - trusted domains for football web search
 
-Key `operations` timezone/lifecycle settings:
+Key `operations` timezone/display/lifecycle settings:
 
 - `timezone` - display and scheduled-routine timezone, default `Europe/Rome`
 - `football_prematch_window_hours` - when near-kickoff fixtures become active
-- `football_match_lookup_window_hours` - rolling provider lookup horizon
+- `football_display_lookup_window_hours` - public startup, `!matches`, and `!upcoming` display lookup horizon; not used for lifecycle polling
 - `football_finished_retention_hours` - how long terminal fixtures remain relevant
 - `football_state_retention_hours` - stale state retention for non-terminal records
 - `football_expected_ft_minutes` - expected FT check offset from UTC kickoff
 - `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
+
+`football_match_lookup_window_hours` is no longer supported. Rename existing deployed configs to `football_display_lookup_window_hours` before restarting the bot.
 
 ## Local Setup
 

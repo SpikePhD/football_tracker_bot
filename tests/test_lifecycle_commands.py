@@ -82,6 +82,7 @@ class LifecycleCommandFormatterTests(unittest.TestCase):
         self.assertIn("Provider: API-Football fallback", content)
         self.assertIn("Poll interval: 45s", content)
         self.assertIn("Timezone: Europe/Rome", content)
+        self.assertIn("Display lookup: +/-", content)
         self.assertLessEqual(len(content), 1900)
 
     def test_match_state_list_is_concise_and_discord_safe(self):

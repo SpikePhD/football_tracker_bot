@@ -97,6 +97,215 @@ class ProviderEnrichmentTests(unittest.TestCase):
         self.assertEqual(second, 999998)
         self.assertEqual(live_fetch.await_count, 1)
 
+    def test_live_mapping_accepts_configured_national_team_aliases(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"]["name"] = "South Korea"
+        match["teams"]["away"]["name"] = "Czechia"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 1400414, "date": "2026-06-12T02:00:00+00:00"},
+                    "league": {"id": 1},
+                    "teams": {
+                        "home": {"name": "Korea Republic"},
+                        "away": {"name": "Czech Republic"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with patch.object(
+                api_provider.api_client,
+                "fetch_live_fixtures_payload",
+                AsyncMock(return_value=live_payload),
+            ):
+                return await api_provider.resolve_api_football_fixture_id(None, match)
+
+        self.assertEqual(asyncio.run(run()), 1400414)
+
+    def test_live_mapping_rejects_alias_match_in_wrong_league(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"]["name"] = "South Korea"
+        match["teams"]["away"]["name"] = "Czechia"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 1400414, "date": "2026-06-12T02:00:00+00:00"},
+                    "league": {"id": 999},
+                    "teams": {
+                        "home": {"name": "Korea Republic"},
+                        "away": {"name": "Czech Republic"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with patch.object(
+                api_provider.api_client,
+                "fetch_live_fixtures_payload",
+                AsyncMock(return_value=live_payload),
+            ):
+                return await api_provider.resolve_api_football_fixture_id(None, match)
+
+        self.assertIsNone(asyncio.run(run()))
+
+    def test_live_mapping_rejects_alias_match_with_large_kickoff_delta(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"]["name"] = "South Korea"
+        match["teams"]["away"]["name"] = "Czechia"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 1400414, "date": "2026-06-12T05:00:00+00:00"},
+                    "league": {"id": 1},
+                    "teams": {
+                        "home": {"name": "Korea Republic"},
+                        "away": {"name": "Czech Republic"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with patch.object(
+                api_provider.api_client,
+                "fetch_live_fixtures_payload",
+                AsyncMock(return_value=live_payload),
+            ):
+                return await api_provider.resolve_api_football_fixture_id(None, match)
+
+        self.assertIsNone(asyncio.run(run()))
+
+    def test_live_mapping_rejects_low_confidence_team_names(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"]["name"] = "South Korea"
+        match["teams"]["away"]["name"] = "Czechia"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 1400414, "date": "2026-06-12T02:00:00+00:00"},
+                    "league": {"id": 1},
+                    "teams": {
+                        "home": {"name": "Canada"},
+                        "away": {"name": "Bosnia-Herzegovina"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with patch.object(
+                api_provider.api_client,
+                "fetch_live_fixtures_payload",
+                AsyncMock(return_value=live_payload),
+            ):
+                return await api_provider.resolve_api_football_fixture_id(None, match)
+
+        self.assertIsNone(asyncio.run(run()))
+
+    def test_failed_live_mapping_logs_debug_candidate_diagnostics(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"]["name"] = "South Korea"
+        match["teams"]["away"]["name"] = "Czechia"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 1400414, "date": "2026-06-12T02:00:00+00:00"},
+                    "league": {"id": 1},
+                    "teams": {
+                        "home": {"name": "Canada"},
+                        "away": {"name": "Bosnia-Herzegovina"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with (
+                patch.object(
+                    api_provider.api_client,
+                    "fetch_live_fixtures_payload",
+                    AsyncMock(return_value=live_payload),
+                ),
+                self.assertLogs("modules.api_provider", level="DEBUG") as logs,
+            ):
+                resolved = await api_provider.resolve_api_football_fixture_id(None, match)
+                return resolved, logs.output
+
+        resolved, logs = asyncio.run(run())
+        self.assertIsNone(resolved)
+        diagnostic_lines = [line for line in logs if "API-Football mapping candidate" in line]
+        self.assertTrue(diagnostic_lines)
+        self.assertIn("home_score=", diagnostic_lines[0])
+        self.assertIn("reject_reason=", diagnostic_lines[0])
+
+    def test_enrichment_uses_alias_mapping_to_fill_missing_goal_event(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"]["name"] = "South Korea"
+        match["teams"]["away"]["name"] = "Czechia"
+        match["goals"] = {"home": 0, "away": 1}
+        match["events"] = []
+        state = "760414:0:1:0"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 1400414, "date": "2026-06-12T02:00:00+00:00"},
+                    "league": {"id": 1},
+                    "teams": {
+                        "home": {"name": "Korea Republic"},
+                        "away": {"name": "Czech Republic"},
+                    },
+                },
+            ]
+        }
+        api_goal = {
+            "time": {"elapsed": 22},
+            "player": {"name": "Czech Scorer"},
+            "team": {"id": 200, "name": "Czech Republic"},
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }
+
+        async def run():
+            api_provider._enrich_retry_states[state] = {
+                "first_seen": datetime(2026, 6, 12, 4, 0, 0),
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "exhausted": False,
+            }
+            with (
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 6, 12, 4, 1, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value=live_payload)),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": [api_goal]})),
+            ):
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+        self.assertEqual(enriched["events"][0]["player"]["name"], "Czech Scorer")
+
     def test_enrichment_reuses_complete_event_cache_without_refetching(self):
         from modules import api_provider
 

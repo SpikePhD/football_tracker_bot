@@ -81,12 +81,26 @@
       "ita.1": ["ita.1", "ita.coppa_italia", "ita.super_cup"],
       "eng.1": ["eng.1", "eng.fa", "eng.league_cup", "eng.charity"],
       "esp.1": ["esp.1", "esp.copa_del_rey", "esp.super_cup"]
+    },
+    "provider_team_aliases": {
+      "South Korea": "Korea Republic",
+      "Korea Republic": "Korea Republic",
+      "Republic of Korea": "Korea Republic",
+      "Korea Rep": "Korea Republic",
+      "Czechia": "Czech Republic",
+      "Czech Republic": "Czech Republic",
+      "Czech Rep": "Czech Republic",
+      "USA": "United States",
+      "U.S.A.": "United States",
+      "USMNT": "United States",
+      "United States": "United States",
+      "United States of America": "United States"
     }
   },
   "operations": {
     "timezone": "Europe/Rome",
     "football_prematch_window_hours": 2,
-    "football_match_lookup_window_hours": 72,
+    "football_display_lookup_window_hours": 72,
     "football_finished_retention_hours": 12,
     "football_state_retention_hours": 24,
     "football_expected_ft_minutes": 112,

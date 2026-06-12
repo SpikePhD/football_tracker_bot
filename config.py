@@ -1,5 +1,7 @@
 ﻿import json
 import os
+import re
+import unicodedata
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -22,8 +24,6 @@ try:
 except ValueError as e:
     raise RuntimeError("CHANNEL_ID must be a numeric Discord channel ID.") from e
 
-# Optional additional secret for secondary football provider usage.
-SECONDARY_API_KEY = os.getenv("SECONDARY_API_KEY", "").strip()
 LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
 
 
@@ -72,6 +72,15 @@ def _expect_int_range(cfg: dict, key: str, minimum: int, parent: str = "") -> in
     return value
 
 
+def _load_display_lookup_window_hours(ops_cfg: dict) -> int:
+    return _expect_int_range(
+        ops_cfg,
+        "football_display_lookup_window_hours",
+        1,
+        "operations",
+    )
+
+
 def _validate_timezone_name(value: str) -> str:
     try:
         ZoneInfo(value)
@@ -81,6 +90,30 @@ def _validate_timezone_name(value: str) -> str:
             "Use an IANA timezone name such as 'Europe/Rome'."
         ) from e
     return value
+
+
+def _normalize_provider_alias_text(value: str) -> str:
+    text = unicodedata.normalize("NFKD", value)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-zA-Z0-9\s]", " ", text).lower()
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _load_provider_team_aliases(raw: dict) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise RuntimeError(
+                "config.json key 'tracking.provider_team_aliases' must be a string-to-string object."
+            )
+        normalized_key = _normalize_provider_alias_text(key)
+        normalized_value = _normalize_provider_alias_text(value)
+        if not normalized_key or not normalized_value:
+            raise RuntimeError(
+                "config.json key 'tracking.provider_team_aliases' cannot contain empty aliases."
+            )
+        aliases[normalized_key] = normalized_value
+    return aliases
 
 
 _PUBLIC = _load_public_config()
@@ -104,6 +137,10 @@ LEAGUE_NAME_MAP = {int(k): str(v) for k, v in league_name_map_raw.items()}
 league_slug_map_raw = _expect(tracking_cfg, "league_slug_map", dict, "tracking")
 LEAGUE_SLUG_MAP = {int(k): str(v) for k, v in league_slug_map_raw.items()}
 
+PROVIDER_TEAM_ALIASES = _load_provider_team_aliases(
+    _expect(tracking_cfg, "provider_team_aliases", dict, "tracking")
+)
+
 INTERNATIONAL_SLUGS = _expect(tracking_cfg, "international_slugs", list, "tracking")
 DOMESTIC_SLUG_GROUPS = _expect(tracking_cfg, "domestic_slug_groups", dict, "tracking")
 
@@ -115,7 +152,7 @@ LIVE_UPDATE_EDIT_WINDOW_MESSAGES = int(
 )
 OPERATIONS_TIMEZONE = _validate_timezone_name(_expect(ops_cfg, "timezone", str, "operations"))
 FOOTBALL_PREMATCH_WINDOW_HOURS = _expect_int_range(ops_cfg, "football_prematch_window_hours", 0, "operations")
-FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS = _expect_int_range(ops_cfg, "football_match_lookup_window_hours", 1, "operations")
+FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS = _load_display_lookup_window_hours(ops_cfg)
 FOOTBALL_FINISHED_RETENTION_HOURS = _expect_int_range(ops_cfg, "football_finished_retention_hours", 1, "operations")
 FOOTBALL_STATE_RETENTION_HOURS = _expect_int_range(ops_cfg, "football_state_retention_hours", 1, "operations")
 FOOTBALL_EXPECTED_FT_MINUTES = _expect_int_range(ops_cfg, "football_expected_ft_minutes", 1, "operations")

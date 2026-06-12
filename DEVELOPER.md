@@ -58,6 +58,7 @@ cogs/
 - Do not bypass `modules/api_provider.py` for fixture data access paths.
 - Keep football lifecycle decisions UTC-first and fixture-ID-first.
 - Use the configured timezone only for display, logs, grouping, and scheduled human-facing routines.
+- Keep football lifecycle polling on `match_lifecycle.provider_window(...)`; `football_display_lookup_window_hours` is for public snapshots and upcoming displays only.
 - Keep runtime state in `bot_memory/` via `modules/storage.py`.
 - Keep `inject_memory/` read-only from runtime code.
 - Keep secrets out of `config.json`.

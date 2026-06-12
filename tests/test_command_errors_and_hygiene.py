@@ -29,6 +29,58 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
 
         self.assertEqual(offenders, [])
 
+    def test_tennis_pre_announce_config_has_production_callsite(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        tennis_loop = repo_root / "modules" / "tennis_loop.py"
+        text = tennis_loop.read_text(encoding="utf-8")
+
+        self.assertIn("TENNIS_PRE_ANNOUNCE_HOURS", text)
+        self.assertIn("timedelta(hours=TENNIS_PRE_ANNOUNCE_HOURS)", text)
+
+    def test_old_football_lookup_config_constant_is_not_imported_by_production_modules(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        production_paths = [
+            *(repo_root / "modules").glob("*.py"),
+            *(repo_root / "cogs").glob("*.py"),
+            *(repo_root / "utils").glob("*.py"),
+            repo_root / "football_tracker_bot.py",
+        ]
+        offenders = []
+        for path in production_paths:
+            text = path.read_text(encoding="utf-8")
+            if "FOOTBALL_MATCH_LOOKUP_WINDOW_HOURS" in text:
+                offenders.append(str(path.relative_to(repo_root)))
+
+        self.assertEqual(offenders, [])
+
+    def test_committed_configs_do_not_use_old_football_lookup_key(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        offenders = []
+        for filename in ("config.json", "config.example.json"):
+            text = (repo_root / filename).read_text(encoding="utf-8-sig")
+            if "football_match_lookup_window_hours" in text:
+                offenders.append(filename)
+
+        self.assertEqual(offenders, [])
+
+    def test_secondary_api_key_is_not_in_active_config_contract(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        checked_paths = [
+            repo_root / "config.py",
+            repo_root / ".env.example",
+            repo_root / "README.md",
+            *(repo_root / "modules").glob("*.py"),
+            *(repo_root / "cogs").glob("*.py"),
+            *(repo_root / "utils").glob("*.py"),
+        ]
+        offenders = []
+        for path in checked_paths:
+            text = path.read_text(encoding="utf-8")
+            if "SECONDARY_API_KEY" in text:
+                offenders.append(str(path.relative_to(repo_root)))
+
+        self.assertEqual(offenders, [])
+
     def test_command_error_context_includes_full_content_and_discord_ids(self):
         import football_tracker_bot
 
