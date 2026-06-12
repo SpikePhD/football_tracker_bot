@@ -83,6 +83,24 @@ def prune_live_state(now_utc=None):
     return removed
 
 
+def _cleanup_missing_live_state(seen_live_ids: set[str], now) -> None:
+    for mid in list(live_state_keys.keys()):
+        if mid in seen_live_ids:
+            continue
+        first_missing = _missing_since.get(mid)
+        if first_missing is None:
+            _missing_since[mid] = now
+            continue
+        if (now - first_missing) < timedelta(seconds=_MISSING_GRACE_SEC):
+            continue
+        live_state_keys.pop(mid, None)
+        live_message_ids.pop(mid, None)
+        _missing_since.pop(mid, None)
+        _last_observed.pop(mid, None)
+        _regression_hold.pop(mid, None)
+        _last_sent_content.pop(mid, None)
+
+
 def seed_already_posted(fixtures: list) -> None:
     """
     Pre-populate live dedupe state with the current snapshot of any in-progress
@@ -127,6 +145,8 @@ async def run_live_loop(bot):
         matches = await api_provider.fetch_live(bot.http_session)
         if not matches:
             logger.info(f"[{now.strftime('%H:%M')}] No live fixtures returned or fetch error.")
+            _cleanup_missing_live_state(set(), now)
+            prune_live_state(now_utc)
             return
 
         seen_live_ids: set[str] = set()
@@ -259,19 +279,5 @@ async def run_live_loop(bot):
                 logger.info(f"Live update upserted for match {match_id}: {safe_line_content}")
 
         # Clean volatile live maps when a match is no longer live, after grace window.
-        for mid in list(live_state_keys.keys()):
-            if mid in seen_live_ids:
-                continue
-            first_missing = _missing_since.get(mid)
-            if first_missing is None:
-                _missing_since[mid] = now
-                continue
-            if (now - first_missing) < timedelta(seconds=_MISSING_GRACE_SEC):
-                continue
-            live_state_keys.pop(mid, None)
-            live_message_ids.pop(mid, None)
-            _missing_since.pop(mid, None)
-            _last_observed.pop(mid, None)
-            _regression_hold.pop(mid, None)
-            _last_sent_content.pop(mid, None)
+        _cleanup_missing_live_state(seen_live_ids, now)
         prune_live_state(now_utc)

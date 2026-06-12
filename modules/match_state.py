@@ -235,6 +235,8 @@ def expected_ft_due_fixture_ids(now_utc: datetime, memory_dir: Path | None = Non
     state = load_match_state(memory_dir=memory_dir)
     due = []
     for fixture_id, fixture in state.get("fixtures", {}).items():
+        if fixture.get("last_status") in match_lifecycle.TERMINAL_NON_FT_STATUSES:
+            continue
         if fixture.get("ft_announced") and fixture.get("memory_updated"):
             continue
         expected = fixture.get("expected_ft_utc")

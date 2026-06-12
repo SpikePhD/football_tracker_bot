@@ -3,6 +3,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -366,6 +367,46 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertEqual(upsert_live.await_args.kwargs["message_id"], 777)
         update_live_id.assert_called_once_with("stale-live-id", 888)
         self.assertEqual(live_ids["stale-live-id"], 888)
+
+    def test_live_loop_cleans_missing_volatile_state_when_no_live_matches_returned(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        now = datetime(2026, 6, 12, 16, 0, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            live_loop.live_state_keys["gone-live"] = "gone-live_2H_1-0_1"
+            live_loop.live_message_ids["gone-live"] = 123
+            live_loop._missing_since["gone-live"] = now - timedelta(seconds=live_loop._MISSING_GRACE_SEC + 1)
+            live_loop._last_observed["gone-live"] = {"home": 1, "away": 0, "elapsed": 80}
+            live_loop._regression_hold["gone-live"] = {"state_key": "gone-live_2H_0-0_0", "ticks": 1}
+            live_loop._last_sent_content["gone-live"] = ("content", now)
+
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(return_value=[])),
+                patch.object(live_loop, "bot_now", return_value=now),
+                patch.object(live_loop, "utc_now", return_value=now),
+                patch.object(live_loop, "prune_live_state", return_value=[]) as prune,
+            ):
+                await live_loop.run_live_loop(fake_bot)
+                return prune
+
+        prune = asyncio.run(run())
+
+        self.assertNotIn("gone-live", live_loop.live_state_keys)
+        self.assertNotIn("gone-live", live_loop.live_message_ids)
+        self.assertNotIn("gone-live", live_loop._missing_since)
+        self.assertNotIn("gone-live", live_loop._last_observed)
+        self.assertNotIn("gone-live", live_loop._regression_hold)
+        self.assertNotIn("gone-live", live_loop._last_sent_content)
+        prune.assert_called_once_with(now)
 
     def test_startup_seed_suppresses_duplicate_live_snapshot_post(self):
         from modules import live_loop

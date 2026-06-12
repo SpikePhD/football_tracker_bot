@@ -139,6 +139,46 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual(pruned, ["old-ft"])
         self.assertEqual(set(state["fixtures"]), {"live", "recent-ft"})
 
+    def test_terminal_non_ft_fixtures_are_not_expected_ft_due(self):
+        from modules import match_state
+
+        now_utc = datetime(2026, 6, 4, 1, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_dir = Path(tmp)
+            match_state.save_match_state(
+                {
+                    "version": 1,
+                    "fixtures": {
+                        "abandoned": {
+                            "fixture_id": "abandoned",
+                            "kickoff_utc": "2026-06-03T20:00:00+00:00",
+                            "expected_ft_utc": "2026-06-03T21:52:00+00:00",
+                            "last_status": "ABD",
+                            "terminal_utc": "2026-06-03T20:30:00+00:00",
+                            "ft_announced": False,
+                            "memory_updated": False,
+                        },
+                        "finished": {
+                            "fixture_id": "finished",
+                            "kickoff_utc": "2026-06-03T20:00:00+00:00",
+                            "expected_ft_utc": "2026-06-03T21:52:00+00:00",
+                            "last_status": "FT",
+                            "terminal_utc": "2026-06-03T22:00:00+00:00",
+                            "ft_announced": False,
+                            "memory_updated": True,
+                        },
+                    },
+                },
+                memory_dir=memory_dir,
+            )
+
+            due = match_state.expected_ft_due_fixture_ids(now_utc, memory_dir=memory_dir)
+            state = match_state.load_match_state(memory_dir=memory_dir)
+
+        self.assertEqual(due, ["finished"])
+        self.assertFalse(state["fixtures"]["abandoned"]["ft_announced"])
+        self.assertFalse(state["fixtures"]["abandoned"]["memory_updated"])
+
     def test_match_state_save_is_atomic_and_preserves_existing_file_on_replace_failure(self):
         from modules import match_state
 
@@ -378,10 +418,13 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         from modules import api_provider
 
         date_live = espn_match(fixture_id="date-live")
+        date_live["fixture"]["date"] = "2026-06-03T21:30:00Z"
         date_live["fixture"]["status"] = {"short": "2H", "elapsed": 74}
         direct_live = espn_match(fixture_id="direct-live")
+        direct_live["fixture"]["date"] = "2026-06-03T22:00:00Z"
         direct_live["fixture"]["status"] = {"short": "1H", "elapsed": 23}
         duplicate_direct = espn_match(fixture_id="date-live")
+        duplicate_direct["fixture"]["date"] = "2026-06-03T21:30:00Z"
         duplicate_direct["fixture"]["status"] = {"short": "2H", "elapsed": 75}
 
         async def run():
@@ -421,6 +464,83 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual([m["fixture"]["id"] for m in live], ["late-live"])
         relevant.assert_awaited_once()
 
+    def test_fetch_live_excludes_stale_provider_live_without_persisted_unresolved_state(self):
+        from modules import api_provider
+
+        stale_live = espn_match(fixture_id="stale-provider-live")
+        stale_live["fixture"]["date"] = "2026-06-03T12:00:00Z"
+        stale_live["fixture"]["status"] = {"short": "2H", "elapsed": 73}
+        now_utc = datetime(2026, 6, 4, 0, 0, tzinfo=timezone.utc)
+
+        async def run():
+            with patch.object(api_provider, "fetch_relevant_football", AsyncMock(return_value=[stale_live])):
+                return await api_provider.fetch_live(None, now_utc=now_utc)
+
+        self.assertEqual(asyncio.run(run()), [])
+
+    def test_fetch_live_keeps_stale_provider_live_when_persisted_unresolved_within_retention(self):
+        from modules import api_provider, match_state
+
+        stale_live = espn_match(fixture_id="persisted-unresolved-live")
+        stale_live["fixture"]["date"] = "2026-06-03T12:00:00Z"
+        stale_live["fixture"]["status"] = {"short": "2H", "elapsed": 73}
+        now_utc = datetime(2026, 6, 4, 0, 0, tzinfo=timezone.utc)
+
+        async def run():
+            with (
+                tempfile.TemporaryDirectory() as tmp,
+                patch.object(api_provider, "fetch_relevant_football", AsyncMock(return_value=[stale_live])),
+                patch.object(match_state, "BOT_MEMORY_DIR", Path(tmp)),
+            ):
+                match_state.save_match_state(
+                    {
+                        "version": 1,
+                        "fixtures": {
+                            "persisted-unresolved-live": {
+                                "fixture_id": "persisted-unresolved-live",
+                                "kickoff_utc": "2026-06-03T12:00:00+00:00",
+                                "last_status": "2H",
+                                "last_seen_utc": "2026-06-03T20:00:00+00:00",
+                            }
+                        },
+                    }
+                )
+                return await api_provider.fetch_live(None, now_utc=now_utc)
+
+        live = asyncio.run(run())
+        self.assertEqual([m["fixture"]["id"] for m in live], ["persisted-unresolved-live"])
+
+    def test_fetch_live_excludes_persisted_unresolved_live_after_retention_horizon(self):
+        from modules import api_provider, match_state
+
+        stale_live = espn_match(fixture_id="old-persisted-live")
+        stale_live["fixture"]["date"] = "2026-06-02T12:00:00Z"
+        stale_live["fixture"]["status"] = {"short": "2H", "elapsed": 73}
+        now_utc = datetime(2026, 6, 4, 13, 0, tzinfo=timezone.utc)
+
+        async def run():
+            with (
+                tempfile.TemporaryDirectory() as tmp,
+                patch.object(api_provider, "fetch_relevant_football", AsyncMock(return_value=[stale_live])),
+                patch.object(match_state, "BOT_MEMORY_DIR", Path(tmp)),
+            ):
+                match_state.save_match_state(
+                    {
+                        "version": 1,
+                        "fixtures": {
+                            "old-persisted-live": {
+                                "fixture_id": "old-persisted-live",
+                                "kickoff_utc": "2026-06-02T12:00:00+00:00",
+                                "last_status": "2H",
+                                "last_seen_utc": "2026-06-04T12:59:00+00:00",
+                            }
+                        },
+                    }
+                )
+                return await api_provider.fetch_live(None, now_utc=now_utc)
+
+        self.assertEqual(asyncio.run(run()), [])
+
     def test_scheduler_midnight_routine_does_not_clear_football_state(self):
         from modules import scheduler
 
@@ -442,6 +562,7 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         from modules import api_provider, scheduler
 
         live_match = espn_match(fixture_id="fallback-live")
+        live_match["fixture"]["date"] = "2026-06-03T22:00:00Z"
         live_match["fixture"]["status"] = {"short": "1H", "elapsed": 12}
         fake_bot = type("FakeBot", (), {"http_session": None})()
 

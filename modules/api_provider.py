@@ -31,7 +31,7 @@ from config import (
     TENNIS_UPCOMING_DAYS,
     build_league_slugs,
 )
-from modules import match_lifecycle
+from modules import match_lifecycle, match_state
 from utils import espn_client
 from utils import espn_tennis_client
 from utils import api_client
@@ -381,13 +381,45 @@ async def fetch_live(
     relevant_matches: list[dict] | None = None,
 ) -> list[dict]:
     """Currently in-progress matches from the rolling football lookup."""
-    matches = list(relevant_matches) if relevant_matches is not None else await fetch_relevant_football(session, now_utc or utc_now())
+    now_utc = now_utc or utc_now()
+    matches = list(relevant_matches) if relevant_matches is not None else await fetch_relevant_football(session, now_utc)
     if not _espn_healthy:
         if api_client.is_quota_exceeded_today():
             logger.warning("[APIProvider] API-Football quota exhausted. Skipping fallback live endpoint fetch.")
         else:
             matches = _dedupe_by_fixture_id([*matches, *await _fetch_api_football_live_matches(session)])
-    return [m for m in matches if match_lifecycle.is_live(m)]
+    return [
+        m for m in matches
+        if match_lifecycle.is_live(m) and _live_fixture_is_trackable(m, now_utc)
+    ]
+
+
+def _live_fixture_is_trackable(match: dict, now_utc: datetime) -> bool:
+    if match_lifecycle.should_track_fixture(match, now_utc):
+        return True
+
+    fixture_id = match_lifecycle.fixture_identity(match)
+    if fixture_id is None:
+        return False
+
+    persisted = match_state.get_fixture_state(fixture_id)
+    if not persisted:
+        return False
+    if persisted.get("last_status") in match_lifecycle.TERMINAL_STATUSES:
+        return False
+    if persisted.get("ft_announced") and persisted.get("memory_updated"):
+        return False
+
+    kickoff_raw = persisted.get("kickoff_utc")
+    if not kickoff_raw:
+        return False
+    try:
+        kickoff = parse_provider_utc(kickoff_raw)
+    except (TypeError, ValueError):
+        return False
+
+    retention_hours = match_lifecycle.FOOTBALL_MATCH_LOOKBACK_HOURS()
+    return now_utc.astimezone(timezone.utc) - kickoff <= timedelta(hours=retention_hours)
 
 
 async def has_live_football(
