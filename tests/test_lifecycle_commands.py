@@ -69,6 +69,26 @@ class LifecycleCommandFormatterTests(unittest.TestCase):
             football_lifecycle.api_provider,
             "get_status",
             return_value={"espn_healthy": False, "poll_interval": 45},
+        ), patch.object(
+            football_lifecycle.scheduler,
+            "get_football_scheduler_status",
+            return_value={
+                "mode": "sleeping",
+                "next_football_check_utc": datetime(2026, 6, 4, 3, 0, tzinfo=timezone.utc),
+                "next_schedule_refresh_utc": datetime(2026, 6, 4, 3, 0, tzinfo=timezone.utc),
+                "next_planned_kickoff_utc": datetime(2026, 6, 4, 8, 0, tzinfo=timezone.utc),
+                "next_planned_wake_utc": datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc),
+            },
+        ), patch.object(
+            football_lifecycle.scheduler,
+            "get_tennis_scheduler_status",
+            return_value={
+                "mode": "awake",
+                "next_tennis_check_utc": datetime(2026, 6, 4, 0, 1, tzinfo=timezone.utc),
+                "next_schedule_refresh_utc": None,
+                "next_planned_start_utc": None,
+                "next_planned_wake_utc": None,
+            },
         ):
             content = football_lifecycle.build_lifecycle_summary(
                 state,
@@ -81,6 +101,13 @@ class LifecycleCommandFormatterTests(unittest.TestCase):
         self.assertIn("Awaiting memory: 2", content)
         self.assertIn("Provider: API-Football fallback", content)
         self.assertIn("Poll interval: 45s", content)
+        self.assertIn("Scheduler: sleeping", content)
+        self.assertIn("Next football check: 2026-06-04T03:00:00+00:00", content)
+        self.assertIn("Next schedule refresh: 2026-06-04T03:00:00+00:00", content)
+        self.assertIn("Next planned kickoff: 2026-06-04T08:00:00+00:00", content)
+        self.assertIn("Next planned wake: 2026-06-04T06:00:00+00:00", content)
+        self.assertIn("Tennis scheduler: awake", content)
+        self.assertIn("Next tennis check: 2026-06-04T00:01:00+00:00", content)
         self.assertIn("Timezone: Europe/Rome", content)
         self.assertIn("Display lookup: +/-", content)
         self.assertLessEqual(len(content), 1900)

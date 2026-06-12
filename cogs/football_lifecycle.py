@@ -13,7 +13,7 @@ from config import (
     FOOTBALL_STATE_RETENTION_HOURS,
     OPERATIONS_TIMEZONE,
 )
-from modules import api_provider, match_lifecycle, match_state
+from modules import api_provider, match_lifecycle, match_state, scheduler
 from modules.discord_poster import post_new_message_to_context
 from utils.time_utils import parse_provider_utc, to_bot_tz, utc_now
 
@@ -51,6 +51,14 @@ def _fmt_local(value: str | None) -> str:
     except Exception:
         return "invalid"
     return f"{local.strftime('%Y-%m-%d %H:%M')} {OPERATIONS_TIMEZONE}"
+
+
+def _fmt_utc_value(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    return str(value)
 
 
 def _expected_ft_due(fixture: dict, now_utc: datetime) -> bool:
@@ -153,6 +161,8 @@ def build_lifecycle_summary(state: dict, now_utc: datetime) -> str:
     awaiting_memory = sum(1 for fixture in fixtures if _is_awaiting_memory(fixture, now_utc))
     prunable = sum(1 for fixture in fixtures if match_lifecycle.state_is_prunable(fixture, now_utc))
     lookback = match_lifecycle.FOOTBALL_MATCH_LOOKBACK_HOURS()
+    scheduler_status = scheduler.get_football_scheduler_status()
+    tennis_scheduler_status = scheduler.get_tennis_scheduler_status()
 
     lines = [
         "**Football Lifecycle Health**",
@@ -163,6 +173,16 @@ def build_lifecycle_summary(state: dict, now_utc: datetime) -> str:
         f"Prunable/stale: {prunable}",
         f"Provider: {provider}",
         f"Poll interval: {status.get('poll_interval')}s",
+        f"Scheduler: {scheduler_status.get('mode', 'unknown')}",
+        f"Next football check: {_fmt_utc_value(scheduler_status.get('next_football_check_utc'))}",
+        f"Next schedule refresh: {_fmt_utc_value(scheduler_status.get('next_schedule_refresh_utc'))}",
+        f"Next planned kickoff: {_fmt_utc_value(scheduler_status.get('next_planned_kickoff_utc'))}",
+        f"Next planned wake: {_fmt_utc_value(scheduler_status.get('next_planned_wake_utc'))}",
+        f"Tennis scheduler: {tennis_scheduler_status.get('mode', 'unknown')}",
+        f"Next tennis check: {_fmt_utc_value(tennis_scheduler_status.get('next_tennis_check_utc'))}",
+        f"Next tennis schedule refresh: {_fmt_utc_value(tennis_scheduler_status.get('next_schedule_refresh_utc'))}",
+        f"Next tennis planned start: {_fmt_utc_value(tennis_scheduler_status.get('next_planned_start_utc'))}",
+        f"Next tennis planned wake: {_fmt_utc_value(tennis_scheduler_status.get('next_planned_wake_utc'))}",
         f"Timezone: {OPERATIONS_TIMEZONE}",
         f"Display lookup: +/-{FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS}h",
         (

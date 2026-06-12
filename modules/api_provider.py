@@ -370,6 +370,28 @@ async def fetch_display_football(session: aiohttp.ClientSession, now_utc: dateti
     return await fetch_football_window(session, start_utc, end_utc, now_utc=now_utc)
 
 
+async def fetch_upcoming_football_schedule(
+    session: aiohttp.ClientSession,
+    now_utc: datetime,
+    horizon_hours: int | None = None,
+) -> list[dict]:
+    """Future football fixtures used to plan scheduler wake-up times."""
+    horizon = FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS if horizon_hours is None else horizon_hours
+    now_utc = now_utc.astimezone(timezone.utc)
+    matches = await fetch_football_window(
+        session,
+        now_utc,
+        now_utc + timedelta(hours=horizon),
+        now_utc=now_utc,
+    )
+    upcoming = []
+    for match in matches:
+        kickoff = match_lifecycle.fixture_kickoff_utc(match)
+        if kickoff and kickoff.astimezone(timezone.utc) >= now_utc:
+            upcoming.append(match)
+    return _dedupe_by_fixture_id(upcoming)
+
+
 async def fetch_day(session: aiohttp.ClientSession) -> list[dict]:
     """Display snapshot wrapper over the wider configured football lookup."""
     return await fetch_display_football(session, utc_now())
@@ -1371,6 +1393,18 @@ async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[
 async def fetch_tennis_day(session: aiohttp.ClientSession) -> list[dict]:
     """Tracked tennis matches from the rolling ESPN ATP/WTA scoreboard window."""
     return await _get_cached_tennis_scoreboard(session)
+
+
+async def fetch_upcoming_tennis_schedule(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
+    """Future tracked tennis matches used to plan scheduler wake-up times."""
+    now = (now_utc or utc_now()).astimezone(timezone.utc)
+    matches = await fetch_tennis_day(session)
+    upcoming = []
+    for match in matches:
+        start = _match_dt_bot_tz(match.get("start_time"))
+        if start and start.astimezone(timezone.utc) >= now:
+            upcoming.append(match)
+    return upcoming
 
 
 async def fetch_tennis_live(session: aiohttp.ClientSession) -> list[dict]:

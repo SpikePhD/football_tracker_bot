@@ -144,7 +144,10 @@ def state_is_prunable(fixture_state: dict, now_utc: datetime) -> bool:
         terminal_ref = terminal or last_seen or kickoff
         if terminal_ref is None:
             return False
-        return now_utc - terminal_ref > timedelta(hours=FOOTBALL_FINISHED_RETENTION_HOURS)
+        retention_hours = FOOTBALL_FINISHED_RETENTION_HOURS
+        if status in FT_STATUSES:
+            retention_hours = max(retention_hours, FOOTBALL_MATCH_LOOKBACK_HOURS())
+        return now_utc - terminal_ref > timedelta(hours=retention_hours)
 
     ref = last_seen or kickoff
     if ref is None:

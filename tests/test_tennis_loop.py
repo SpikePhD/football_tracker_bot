@@ -1,7 +1,7 @@
 import asyncio
 import os
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -206,6 +206,127 @@ class TennisLoopTests(unittest.TestCase):
 
         with patch.object(tennis_loop, "TENNIS_PRE_ANNOUNCE_HOURS", 4):
             self.assertTrue(tennis_loop.should_pre_announce_tennis(match, now=now))
+
+    def test_fetch_upcoming_tennis_schedule_returns_future_matches_only(self):
+        from modules import api_provider
+
+        future = tennis_match(match_id="future", start_time="2026-06-12T13:00:00+00:00")
+        past = tennis_match(match_id="past", start_time="2026-06-12T09:00:00+00:00")
+
+        async def run():
+            with patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[past, future])):
+                return await api_provider.fetch_upcoming_tennis_schedule(
+                    None,
+                    datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc),
+                )
+
+        matches = asyncio.run(run())
+        self.assertEqual([m["match_id"] for m in matches], ["future"])
+
+    def test_scheduler_tennis_sleep_plan_refreshes_before_distant_start(self):
+        from modules import scheduler
+
+        future = tennis_match(match_id="future-11h", start_time="2026-06-12T21:00:00+00:00")
+        now_utc = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                patch.object(scheduler.api_provider, "fetch_upcoming_tennis_schedule", AsyncMock(return_value=[future])),
+            ):
+                return await scheduler._plan_tennis_sleep_until_next_match(fake_bot, now_utc)
+
+        next_check = asyncio.run(run())
+
+        self.assertEqual(next_check, now_utc + timedelta(hours=6))
+        status = scheduler.get_tennis_scheduler_status()
+        self.assertEqual(status["mode"], "sleeping")
+        self.assertEqual(status["next_planned_start_utc"], datetime(2026, 6, 12, 21, 0, tzinfo=timezone.utc))
+        self.assertEqual(status["next_planned_wake_utc"], datetime(2026, 6, 12, 17, 0, tzinfo=timezone.utc))
+
+    def test_scheduler_tennis_sleep_plan_wakes_at_preannounce_window(self):
+        from modules import scheduler
+
+        future = tennis_match(match_id="future-5h", start_time="2026-06-12T15:00:00+00:00")
+        now_utc = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                patch.object(scheduler.api_provider, "fetch_upcoming_tennis_schedule", AsyncMock(return_value=[future])),
+            ):
+                return await scheduler._plan_tennis_sleep_until_next_match(fake_bot, now_utc)
+
+        next_check = asyncio.run(run())
+
+        self.assertEqual(next_check, datetime(2026, 6, 12, 11, 0, tzinfo=timezone.utc))
+
+    def test_scheduler_tennis_poll_needed_for_live_match(self):
+        from modules import scheduler
+
+        live = tennis_match(match_id="live-1", status="LIVE")
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[live])):
+                return await scheduler._tennis_poll_needed(fake_bot, datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc))
+
+        self.assertTrue(asyncio.run(run()))
+
+    def test_scheduler_tennis_poll_needed_for_preannounce_due_match(self):
+        from modules import scheduler
+        from utils.time_utils import to_bot_tz
+
+        match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
+        fake_bot = SimpleNamespace(http_session=None)
+        now_utc = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
+
+        async def run():
+            with (
+                patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                patch.object(scheduler.tennis_loop, "bot_now", return_value=to_bot_tz(now_utc)),
+                patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
+            ):
+                return await scheduler._tennis_poll_needed(fake_bot, now_utc)
+
+        self.assertTrue(asyncio.run(run()))
+
+    def test_scheduler_tennis_poll_not_needed_for_announced_future_match(self):
+        from modules import scheduler
+
+        match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
+        fake_bot = SimpleNamespace(http_session=None)
+        now_utc = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
+
+        async def run():
+            scheduler.tennis_loop.pre_announced_ids.add("pre-1")
+            try:
+                with (
+                    patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                    patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
+                ):
+                    return await scheduler._tennis_poll_needed(fake_bot, now_utc)
+            finally:
+                scheduler.tennis_loop.pre_announced_ids.discard("pre-1")
+
+        self.assertFalse(asyncio.run(run()))
+
+    def test_scheduler_tennis_poll_needed_for_unannounced_ft_uses_injected_day(self):
+        from modules import scheduler
+
+        match = tennis_match(match_id="ft-1", status="FT", start_time="2026-06-12T12:00:00+00:00")
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])):
+                return await scheduler._tennis_poll_needed(
+                    fake_bot,
+                    datetime(2026, 6, 12, 18, 0, tzinfo=timezone.utc),
+                )
+
+        self.assertTrue(asyncio.run(run()))
 
 
 if __name__ == "__main__":
