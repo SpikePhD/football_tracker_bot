@@ -4,9 +4,11 @@ set -euo pipefail
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SERVICE_NAME="${SERVICE_NAME:-marco_van_botten}"
 TARGET_DATE="${1:-$(date -d yesterday +%F)}"
+RETENTION_DAYS="${RETENTION_DAYS:-30}"
 
 APP_LOG="$ROOT_DIR/bot_memory/logs/bot.log"
-EXPORT_DIR="$ROOT_DIR/bot_memory/log_exports/daily/$TARGET_DATE"
+DAILY_DIR="$ROOT_DIR/bot_memory/log_exports/daily"
+EXPORT_DIR="$DAILY_DIR/$TARGET_DATE"
 mkdir -p "$EXPORT_DIR"
 
 APP_EXPORT="$EXPORT_DIR/bot_app_${TARGET_DATE}.log"
@@ -46,7 +48,18 @@ fi
   printf 'warning_error_count=%s\n' "$(grep -Eih 'WARNING|ERROR|CRITICAL|Traceback|Exception' "$APP_EXPORT" "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
 } > "$SUMMARY"
 
-tar -czf "$ROOT_DIR/bot_memory/log_exports/daily/logs_${TARGET_DATE}.tar.gz" -C "$EXPORT_DIR" .
+tar -czf "$DAILY_DIR/logs_${TARGET_DATE}.tar.gz" -C "$EXPORT_DIR" .
+
+find "$DAILY_DIR" -mindepth 1 -maxdepth 1 -type d -name "????-??-??" \
+  | sort -r \
+  | tail -n +$((RETENTION_DAYS + 1)) \
+  | xargs -r rm -rf
+
+find "$DAILY_DIR" -mindepth 1 -maxdepth 1 -type f -name "logs_*.tar.gz" \
+  | sort -r \
+  | tail -n +$((RETENTION_DAYS + 1)) \
+  | xargs -r rm -f
 
 printf 'Daily logs collected in %s\n' "$EXPORT_DIR"
-printf 'Archive: %s\n' "$ROOT_DIR/bot_memory/log_exports/daily/logs_${TARGET_DATE}.tar.gz"
+printf 'Archive: %s\n' "$DAILY_DIR/logs_${TARGET_DATE}.tar.gz"
+printf 'Retention: newest %s daily archives kept\n' "$RETENTION_DAYS"

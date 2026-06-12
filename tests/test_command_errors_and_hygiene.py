@@ -92,8 +92,13 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertIn("bot_memory/logs/bot.log", text)
         self.assertIn("bot_memory/log_exports/daily", text)
         self.assertIn("marco_van_botten", text)
+        self.assertIn("RETENTION_DAYS=\"${RETENTION_DAYS:-30}\"", text)
+        self.assertIn("logs_*.tar.gz", text)
+        self.assertIn("tail -n +$((RETENTION_DAYS + 1))", text)
         self.assertIn("collect_daily_logs.sh", operations)
-        self.assertIn("World Cup daily log collection", operations)
+        self.assertIn("Daily log rotation", operations)
+        self.assertIn("0 6 * * *", operations)
+        self.assertIn("keeps the newest 30 daily archives", operations)
 
     def test_command_error_context_includes_full_content_and_discord_ids(self):
         import football_tracker_bot

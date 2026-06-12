@@ -51,9 +51,9 @@ Discord log commands:
 
 Large exports are truncated with a header note.
 
-### World Cup daily log collection
+### Daily log rotation
 
-During tournaments, collect one archive per day so provider behavior and scheduler decisions can be reviewed later:
+The bot can collect one archive per day so provider behavior and scheduler decisions can be reviewed later:
 
 ```bash
 cd ~/football_tracker_bot
@@ -76,7 +76,13 @@ bash scripts/collect_daily_logs.sh 2026-06-12
 Recommended cron entry on the Raspberry Pi:
 
 ```cron
-15 6 * * * cd ~/football_tracker_bot && bash scripts/collect_daily_logs.sh >> bot_memory/log_exports/daily/collect_daily_logs.log 2>&1
+0 6 * * * cd ~/football_tracker_bot && bash scripts/collect_daily_logs.sh >> bot_memory/log_exports/daily/collect_daily_logs.log 2>&1
+```
+
+The script keeps the newest 30 daily archives and removes older dated folders and `logs_YYYY-MM-DD.tar.gz` files. Override retention for a manual run only if needed:
+
+```bash
+RETENTION_DAYS=45 bash scripts/collect_daily_logs.sh
 ```
 
 ## 4. Updates
