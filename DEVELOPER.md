@@ -17,7 +17,7 @@ football_tracker_bot.py
   -> owns the shared aiohttp session
 
 modules/scheduler.py
-  -> long-running orchestration plus local daily routines
+  -> sleep/awake orchestration plus local daily routines
 
 modules/live_loop.py
   -> live football polling, enrichment, dedup, and upserts
@@ -32,7 +32,7 @@ modules/match_state.py
   -> atomic persisted football fixture state in bot_memory/match_state.json
 
 modules/tennis_loop.py
-  -> tracked tennis polling and announcements
+  -> tracked tennis live, pre-announcement, and FT processing
 
 modules/api_provider.py
   -> ESPN primary provider plus API-Football fallback/enrichment policy
@@ -59,6 +59,8 @@ cogs/
 - Keep football lifecycle decisions UTC-first and fixture-ID-first.
 - Use the configured timezone only for display, logs, grouping, and scheduled human-facing routines.
 - Keep football lifecycle polling on `match_lifecycle.provider_window(...)`; `football_display_lookup_window_hours` is for public snapshots and upcoming displays only.
+- Keep football and tennis scheduler wake decisions in `modules/scheduler.py`; loops should process work, not decide long idle sleeps.
+- Keep public football display snapshots on the enrichment path before formatting, so `!matches` cannot downgrade learned event details.
 - Keep runtime state in `bot_memory/` via `modules/storage.py`.
 - Keep `inject_memory/` read-only from runtime code.
 - Keep secrets out of `config.json`.
@@ -89,6 +91,26 @@ Enrichment protections:
 - incomplete API-Football event cooldown
 - best-known event snapshots to prevent ESPN event-data downgrades
 
+The live loop, FT handler, and public `!matches` snapshot should all reuse `api_provider.enrich_fixture_events(...)` or `api_provider.enrich_fixtures(...)` before formatting football events. This keeps scorer details consistent across proactive live posts, final posts, startup snapshots, and command output.
+
+## Scheduler Model
+
+`modules/scheduler.py` owns long idle sleeps for both sports.
+
+Football:
+
+- `_football_poll_needed(...)` wakes for FT-due IDs, lifecycle-window fixtures, or fallback live endpoint visibility.
+- When awake, `run_football_cycle(...)` runs live updates, FT handling, and live-state pruning.
+- When asleep, `_plan_sleep_until_next_fixture(...)` refreshes future schedule at most every 6 hours or wakes at `football_prematch_window_hours` before the next kickoff.
+
+Tennis:
+
+- `_tennis_poll_needed(...)` wakes for live matches, local-day FT posts, or pre-announcement work.
+- When awake, `tennis_loop.run_tennis_loop(...)` handles posts/upserts and dedupe.
+- When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at most every 6 hours or wakes at `tennis_pre_announce_hours` before the next start.
+
+Do not reintroduce minute-by-minute provider polling while a sport is idle. The main loop may still wake for lightweight local daily routines.
+
 When changing this area, add or update focused regression tests under `tests/`.
 
 ## Extension Notes
@@ -118,7 +140,7 @@ Football fixture lifecycle state is centralized in `modules/match_state.py`. Do 
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
-python -m compileall config.py modules utils cogs tests football_tracker_bot.py
+python -m compileall config.py modules utils cogs tests scripts football_tracker_bot.py
 python -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))"
 python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))"
 ```

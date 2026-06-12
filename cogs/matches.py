@@ -238,6 +238,7 @@ async def fetch_combined_matches_snapshot(session) -> tuple[list, list, str]:
             await api_provider.fetch_day(session),
             now,
         )
+        football_fixtures = await api_provider.enrich_fixtures(session, football_fixtures)
     except Exception as e:
         logger.error(f"Failed to fetch football snapshot: {e}", exc_info=True)
 

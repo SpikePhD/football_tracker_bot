@@ -31,6 +31,7 @@ Football data flows through `modules/api_provider.py`.
 - API-Football is secondary for provider fallback and sparse event enrichment.
 - Enrichment is bounded by retry delays, per-tick caps, daily call budgets, mapping caches, incomplete-response cooldowns, and best-known event reuse.
 - Football fixture lookup uses rolling UTC-aware windows and dedupes by fixture ID across provider dates.
+- Public football snapshots reuse the same enrichment/best-known event layer used by live and FT paths, so `!matches` should not regress to a stale ESPN event list after richer event data has already been learned.
 
 ## Football Lifecycle
 
@@ -46,11 +47,14 @@ Important lifecycle behavior:
 - live message IDs are fixture-ID based and can be replaced if a Discord message is stale or deleted
 - old terminal or stale fixtures are pruned by retention windows, not midnight clears
 
+Football and tennis use a sleep/awake scheduler model to reduce idle API calls. When no relevant match is live, near kickoff/start, due for FT handling, or awaiting announcement work, the scheduler sleeps and refreshes the future schedule every 6 hours. It wakes at the configured football pre-match window or tennis pre-announcement window, then polls at the configured provider interval while work remains.
+
 ## Commands
 
 | Command | Aliases | Description |
 |---|---|---|
 | `!matches` | - | Current tracked football and local-day tennis events |
+| `!upcoming` | - | Upcoming tracked football fixtures grouped by local date |
 | `!tennis` | - | Tracked tennis: live now, upcoming, and today's finished matches |
 | `!competitions` | - | List tracked football competitions |
 | `!next <team>` | - | Show a team's next scheduled match |
@@ -69,10 +73,12 @@ Important lifecycle behavior:
 | `!log` | - | Export recent runtime logs |
 | `!log errors` | - | Export warning/error/critical logs |
 | `!log module <name>` | - | Export logs filtered by module |
+| `!match_state [fixture_id]` | `!matchstate` | Admin: inspect persisted football lifecycle state |
+| `!football_lifecycle` | `!footballlife`, `!lifecycle` | Admin: summarize provider, scheduler, and lifecycle health |
 | `!update` | `!pull` | Run `update.sh` and restart the service |
 | `!commands` | `!cmds`, `!help` | List available commands |
 
-Mode commands require Discord `manage_guild` permission. Memory commands require bot owner permission. `!update` is intentionally available to channel users and may restart the bot.
+Mode and lifecycle diagnostic commands require Discord `manage_guild` permission. Memory commands require bot owner permission. `!update` is intentionally available to channel users and may restart the bot.
 
 ## Configuration
 
@@ -103,6 +109,9 @@ Key `operations` timezone/display/lifecycle settings:
 - `football_state_retention_hours` - stale state retention for non-terminal records
 - `football_expected_ft_minutes` - expected FT check offset from UTC kickoff
 - `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
+- `tennis_pre_announce_hours` - rolling tennis pre-announcement and scheduler wake window
+- `operations.api_provider.espn_poll_interval_sec` - active ESPN polling interval while football is awake
+- `operations.api_provider.fallback_poll_interval_sec` - active fallback polling interval while football is awake
 
 `football_match_lookup_window_hours` is no longer supported. Rename existing deployed configs to `football_display_lookup_window_hours` before restarting the bot.
 
@@ -162,6 +171,8 @@ See `OPERATIONS.md` for the canonical runbook.
 
 Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state.
 
+Daily operational log archives can be collected with `scripts/collect_daily_logs.sh`. On the Pi, the recommended cron job runs at 06:00 and keeps the newest 30 daily archives under `bot_memory/log_exports/daily/`.
+
 `inject_memory/` is repo-controlled reference material and should be treated as read-only by runtime logic.
 
 ## Project Structure
@@ -174,6 +185,7 @@ cogs/
 modules/
 utils/
 tests/
+scripts/
 bot_memory/      runtime state, gitignored
 inject_memory/   repo-controlled reference data
 docs/archive/    archived documentation/history
@@ -186,7 +198,7 @@ auto_update.sh
 
 ```bash
 python -m unittest discover -s tests -p "test_*.py"
-python -m compileall config.py modules utils cogs tests football_tracker_bot.py
+python -m compileall config.py modules utils cogs tests scripts football_tracker_bot.py
 python -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))"
 python -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))"
 ```

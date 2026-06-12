@@ -8,7 +8,7 @@ os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("API_KEY", "test-api-key")
 os.environ.setdefault("CHANNEL_ID", "123456789")
 
-from tests.regression_helpers import espn_match
+from tests.regression_helpers import espn_match, reset_api_provider_state
 
 
 def _fixture(fixture_id: str, kickoff_utc: str, status: str = "NS", elapsed: int | None = None) -> dict:
@@ -113,6 +113,46 @@ class MatchesDisplayTests(unittest.TestCase):
         self.assertIn("Tracked sports (2026-06-09)", content)
         self.assertIn("Home today vs Away today", content)
         self.assertNotIn("Home future vs Away future", content)
+
+    def test_fetch_combined_snapshot_reuses_best_known_events_for_live_football(self):
+        from cogs import matches
+        from modules import api_provider
+
+        reset_api_provider_state()
+        now_utc = datetime(2026, 6, 12, 20, 35, tzinfo=timezone.utc)
+        live = _fixture("canada-live", "2026-06-12T19:00:00Z", status="2H", elapsed=73)
+        live["teams"]["home"] = {"id": "10", "name": "Canada"}
+        live["teams"]["away"] = {"id": "20", "name": "Bosnia-Herzegovina"}
+        live["goals"] = {"home": 0, "away": 1}
+        live["events"] = []
+        api_provider._best_known_events_by_espn_fixture["canada-live"] = {
+            "events": [
+                {
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                    "player": {"name": "J. Lukic"},
+                    "team": {"id": "20", "name": "Bosnia-Herzegovina"},
+                    "time": {"elapsed": 21},
+                }
+            ],
+            "goal_count": 1,
+            "event_count": 1,
+            "source": "API-Football events",
+        }
+
+        async def run():
+            with (
+                patch.object(matches, "utc_now", return_value=now_utc),
+                patch.object(matches.api_provider, "fetch_day", AsyncMock(return_value=[live])),
+                patch.object(matches.api_provider, "fetch_tennis_day", AsyncMock(return_value=[])),
+            ):
+                return await matches.fetch_combined_matches_snapshot(None)
+
+        _football_fixtures, _tennis, content = asyncio.run(run())
+
+        self.assertIn("LIVE [73']", content)
+        self.assertIn("J. Lukic", content)
+        self.assertNotIn("missing from event data", content)
 
     def test_upcoming_api_view_uses_wide_provider_window_grouped_by_future_date(self):
         from cogs import matches
