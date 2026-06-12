@@ -51,6 +51,34 @@ Discord log commands:
 
 Large exports are truncated with a header note.
 
+### World Cup daily log collection
+
+During tournaments, collect one archive per day so provider behavior and scheduler decisions can be reviewed later:
+
+```bash
+cd ~/football_tracker_bot
+bash scripts/collect_daily_logs.sh
+```
+
+By default the script collects yesterday's app log and systemd journal into:
+
+```text
+bot_memory/log_exports/daily/YYYY-MM-DD/
+bot_memory/log_exports/daily/logs_YYYY-MM-DD.tar.gz
+```
+
+To collect a specific date:
+
+```bash
+bash scripts/collect_daily_logs.sh 2026-06-12
+```
+
+Recommended cron entry on the Raspberry Pi:
+
+```cron
+15 6 * * * cd ~/football_tracker_bot && bash scripts/collect_daily_logs.sh >> bot_memory/log_exports/daily/collect_daily_logs.log 2>&1
+```
+
 ## 4. Updates
 
 Manual update:

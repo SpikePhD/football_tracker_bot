@@ -81,6 +81,20 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
 
         self.assertEqual(offenders, [])
 
+    def test_daily_log_collection_script_and_runbook_are_present(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "collect_daily_logs.sh"
+        operations = (repo_root / "OPERATIONS.md").read_text(encoding="utf-8")
+
+        self.assertTrue(script.exists())
+        text = script.read_text(encoding="utf-8")
+        self.assertIn("journalctl", text)
+        self.assertIn("bot_memory/logs/bot.log", text)
+        self.assertIn("bot_memory/log_exports/daily", text)
+        self.assertIn("marco_van_botten", text)
+        self.assertIn("collect_daily_logs.sh", operations)
+        self.assertIn("World Cup daily log collection", operations)
+
     def test_command_error_context_includes_full_content_and_discord_ids(self):
         import football_tracker_bot
 
