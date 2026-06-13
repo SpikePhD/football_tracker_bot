@@ -20,6 +20,53 @@ API_REQUEST_TIMEOUT = 15
 _TIMEOUT = aiohttp.ClientTimeout(total=API_REQUEST_TIMEOUT)
 
 _quota_exceeded_day: str | None = None
+_plan_unavailable_log_cache: dict[str, str] = {}
+
+
+def _api_errors_present(api_errors) -> bool:
+    if isinstance(api_errors, list):
+        return len(api_errors) > 0
+    if isinstance(api_errors, dict):
+        return bool(api_errors)
+    return bool(api_errors)
+
+
+def _api_error_text(api_errors) -> str:
+    if isinstance(api_errors, dict):
+        return " ".join(str(value) for value in api_errors.values())
+    if isinstance(api_errors, list):
+        return " ".join(str(value) for value in api_errors)
+    return str(api_errors)
+
+
+def _is_request_limit_error(api_errors) -> bool:
+    error_text = _api_error_text(api_errors).lower()
+    return "request limit" in error_text or "reached the request limit" in error_text
+
+
+def _is_plan_unavailable_error(api_errors) -> bool:
+    error_text = _api_error_text(api_errors).lower()
+    return "free plans do not have access" in error_text or "do not have access" in error_text
+
+
+def _log_api_payload_error(url: str, status: int, parameters, api_errors) -> None:
+    if _is_plan_unavailable_error(api_errors):
+        today = get_bot_local_date_string()
+        if _plan_unavailable_log_cache.get(url) != today:
+            _plan_unavailable_log_cache[url] = today
+            logger.warning(
+                f"API-Football plan unavailable for {url}: {api_errors} | "
+                f"Status: {status} | Parameters: {parameters}. "
+                "Suppressing repeats for this request today."
+            )
+        else:
+            logger.debug(
+                f"Suppressed repeated API-Football plan unavailable response for {url}: "
+                f"{api_errors} | Status: {status} | Parameters: {parameters}"
+            )
+        return
+
+    logger.error(f"❌ API Error for {url}: {api_errors} | Status: {status} | Parameters: {parameters}")
 
 
 def is_quota_exceeded_today() -> bool:
@@ -43,12 +90,10 @@ async def _make_request(session: aiohttp.ClientSession, url: str) -> dict | None
                 data = await response.json()
 
                 api_errors = data.get("errors")
-                if api_errors and ( (isinstance(api_errors, list) and len(api_errors) > 0) or isinstance(api_errors, dict) ):
-                    if isinstance(api_errors, dict):
-                        request_err = str(api_errors.get("requests", "")).lower()
-                        if "request limit" in request_err or "reached the request limit" in request_err:
-                            _quota_exceeded_day = get_bot_local_date_string()
-                    logger.error(f"❌ API Error for {url}: {api_errors} | Status: {response.status} | Parameters: {data.get('parameters')}")
+                if _api_errors_present(api_errors):
+                    if _is_request_limit_error(api_errors):
+                        _quota_exceeded_day = get_bot_local_date_string()
+                    _log_api_payload_error(url, response.status, data.get("parameters"), api_errors)
                     return None
 
                 if "response" not in data:

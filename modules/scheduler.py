@@ -9,7 +9,7 @@ from modules.discord_poster import post_new_general_message
 from modules.ft_handler import fetch_and_post_ft
 from modules.live_loop import prune_live_state, run_live_loop
 from modules.match_state import expected_ft_due_fixture_ids, prune_match_tracking_state
-from modules import tennis_loop
+from modules import match_state, tennis_loop
 from modules.football_memory import update_standings_only, update_team_info_only
 from utils.time_utils import to_bot_tz, utc_now
 
@@ -59,7 +59,6 @@ def _set_football_scheduler_state(
     )
     snapshot = (
         mode,
-        next_football_check_utc,
         next_schedule_refresh_utc,
         next_planned_kickoff_utc,
         next_planned_wake_utc,
@@ -100,7 +99,6 @@ def _set_tennis_scheduler_state(
     )
     snapshot = (
         mode,
-        next_tennis_check_utc,
         next_schedule_refresh_utc,
         next_planned_start_utc,
         next_planned_wake_utc,
@@ -241,7 +239,7 @@ async def _football_poll_needed(bot, now_utc: datetime) -> bool:
         return True
 
     matches = await api_provider.fetch_relevant_football(bot.http_session, now_utc)
-    if any(match_lifecycle.should_track_fixture(match, now_utc) for match in matches):
+    if any(_fixture_requires_football_poll(match, now_utc) for match in matches):
         return True
 
     return await api_provider.has_live_football(
@@ -249,6 +247,26 @@ async def _football_poll_needed(bot, now_utc: datetime) -> bool:
         now_utc=now_utc,
         relevant_matches=matches,
     )
+
+
+def _fixture_requires_football_poll(match: dict, now_utc: datetime) -> bool:
+    if match_lifecycle.is_terminal(match):
+        if not match_lifecycle.is_ft(match):
+            return False
+
+        fixture_id = match_lifecycle.fixture_identity(match)
+        if fixture_id is None:
+            return False
+
+        fixture_state = match_state.get_fixture_state(fixture_id)
+        if fixture_state is None:
+            return True
+        return not (
+            fixture_state.get("ft_announced") is True
+            and fixture_state.get("memory_updated") is True
+        )
+
+    return match_lifecycle.should_track_fixture(match, now_utc)
 
 
 async def run_football_cycle(bot, now_utc: datetime | None = None) -> None:

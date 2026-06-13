@@ -95,10 +95,20 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertIn("RETENTION_DAYS=\"${RETENTION_DAYS:-30}\"", text)
         self.assertIn("logs_*.tar.gz", text)
         self.assertIn("tail -n +$((RETENTION_DAYS + 1))", text)
+        self.assertIn("app_warning_error_count=", text)
+        self.assertIn("journal_warning_error_count=", text)
+        self.assertIn("app_error_count=", text)
+        self.assertIn("app_warning_count=", text)
+        self.assertIn("journal_error_count=", text)
+        self.assertIn("journal_warning_count=", text)
+        self.assertNotIn("printf 'warning_error_count=", text)
+        self.assertIn("systemd journal may duplicate app output", text)
         self.assertIn("collect_daily_logs.sh", operations)
         self.assertIn("Daily log rotation", operations)
         self.assertIn("0 6 * * *", operations)
         self.assertIn("keeps the newest 30 daily archives", operations)
+        self.assertIn("app_warning_error_count", operations)
+        self.assertIn("journal_warning_error_count", operations)
 
     def test_command_error_context_includes_full_content_and_discord_ids(self):
         import football_tracker_bot

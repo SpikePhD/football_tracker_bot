@@ -12,6 +12,34 @@ os.environ.setdefault("CHANNEL_ID", "123456789")
 
 class ClientsAndFormattersTests(unittest.TestCase):
 
+    class _FakeResponse:
+        def __init__(self, status, payload=None, text=""):
+            self.status = status
+            self._payload = payload or {}
+            self._text = text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def json(self):
+            return self._payload
+
+        async def text(self):
+            return self._text
+
+    class _FakeSession:
+        def __init__(self, payload, status=200):
+            self.payload = payload
+            self.status = status
+            self.calls = []
+
+        def get(self, url, headers=None, timeout=None):
+            self.calls.append(url)
+            return ClientsAndFormattersTests._FakeResponse(self.status, self.payload)
+
     def test_api_football_event_normalization_preserves_team_id(self):
         from utils.event_formatter import normalize_api_football_events
 
@@ -207,6 +235,117 @@ class ClientsAndFormattersTests(unittest.TestCase):
         payload = asyncio.run(run())
         self.assertEqual(payload, {"response": []})
         self.assertIn("/fixtures?live=all", captured["url"])
+
+    def test_api_football_plan_unavailable_logs_warning_once_per_url_day(self):
+        from utils import api_client
+
+        cache = getattr(api_client, "_plan_unavailable_log_cache", None)
+        if cache is not None:
+            cache.clear()
+
+        url = "https://v3.football.api-sports.io/fixtures?date=2026-06-12&league=1&season=2025"
+        payload = {
+            "errors": {"plan": "Free plans do not have access to this endpoint."},
+            "parameters": {"date": "2026-06-12", "league": "1", "season": "2025"},
+            "response": [],
+        }
+
+        async def run():
+            session = self._FakeSession(payload)
+            with (
+                patch.object(api_client, "get_bot_local_date_string", return_value="2026-06-13"),
+                patch.object(api_client.logger, "warning") as warning_log,
+                patch.object(api_client.logger, "error") as error_log,
+            ):
+                first = await api_client._make_request(session, url)
+                second = await api_client._make_request(session, url)
+                return first, second, warning_log, error_log
+
+        first, second, warning_log, error_log = asyncio.run(run())
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(warning_log.call_count, 1)
+        self.assertIn("plan unavailable", warning_log.call_args.args[0].lower())
+        error_log.assert_not_called()
+
+    def test_api_football_plan_unavailable_logs_each_distinct_url_once(self):
+        from utils import api_client
+
+        cache = getattr(api_client, "_plan_unavailable_log_cache", None)
+        if cache is not None:
+            cache.clear()
+
+        first_url = "https://v3.football.api-sports.io/fixtures?date=2026-06-12&league=1&season=2025"
+        second_url = "https://v3.football.api-sports.io/fixtures?date=2026-06-13&league=1&season=2025"
+        payload = {
+            "errors": {"endpoint": "You do not have access to this endpoint with your current plan."},
+            "parameters": {"league": "1", "season": "2025"},
+            "response": [],
+        }
+
+        async def run():
+            session = self._FakeSession(payload)
+            with (
+                patch.object(api_client, "get_bot_local_date_string", return_value="2026-06-13"),
+                patch.object(api_client.logger, "warning") as warning_log,
+                patch.object(api_client.logger, "error") as error_log,
+            ):
+                await api_client._make_request(session, first_url)
+                await api_client._make_request(session, second_url)
+                await api_client._make_request(session, first_url)
+                return warning_log, error_log
+
+        warning_log, error_log = asyncio.run(run())
+        self.assertEqual(warning_log.call_count, 2)
+        self.assertIn(first_url, warning_log.call_args_list[0].args[0])
+        self.assertIn(second_url, warning_log.call_args_list[1].args[0])
+        error_log.assert_not_called()
+
+    def test_api_football_request_limit_still_marks_quota_exceeded(self):
+        from utils import api_client
+
+        api_client._quota_exceeded_day = None
+        payload = {
+            "errors": {"requests": "You have reached the request limit for the day."},
+            "parameters": {},
+            "response": [],
+        }
+
+        async def run():
+            session = self._FakeSession(payload)
+            with (
+                patch.object(api_client, "get_bot_local_date_string", return_value="2026-06-13"),
+                patch.object(api_client.logger, "warning") as warning_log,
+                patch.object(api_client.logger, "error") as error_log,
+            ):
+                result = await api_client._make_request(session, "https://v3.football.api-sports.io/fixtures?date=2026-06-13")
+                quota = api_client.is_quota_exceeded_today()
+                return result, quota, warning_log, error_log
+
+        result, quota, warning_log, error_log = asyncio.run(run())
+        self.assertIsNone(result)
+        self.assertTrue(quota)
+        warning_log.assert_not_called()
+        error_log.assert_called_once()
+
+    def test_api_football_generic_payload_error_still_logs_error(self):
+        from utils import api_client
+
+        payload = {
+            "errors": {"league": "The League field is required."},
+            "parameters": {},
+            "response": [],
+        }
+
+        async def run():
+            session = self._FakeSession(payload)
+            with patch.object(api_client.logger, "error") as error_log:
+                result = await api_client._make_request(session, "https://v3.football.api-sports.io/fixtures")
+                return result, error_log
+
+        result, error_log = asyncio.run(run())
+        self.assertIsNone(result)
+        error_log.assert_called_once()
 
 
 

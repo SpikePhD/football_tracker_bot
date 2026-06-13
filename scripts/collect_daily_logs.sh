@@ -45,7 +45,13 @@ fi
   printf 'journal=%s\n' "$JOURNAL_EXPORT"
   printf 'app_log_lines=%s\n' "$(wc -l < "$APP_EXPORT" | tr -d ' ')"
   printf 'journal_lines=%s\n' "$(wc -l < "$JOURNAL_EXPORT" | tr -d ' ')"
-  printf 'warning_error_count=%s\n' "$(grep -Eih 'WARNING|ERROR|CRITICAL|Traceback|Exception' "$APP_EXPORT" "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'app_warning_error_count=%s\n' "$(grep -Eih 'WARNING|ERROR|CRITICAL|Traceback|Exception' "$APP_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'journal_warning_error_count=%s\n' "$(grep -Eih 'WARNING|ERROR|CRITICAL|Traceback|Exception' "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'app_error_count=%s\n' "$(grep -Eih 'ERROR|CRITICAL|Traceback|Exception' "$APP_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'app_warning_count=%s\n' "$(grep -Eih 'WARNING' "$APP_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'journal_error_count=%s\n' "$(grep -Eih 'ERROR|CRITICAL|Traceback|Exception' "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'journal_warning_count=%s\n' "$(grep -Eih 'WARNING' "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
+  printf 'note=%s\n' 'Use app_warning_error_count as the main bot signal; systemd journal may duplicate app output captured from stdout/stderr.'
 } > "$SUMMARY"
 
 tar -czf "$DAILY_DIR/logs_${TARGET_DATE}.tar.gz" -C "$EXPORT_DIR" .

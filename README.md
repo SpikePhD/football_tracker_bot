@@ -171,7 +171,7 @@ See `OPERATIONS.md` for the canonical runbook.
 
 Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state.
 
-Daily operational log archives can be collected with `scripts/collect_daily_logs.sh`. On the Pi, the recommended cron job runs at 06:00 and keeps the newest 30 daily archives under `bot_memory/log_exports/daily/`.
+Daily operational log archives can be collected with `scripts/collect_daily_logs.sh`. On the Pi, the recommended cron job runs at 06:00 and keeps the newest 30 daily archives under `bot_memory/log_exports/daily/`. Each summary splits app-log warning/error counts from systemd journal counts so the app log remains the primary bot-health signal.
 
 `inject_memory/` is repo-controlled reference material and should be treated as read-only by runtime logic.
 

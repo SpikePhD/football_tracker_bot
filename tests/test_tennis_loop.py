@@ -328,6 +328,47 @@ class TennisLoopTests(unittest.TestCase):
 
         self.assertTrue(asyncio.run(run()))
 
+    def test_tennis_scheduler_logs_only_meaningful_state_changes(self):
+        from modules import scheduler
+
+        scheduler._last_logged_tennis_state = None
+
+        with self.assertLogs("modules.scheduler", level="INFO") as logs:
+            scheduler._set_tennis_scheduler_state(
+                mode="awake",
+                next_tennis_check_utc=datetime(2026, 6, 12, 10, 1, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("Tennis scheduler awake", logs.output[0])
+        self.assertEqual(
+            scheduler.get_tennis_scheduler_status()["next_tennis_check_utc"],
+            datetime(2026, 6, 12, 10, 1, tzinfo=timezone.utc),
+        )
+
+        with self.assertNoLogs("modules.scheduler", level="INFO"):
+            scheduler._set_tennis_scheduler_state(
+                mode="awake",
+                next_tennis_check_utc=datetime(2026, 6, 12, 10, 2, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(
+            scheduler.get_tennis_scheduler_status()["next_tennis_check_utc"],
+            datetime(2026, 6, 12, 10, 2, tzinfo=timezone.utc),
+        )
+
+        with self.assertLogs("modules.scheduler", level="INFO") as logs:
+            scheduler._set_tennis_scheduler_state(
+                mode="sleeping",
+                next_tennis_check_utc=datetime(2026, 6, 12, 16, 0, tzinfo=timezone.utc),
+                next_schedule_refresh_utc=datetime(2026, 6, 12, 16, 0, tzinfo=timezone.utc),
+                next_planned_start_utc=datetime(2026, 6, 12, 21, 0, tzinfo=timezone.utc),
+                next_planned_wake_utc=datetime(2026, 6, 12, 17, 0, tzinfo=timezone.utc),
+            )
+
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("Tennis scheduler sleeping", logs.output[0])
+
 
 if __name__ == "__main__":
     unittest.main()
