@@ -165,6 +165,48 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertTrue(state["ft_announced"])
         self.assertFalse(state["memory_updated"])
 
+    def test_fetch_and_post_ft_skips_fully_resolved_terminal_fixture(self):
+        from modules import api_provider, ft_handler, match_state
+
+        match = espn_match(fixture_id="resolved-ft")
+        match["fixture"]["date"] = "2026-06-03T20:00:00Z"
+        match["fixture"]["status"] = {"short": "FT", "long": "Full Time", "elapsed": 90}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        now_utc = datetime(2026, 6, 3, 23, 0, tzinfo=timezone.utc)
+
+        async def run(memory_dir: Path):
+            match_state.save_match_state(
+                {
+                    "version": 1,
+                    "migrated_from_ft_state": True,
+                    "fixtures": {
+                        "resolved-ft": {
+                            "fixture_id": "resolved-ft",
+                            "kickoff_utc": "2026-06-03T20:00:00+00:00",
+                            "expected_ft_utc": "2026-06-03T21:52:00+00:00",
+                            "last_status": "FT",
+                            "terminal_utc": "2026-06-03T22:00:00+00:00",
+                            "ft_announced": True,
+                            "memory_updated": True,
+                        },
+                    },
+                },
+                memory_dir=memory_dir,
+            )
+            with (
+                patch.object(match_state, "BOT_MEMORY_DIR", memory_dir),
+                patch.object(ft_handler, "utc_now", return_value=now_utc),
+                patch.object(api_provider, "fetch_relevant_football", AsyncMock(return_value=[match])),
+                patch.object(ft_handler, "process_terminal_fixture", AsyncMock()) as process_terminal,
+            ):
+                await ft_handler.fetch_and_post_ft(fake_bot)
+                return process_terminal
+
+        with tempfile.TemporaryDirectory() as tmp:
+            process_terminal = asyncio.run(run(Path(tmp)))
+
+        process_terminal.assert_not_awaited()
+
     def test_live_penalty_update_includes_penalty_score(self):
         from modules import live_loop
         from modules import api_provider

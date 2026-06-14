@@ -118,6 +118,13 @@ def _build_ft_message(match_details: dict) -> str:
     return ft_message
 
 
+def _fixture_fully_resolved(fixture_id: str | None) -> bool:
+    if fixture_id is None:
+        return False
+    current = match_state.get_fixture_state(fixture_id) or {}
+    return current.get("ft_announced") is True and current.get("memory_updated") is True
+
+
 async def _post_ft_from_data(bot: discord.Client, match_details: dict) -> bool:
     ft_message = _build_ft_message(match_details)
     safe_message = ft_message.encode("ascii", "backslashreplace").decode("ascii")
@@ -279,6 +286,9 @@ async def fetch_and_post_ft(bot: discord.Client) -> None:
                 _past_expected_live_logged.add(fixture_id)
             continue
         if match_lifecycle.is_terminal(match):
+            if match_lifecycle.is_ft(match) and _fixture_fully_resolved(fixture_id):
+                _past_expected_live_logged.discard(fixture_id)
+                continue
             await process_terminal_fixture(bot, match, now_utc=now)
             _past_expected_live_logged.discard(fixture_id)
 
