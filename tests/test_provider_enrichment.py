@@ -687,6 +687,46 @@ class ProviderEnrichmentTests(unittest.TestCase):
         matches = asyncio.run(run())
         self.assertEqual({m["fixture"]["id"] for m in matches}, {"737155", "eng-1"})
 
+    def test_partial_espn_cache_warning_logs_once_per_date_and_failed_leagues(self):
+        from modules import api_provider
+
+        provider_date = "2026-06-14"
+        cached_match = espn_match(fixture_id="cached", league_id=135)
+        fresh_match = espn_match(fixture_id="fresh", league_id=39)
+
+        async def fake_summary(session, slug_map, date_str=None):
+            return {
+                "matches": [fresh_match],
+                "success_count": 1,
+                "failure_count": 1,
+                "succeeded_league_ids": [39],
+                "failed_league_ids": [135],
+            }
+
+        async def run():
+            api_provider._football_scoreboard_cache.clear()
+            api_provider._espn_partial_refresh_warning_log_keys.clear()
+            stale_ts = api_provider.bot_now() - timedelta(seconds=api_provider.CACHE_TTL_SEC + 1)
+            api_provider._football_scoreboard_cache[provider_date] = {
+                "matches": [cached_match],
+                "fetched_at": stale_ts,
+            }
+            with patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fake_summary):
+                with self.assertLogs("modules.api_provider", level="WARNING") as first_logs:
+                    first = await api_provider._get_cached_scoreboard_for_date(None, provider_date)
+                api_provider._football_scoreboard_cache[provider_date]["fetched_at"] = stale_ts
+                with self.assertLogs("modules.api_provider", level="DEBUG") as second_logs:
+                    second = await api_provider._get_cached_scoreboard_for_date(None, provider_date)
+            return first, second, first_logs.output, second_logs.output
+
+        first, second, first_output, second_output = asyncio.run(run())
+
+        self.assertEqual({m["fixture"]["id"] for m in first}, {"cached", "fresh"})
+        self.assertEqual({m["fixture"]["id"] for m in second}, {"cached", "fresh"})
+        self.assertEqual(sum("ESPN partial refresh merged with stale cache" in line for line in first_output), 1)
+        self.assertEqual(sum("ESPN partial refresh merged with stale cache" in line for line in second_output), 1)
+        self.assertTrue(all("WARNING" not in line for line in second_output))
+
     def test_enrichment_replaces_events_when_api_football_has_goal(self):
         from modules import api_provider
 

@@ -9,6 +9,7 @@ import aiohttp
 import re
 
 logger = logging.getLogger(__name__)
+_scoreboard_warning_log_keys: set[tuple[str, str | None, str]] = set()
 
 ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/soccer"
 ESPN_SEARCH_BASE = "https://site.api.espn.com/apis/common/v3/search"
@@ -545,6 +546,15 @@ async def fetch_scoreboard(
         return []
 
 
+def _log_scoreboard_warning(slug: str, date_str: str | None, reason: str, message: str) -> None:
+    key = (slug, date_str, reason)
+    if key in _scoreboard_warning_log_keys:
+        logger.debug("%s Suppressing repeated ESPN scoreboard warning for this league/date.", message)
+        return
+    _scoreboard_warning_log_keys.add(key)
+    logger.warning(message)
+
+
 async def fetch_scoreboard_result(
     session: aiohttp.ClientSession,
     slug: str,
@@ -560,15 +570,30 @@ async def fetch_scoreboard_result(
     try:
         async with session.get(url, timeout=ESPN_TIMEOUT) as response:
             if response.status != 200:
-                logger.warning(f"espn_client: HTTP {response.status} for {slug} scoreboard.")
+                _log_scoreboard_warning(
+                    slug,
+                    date_str,
+                    f"http-{response.status}",
+                    f"espn_client: HTTP {response.status} for {slug} scoreboard.",
+                )
                 return {"ok": False, "events": []}
             data = await response.json(content_type=None)
             return {"ok": True, "events": data.get("events", [])}
     except asyncio.TimeoutError:
-        logger.warning(f"espn_client: Timeout fetching {slug} scoreboard.")
+        _log_scoreboard_warning(
+            slug,
+            date_str,
+            "timeout",
+            f"espn_client: Timeout fetching {slug} scoreboard.",
+        )
         return {"ok": False, "events": []}
     except Exception as e:
-        logger.warning(f"espn_client: Error fetching {slug} scoreboard: {e}")
+        _log_scoreboard_warning(
+            slug,
+            date_str,
+            type(e).__name__,
+            f"espn_client: Error fetching {slug} scoreboard: {e}",
+        )
         return {"ok": False, "events": []}
 
 

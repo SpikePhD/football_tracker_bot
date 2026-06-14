@@ -202,6 +202,29 @@ class ClientsAndFormattersTests(unittest.TestCase):
         self.assertEqual(summary["succeeded_league_ids"], [1])
         self.assertEqual(summary["failed_league_ids"], [2])
 
+    def test_espn_scoreboard_timeout_logs_warning_once_per_slug_and_date(self):
+        from utils import espn_client
+
+        class FakeSession:
+            def get(self, *args, **kwargs):
+                raise asyncio.TimeoutError()
+
+        async def run():
+            espn_client._scoreboard_warning_log_keys.clear()
+            with self.assertLogs("utils.espn_client", level="WARNING") as first_logs:
+                first = await espn_client.fetch_scoreboard_result(FakeSession(), "fifa.world", "20260614")
+            with self.assertLogs("utils.espn_client", level="DEBUG") as second_logs:
+                second = await espn_client.fetch_scoreboard_result(FakeSession(), "fifa.world", "20260614")
+            return first, second, first_logs.output, second_logs.output
+
+        first, second, first_output, second_output = asyncio.run(run())
+
+        self.assertFalse(first["ok"])
+        self.assertFalse(second["ok"])
+        self.assertEqual(sum("Timeout fetching fifa.world scoreboard" in line for line in first_output), 1)
+        self.assertEqual(sum("Timeout fetching fifa.world scoreboard" in line for line in second_output), 1)
+        self.assertTrue(all("WARNING" not in line for line in second_output))
+
     def test_fetch_fixture_events_uses_events_endpoint(self):
         from utils import api_client
 

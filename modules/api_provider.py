@@ -64,6 +64,7 @@ _retry_after: datetime | None = None
 
 _football_scoreboard_cache: dict[str, dict] = {}
 _api_football_date_cache: dict[str, dict] = {}
+_espn_partial_refresh_warning_log_keys: set[tuple[str, str, tuple[int, ...]]] = set()
 _cache: list[dict] = []
 _cache_date: str | None = None
 _cache_ts: datetime | None = None
@@ -133,6 +134,20 @@ def get_status() -> dict:
         "retry_after": retry_local,
         "poll_interval": get_poll_interval(),
     }
+
+
+def _log_espn_partial_refresh_warning(
+    provider_date: str,
+    refresh_type: str,
+    failed_league_ids: set[int],
+    message: str,
+) -> None:
+    key = (provider_date, refresh_type, tuple(sorted(failed_league_ids)))
+    if key in _espn_partial_refresh_warning_log_keys:
+        logger.debug("%s Suppressing repeated ESPN partial-refresh warning for this date/league set.", message)
+        return
+    _espn_partial_refresh_warning_log_keys.add(key)
+    logger.warning(message)
 
 
 def _mark_espn_success() -> None:
@@ -234,10 +249,13 @@ async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provid
                 if m.get("league", {}).get("id") in failed_league_ids
             ]
             matches = [*results, *stale_matches]
-            logger.warning(
+            _log_espn_partial_refresh_warning(
+                provider_date,
+                "merged-stale-cache",
+                failed_league_ids,
                 f"[APIProvider] ESPN partial refresh merged with stale cache for {provider_date}: "
                 f"{len(succeeded_league_ids)} league(s) fresh, "
-                f"{len(failed_league_ids)} league(s) preserved."
+                f"{len(failed_league_ids)} league(s) preserved.",
             )
         else:
             matches = results
@@ -246,9 +264,12 @@ async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provid
             m for m in cached["matches"]
             if m.get("league", {}).get("id") in failed_league_ids
         ]
-        logger.warning(
+        _log_espn_partial_refresh_warning(
+            provider_date,
+            "stale-only",
+            failed_league_ids,
             f"[APIProvider] ESPN partial refresh returned no fresh matches; "
-            f"preserved {len(matches)} stale match(es) from failed league(s)."
+            f"preserved {len(matches)} stale match(es) from failed league(s).",
         )
     else:
         matches = []
