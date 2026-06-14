@@ -806,6 +806,52 @@ class UtcFootballLifecycleTests(unittest.TestCase):
             datetime(2026, 6, 3, 13, 0, tzinfo=timezone.utc),
         )
 
+    def test_scheduler_sleep_plan_wakes_for_unresolved_expected_ft_before_next_kickoff(self):
+        from modules import match_state, scheduler
+
+        future = espn_match(fixture_id="next-kickoff")
+        future["fixture"]["date"] = "2026-06-03T15:00:00Z"
+        now_utc = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        expected_ft_utc = datetime(2026, 6, 3, 12, 30, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run(memory_dir: Path):
+            match_state.save_match_state(
+                {
+                    "version": 1,
+                    "fixtures": {
+                        "unresolved-ft-check": {
+                            "fixture_id": "unresolved-ft-check",
+                            "kickoff_utc": "2026-06-03T10:38:00+00:00",
+                            "expected_ft_utc": expected_ft_utc.isoformat(),
+                            "last_status": "2H",
+                            "last_seen_utc": "2026-06-03T11:55:00+00:00",
+                            "ft_announced": False,
+                            "memory_updated": False,
+                        },
+                    },
+                },
+                memory_dir=memory_dir,
+            )
+            with (
+                patch.object(scheduler.match_state, "BOT_MEMORY_DIR", memory_dir),
+                patch.object(
+                    scheduler.api_provider,
+                    "fetch_upcoming_football_schedule",
+                    AsyncMock(return_value=[future]),
+                ),
+            ):
+                return await scheduler._plan_sleep_until_next_fixture(fake_bot, now_utc)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            next_check = asyncio.run(run(Path(tmp)))
+
+        self.assertEqual(next_check, expected_ft_utc)
+        self.assertEqual(
+            scheduler.get_football_scheduler_status()["next_planned_wake_utc"],
+            expected_ft_utc,
+        )
+
     def test_scheduler_sleep_plan_is_utc_not_local_midnight_bounded(self):
         from modules import scheduler
 

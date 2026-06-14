@@ -245,3 +245,26 @@ def expected_ft_due_fixture_ids(now_utc: datetime, memory_dir: Path | None = Non
         if parse_provider_utc(expected) <= now_utc:
             due.append(fixture_id)
     return due
+
+
+def next_unresolved_expected_ft_utc(now_utc: datetime, memory_dir: Path | None = None) -> datetime | None:
+    now_utc = now_utc.astimezone(timezone.utc)
+    state = load_match_state(memory_dir=memory_dir)
+    candidates = []
+    for fixture in state.get("fixtures", {}).values():
+        if fixture.get("last_status") in match_lifecycle.TERMINAL_NON_FT_STATUSES:
+            continue
+        if fixture.get("ft_announced") and fixture.get("memory_updated"):
+            continue
+        if match_lifecycle.state_is_prunable(fixture, now_utc):
+            continue
+        expected = fixture.get("expected_ft_utc")
+        if not expected:
+            continue
+        try:
+            expected_utc = parse_provider_utc(expected)
+        except Exception:
+            continue
+        if expected_utc > now_utc:
+            candidates.append(expected_utc)
+    return min(candidates) if candidates else None

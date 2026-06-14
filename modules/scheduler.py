@@ -144,13 +144,20 @@ async def _plan_sleep_until_next_fixture(bot, now_utc: datetime) -> datetime:
     schedule_refresh = now_utc + timedelta(seconds=_FOOTBALL_SLEEP_REFRESH_SEC)
     matches = await api_provider.fetch_upcoming_football_schedule(bot.http_session, now_utc)
     kickoff, wake = _next_scheduled_football_wake(matches, now_utc)
-    next_check = min(schedule_refresh, wake) if wake else schedule_refresh
+    next_ft_check = match_state.next_unresolved_expected_ft_utc(now_utc)
+    next_check_candidates = [schedule_refresh]
+    if wake:
+        next_check_candidates.append(wake)
+    if next_ft_check:
+        next_check_candidates.append(next_ft_check)
+    next_check = min(next_check_candidates)
+    planned_wake = min((value for value in (wake, next_ft_check) if value), default=None)
     _set_football_scheduler_state(
         mode="sleeping",
         next_football_check_utc=next_check,
         next_schedule_refresh_utc=schedule_refresh,
         next_planned_kickoff_utc=kickoff,
-        next_planned_wake_utc=wake,
+        next_planned_wake_utc=planned_wake,
     )
     return next_check
 
