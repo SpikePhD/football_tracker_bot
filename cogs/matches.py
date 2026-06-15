@@ -4,9 +4,14 @@ from collections import defaultdict
 from datetime import timedelta
 from discord.ext import commands
 from config import LEAGUE_NAME_MAP, TENNIS_UPCOMING_DAYS
-from modules import api_provider, match_lifecycle
+from modules import api_provider, football_memory, match_lifecycle
 from utils.time_utils import to_bot_tz, bot_now, utc_now
-from utils.event_formatter import format_match_events, format_shootout_segments, event_completeness_note
+from utils.event_formatter import (
+    format_match_events,
+    format_shootout_segments,
+    event_completeness_note,
+    normal_match_events,
+)
 from modules.discord_poster import post_new_message_to_context
 from utils.tennis_formatter import format_tennis_snapshot_line
 
@@ -20,6 +25,57 @@ def _football_sort_key(match: dict):
 def _football_local_date(match: dict):
     kickoff = match_lifecycle.fixture_kickoff_utc(match)
     return to_bot_tz(kickoff).date() if kickoff else None
+
+
+def _goal_event_count(events: list) -> int:
+    return sum(1 for event in normal_match_events(events or []) if event.get("type") == "Goal")
+
+
+def _total_goals(match: dict) -> int | None:
+    goals = match.get("goals", {}) or {}
+    try:
+        return int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _events_are_better_for_display(match: dict, candidate_events: list) -> bool:
+    current_events = match.get("events", []) or []
+    candidate_goals = _goal_event_count(candidate_events)
+    current_goals = _goal_event_count(current_events)
+    if candidate_goals <= current_goals:
+        return False
+
+    total_goals = _total_goals(match)
+    if total_goals is None:
+        return True
+    return abs(total_goals - candidate_goals) <= abs(total_goals - current_goals)
+
+
+def _apply_persisted_ft_events(fixtures: list) -> list:
+    if not any(match_lifecycle.is_ft(match) for match in fixtures):
+        return fixtures
+
+    try:
+        persisted_matches = football_memory.load_memory().get("matches", {})
+    except Exception as e:
+        logger.warning("Could not load football memory for snapshot event reuse: %s", e)
+        return fixtures
+
+    merged = []
+    for match in fixtures:
+        fixture_id = match_lifecycle.fixture_identity(match)
+        persisted = persisted_matches.get(str(fixture_id)) if fixture_id is not None else None
+        persisted_events = persisted.get("events", []) if isinstance(persisted, dict) else []
+        if (
+            match_lifecycle.is_ft(match)
+            and isinstance(persisted_events, list)
+            and _events_are_better_for_display(match, persisted_events)
+        ):
+            merged.append({**match, "events": list(persisted_events)})
+        else:
+            merged.append(match)
+    return merged
 
 
 def filter_football_for_local_matchday(fixtures: list, now_utc) -> list:
@@ -239,6 +295,7 @@ async def fetch_combined_matches_snapshot(session) -> tuple[list, list, str]:
             now,
         )
         football_fixtures = await api_provider.enrich_fixtures(session, football_fixtures)
+        football_fixtures = _apply_persisted_ft_events(football_fixtures)
     except Exception as e:
         logger.error(f"Failed to fetch football snapshot: {e}", exc_info=True)
 

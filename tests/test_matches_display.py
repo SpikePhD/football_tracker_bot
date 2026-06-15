@@ -154,6 +154,69 @@ class MatchesDisplayTests(unittest.TestCase):
         self.assertIn("J. Lukic", content)
         self.assertNotIn("missing from event data", content)
 
+    def test_fetch_combined_snapshot_uses_persisted_ft_events_before_warning(self):
+        from cogs import matches
+        from modules import football_memory
+
+        now_utc = datetime(2026, 6, 15, 4, 30, tzinfo=timezone.utc)
+        display = _fixture("netherlands-japan", "2026-06-14T21:00:00Z", status="FT")
+        display["teams"]["home"] = {"id": "100", "name": "Netherlands"}
+        display["teams"]["away"] = {"id": "200", "name": "Japan"}
+        display["goals"] = {"home": 2, "away": 2}
+        display["events"] = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Keito Nakamura"},
+                "team": {"id": "200", "name": "Japan"},
+                "time": {"elapsed": 56},
+            },
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Crysencio Summerville"},
+                "team": {"id": "100", "name": "Netherlands"},
+                "time": {"elapsed": 63},
+            },
+        ]
+        persisted_events = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Japan First"},
+                "team": {"id": "200", "name": "Japan"},
+                "time": {"elapsed": 12},
+            },
+            *display["events"],
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Netherlands Equalizer"},
+                "team": {"id": "100", "name": "Netherlands"},
+                "time": {"elapsed": 88},
+            },
+        ]
+
+        async def run():
+            with (
+                patch.object(matches, "utc_now", return_value=now_utc),
+                patch.object(matches.api_provider, "fetch_day", AsyncMock(return_value=[display])),
+                patch.object(matches.api_provider, "fetch_tennis_day", AsyncMock(return_value=[])),
+                patch.object(matches.api_provider, "enrich_fixtures", AsyncMock(return_value=[display])),
+                patch.object(
+                    football_memory,
+                    "load_memory",
+                    return_value={"matches": {"netherlands-japan": {"events": persisted_events}}},
+                ),
+            ):
+                return await matches.fetch_combined_matches_snapshot(None)
+
+        _football_fixtures, _tennis, content = asyncio.run(run())
+
+        self.assertIn("Japan First", content)
+        self.assertIn("Netherlands Equalizer", content)
+        self.assertNotIn("missing from event data", content)
+
     def test_upcoming_api_view_uses_wide_provider_window_grouped_by_future_date(self):
         from cogs import matches
 
