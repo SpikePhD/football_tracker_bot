@@ -1,7 +1,9 @@
 ﻿import asyncio
 import os
+import tempfile
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from tests.regression_helpers import (
@@ -19,8 +21,111 @@ class ProviderEnrichmentTests(unittest.TestCase):
     def setUp(self):
         reset_api_provider_state()
 
+    def test_fallback_window_maps_api_football_fixture_to_cached_espn_fixture(self):
+        from modules import api_provider, match_state
+
+        espn = espn_match(fixture_id="760429", league_id=1)
+        espn["fixture"]["date"] = "2026-06-15T22:00:00+00:00"
+        espn["teams"]["home"]["name"] = "Saudi Arabia"
+        espn["teams"]["away"]["name"] = "Uruguay"
+        api_match = espn_match(fixture_id=1489379, league_id=1)
+        api_match["fixture"]["date"] = "2026-06-15T22:00:00+00:00"
+        api_match["fixture"]["status"] = {"short": "1H", "elapsed": 20}
+        api_match["teams"]["home"]["name"] = "Saudi Arabia"
+        api_match["teams"]["away"]["name"] = "Uruguay"
+
+        async def run(memory_dir: Path):
+            api_provider._football_scoreboard_cache["2026-06-15"] = {
+                "matches": [espn],
+                "fetched_at": datetime(2026, 6, 15, 22, 10),
+            }
+            with (
+                patch.object(match_state, "BOT_MEMORY_DIR", memory_dir),
+                patch.object(api_provider, "_should_try_espn_now", return_value=False),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "_fetch_api_football_date", AsyncMock(return_value=[api_match])),
+            ):
+                return await api_provider.fetch_football_window(
+                    None,
+                    datetime(2026, 6, 15, 20, 0),
+                    datetime(2026, 6, 16, 0, 0),
+                    now_utc=datetime(2026, 6, 15, 22, 30),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            matches = asyncio.run(run(Path(tmp)))
+
+        self.assertEqual([m["fixture"]["id"] for m in matches], [1489379])
+        self.assertEqual(matches[0]["provider"], "api_football")
+        self.assertEqual(matches[0]["provider_fixture_id"], "1489379")
+        self.assertEqual(matches[0]["canonical_fixture_id"], "760429")
+        self.assertEqual(matches[0]["provider_ids"]["espn"], "760429")
+        self.assertEqual(matches[0]["provider_ids"]["api_football"], "1489379")
+
+    def test_fallback_window_dedupes_by_canonical_fixture_id(self):
+        from modules import api_provider, match_state
+
+        api_one = espn_match(fixture_id=1489379, league_id=1)
+        api_one["fixture"]["date"] = "2026-06-15T22:00:00+00:00"
+        api_one["canonical_fixture_id"] = "760429"
+        api_one["provider"] = "api_football"
+        api_one["provider_fixture_id"] = "1489379"
+        api_two = espn_match(fixture_id=1489379, league_id=1)
+        api_two["fixture"]["date"] = "2026-06-15T22:00:00+00:00"
+        api_two["canonical_fixture_id"] = "760429"
+        api_two["provider"] = "api_football"
+        api_two["provider_fixture_id"] = "1489379"
+
+        async def run(memory_dir: Path):
+            with (
+                patch.object(match_state, "BOT_MEMORY_DIR", memory_dir),
+                patch.object(api_provider, "_should_try_espn_now", return_value=False),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "_fetch_api_football_date", AsyncMock(return_value=[api_one, api_two])),
+            ):
+                return await api_provider.fetch_football_window(
+                    None,
+                    datetime(2026, 6, 15, 20, 0),
+                    datetime(2026, 6, 16, 0, 0),
+                    now_utc=datetime(2026, 6, 15, 22, 30),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            matches = asyncio.run(run(Path(tmp)))
+
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["canonical_fixture_id"], "760429")
+
+    def test_unmatched_api_football_fixture_keeps_provider_identity(self):
+        from modules import api_provider, match_state
+
+        api_match = espn_match(fixture_id=1489378, league_id=1)
+        api_match["fixture"]["date"] = "2026-06-15T22:00:00+00:00"
+
+        async def run(memory_dir: Path):
+            with (
+                patch.object(match_state, "BOT_MEMORY_DIR", memory_dir),
+                patch.object(api_provider, "_should_try_espn_now", return_value=False),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "_fetch_api_football_date", AsyncMock(return_value=[api_match])),
+            ):
+                return await api_provider.fetch_football_window(
+                    None,
+                    datetime(2026, 6, 15, 20, 0),
+                    datetime(2026, 6, 16, 0, 0),
+                    now_utc=datetime(2026, 6, 15, 22, 30),
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            matches = asyncio.run(run(Path(tmp)))
+
+        self.assertEqual(matches[0]["provider"], "api_football")
+        self.assertEqual(matches[0]["provider_fixture_id"], "1489378")
+        self.assertNotIn("canonical_fixture_id", matches[0])
+
     def test_live_mapping_uses_api_football_live_feed_not_season_lookup(self):
         from modules import api_provider
+        from modules import match_state
 
         match = espn_match(fixture_id="737155")
         other_live_fixture = {
@@ -40,18 +145,29 @@ class ProviderEnrichmentTests(unittest.TestCase):
             },
         }
 
-        async def run():
+        async def run(memory_dir: Path):
             api_provider._reset_enrich_state_for_today()
             api_provider._api_fixture_id_cache.clear()
             with (
+                patch.object(match_state, "BOT_MEMORY_DIR", memory_dir),
                 patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value={"response": [other_live_fixture, live_fixture]})) as live_fetch,
                 patch.object(api_provider.api_client, "_make_request", AsyncMock(return_value={"response": []})) as make_request,
             ):
                 resolved = await api_provider.resolve_api_football_fixture_id(None, match)
-                return resolved, live_fetch, make_request
+                state = match_state.get_fixture_state("737155", memory_dir=memory_dir)
+                canonical = match_state.find_canonical_fixture_id(
+                    "api_football",
+                    "999999",
+                    memory_dir=memory_dir,
+                )
+                return resolved, live_fetch, make_request, state, canonical
 
-        resolved, live_fetch, make_request = asyncio.run(run())
+        with tempfile.TemporaryDirectory() as tmp:
+            resolved, live_fetch, make_request, state, canonical = asyncio.run(run(Path(tmp)))
         self.assertEqual(resolved, 999999)
+        self.assertEqual(canonical, "737155")
+        self.assertEqual(state["provider_ids"]["espn"], "737155")
+        self.assertEqual(state["provider_ids"]["api_football"], "999999")
         live_fetch.assert_awaited_once_with(None)
         make_request.assert_not_awaited()
 

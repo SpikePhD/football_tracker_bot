@@ -56,11 +56,12 @@ cogs/
 - Route proactive posts through `modules/discord_poster.py` helpers.
 - Do not create ad-hoc `aiohttp.ClientSession` instances.
 - Do not bypass `modules/api_provider.py` for fixture data access paths.
-- Keep football lifecycle decisions UTC-first and fixture-ID-first.
+- Keep football lifecycle decisions UTC-first and canonical-fixture-ID-first.
 - Use the configured timezone only for display, logs, grouping, and scheduled human-facing routines.
 - Keep football lifecycle polling on `match_lifecycle.provider_window(...)`; `football_display_lookup_window_hours` is for public snapshots and upcoming displays only.
 - Keep football and tennis scheduler wake decisions in `modules/scheduler.py`; loops should process work, not decide long idle sleeps.
 - Keep public football display snapshots on the enrichment path before formatting, so `!matches` cannot downgrade learned event details.
+- Key football live-state, FT-state, and memory-state by `match_lifecycle.fixture_identity(...)`, not raw provider `fixture.id`.
 - Keep runtime state in `bot_memory/` via `modules/storage.py`.
 - Keep `inject_memory/` read-only from runtime code.
 - Keep secrets out of `config.json`.
@@ -80,13 +81,21 @@ Provider flow:
 3. ESPN is retried after the configured retry interval.
 4. API-Football event enrichment is attempted only when ESPN score totals exceed ESPN goal-event count.
 
+Provider identity rules:
+
+- ESPN IDs are the preferred canonical fixture IDs.
+- API-Football IDs must be stored as aliases in `match_state.provider_ids` when they map to an ESPN fixture.
+- API-Football fallback/date/live payloads should be annotated with `provider`, `provider_fixture_id`, and `canonical_fixture_id` when mapping is known.
+- Dedupe provider results by `match_lifecycle.fixture_identity(...)`, not raw provider ID.
+- Do not post first-time FT/memory work from an unmapped API-Football terminal fixture unless it was already tracked live under that API ID.
+
 Enrichment protections:
 
 - configured retry delays and grace period
 - per-tick call cap
 - per configured-local-day enrichment call budget
 - live fixture payload cache
-- successful ESPN-to-API-Football fixture mapping cache
+- successful ESPN-to-API-Football fixture mapping cache and persisted provider aliases
 - temporary failed-mapping cache
 - incomplete API-Football event cooldown
 - best-known event snapshots to prevent ESPN event-data downgrades
@@ -134,7 +143,9 @@ Add runtime state:
 2. Store it under `bot_memory/`.
 3. Ensure `install.sh` and `update.sh` create safe defaults without overwriting existing state.
 
-Football fixture lifecycle state is centralized in `modules/match_state.py`. Do not add new daily football state files or local-midnight clears. Use fixture IDs, UTC kickoff times, provider status, explicit retention windows, and `match_state.json` flags such as `ft_announced` and `memory_updated`.
+Football fixture lifecycle state is centralized in `modules/match_state.py`. Do not add new daily football state files or local-midnight clears. Use canonical fixture IDs, provider aliases, UTC kickoff times, provider status, explicit retention windows, and `match_state.json` flags such as `ft_announced` and `memory_updated`.
+
+When adding a provider path, ensure it either produces the canonical ESPN fixture ID or records a provider alias through `match_state.link_provider_fixture_id(...)`. Merging duplicate provider records must preserve true dedupe flags, `live_message_id`, score/status timestamps, and provider IDs.
 
 ## Validation Before Push
 

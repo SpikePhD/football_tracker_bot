@@ -46,6 +46,18 @@ def _normalize_state(state: dict | None) -> dict:
         normalized.update({k: v for k, v in state.items() if k != "fixtures"})
         fixtures = state.get("fixtures", {})
         normalized["fixtures"] = fixtures if isinstance(fixtures, dict) else {}
+        for fixture_id, fixture in list(normalized["fixtures"].items()):
+            if not isinstance(fixture, dict):
+                del normalized["fixtures"][fixture_id]
+                continue
+            provider_ids = fixture.get("provider_ids")
+            if not isinstance(provider_ids, dict):
+                provider_ids = {}
+            fixture["provider_ids"] = {
+                str(provider): str(provider_fixture_id)
+                for provider, provider_fixture_id in provider_ids.items()
+                if provider_fixture_id is not None
+            }
     return normalized
 
 
@@ -101,6 +113,128 @@ def _score(match: dict) -> dict:
     return {"home": goals.get("home"), "away": goals.get("away")}
 
 
+def _provider_name(provider: str | None) -> str:
+    return str(provider or "espn")
+
+
+def _raw_fixture_id(match: dict) -> str | None:
+    fixture_id = match.get("fixture", {}).get("id")
+    return str(fixture_id) if fixture_id is not None else None
+
+
+def _provider_fixture_id(match: dict, provider: str) -> str | None:
+    provider_fixture_id = match.get("provider_fixture_id")
+    if provider_fixture_id is not None:
+        return str(provider_fixture_id)
+    provider_ids = match.get("provider_ids", {})
+    if isinstance(provider_ids, dict) and provider_ids.get(provider) is not None:
+        return str(provider_ids[provider])
+    return _raw_fixture_id(match)
+
+
+def _merge_fixture_records(canonical_id: str, canonical: dict, duplicate: dict) -> dict:
+    canonical["fixture_id"] = canonical_id
+    canonical["provider_ids"] = {
+        **(duplicate.get("provider_ids") if isinstance(duplicate.get("provider_ids"), dict) else {}),
+        **(canonical.get("provider_ids") if isinstance(canonical.get("provider_ids"), dict) else {}),
+    }
+
+    for flag in ("ft_announced", "memory_updated"):
+        canonical[flag] = bool(canonical.get(flag)) or bool(duplicate.get(flag))
+
+    if canonical.get("live_message_id") is None and duplicate.get("live_message_id") is not None:
+        canonical["live_message_id"] = duplicate.get("live_message_id")
+
+    for key in (
+        "provider",
+        "kickoff_utc",
+        "expected_ft_utc",
+        "last_status",
+        "last_score",
+        "last_seen_utc",
+        "terminal_utc",
+    ):
+        if canonical.get(key) is None and duplicate.get(key) is not None:
+            canonical[key] = duplicate.get(key)
+
+    return canonical
+
+
+def _find_canonical_fixture_id_in_state(state: dict, provider: str, provider_fixture_id: str) -> str | None:
+    provider = _provider_name(provider)
+    provider_fixture_id = str(provider_fixture_id)
+    for fixture_id, fixture in state.get("fixtures", {}).items():
+        provider_ids = fixture.get("provider_ids", {})
+        if isinstance(provider_ids, dict) and str(provider_ids.get(provider)) == provider_fixture_id:
+            return str(fixture_id)
+    return None
+
+
+def _link_provider_fixture_id_in_state(
+    state: dict,
+    canonical_fixture_id,
+    provider: str,
+    provider_fixture_id,
+) -> dict:
+    canonical_id = str(canonical_fixture_id)
+    provider = _provider_name(provider)
+    provider_id = str(provider_fixture_id)
+
+    fixtures = state.setdefault("fixtures", {})
+    fixture = fixtures.setdefault(
+        canonical_id,
+        {
+            "fixture_id": canonical_id,
+            "ft_announced": False,
+            "memory_updated": False,
+            "provider_ids": {},
+        },
+    )
+
+    existing_key = _find_canonical_fixture_id_in_state(state, provider, provider_id)
+    if existing_key and existing_key != canonical_id:
+        duplicate = fixtures.pop(existing_key)
+        fixture = _merge_fixture_records(canonical_id, fixture, duplicate)
+        fixtures[canonical_id] = fixture
+
+    provider_ids = fixture.setdefault("provider_ids", {})
+    provider_ids[provider] = provider_id
+    return deepcopy(fixture)
+
+
+def link_provider_fixture_id(
+    canonical_fixture_id,
+    provider: str,
+    provider_fixture_id,
+    memory_dir: Path | None = None,
+) -> dict:
+    def mutator(state: dict) -> dict:
+        return _link_provider_fixture_id_in_state(
+            state,
+            canonical_fixture_id,
+            provider,
+            provider_fixture_id,
+        )
+
+    return update_match_state(mutator, memory_dir=memory_dir)
+
+
+def find_canonical_fixture_id(provider: str, provider_fixture_id, memory_dir: Path | None = None) -> str | None:
+    state = load_match_state(memory_dir=memory_dir)
+    return _find_canonical_fixture_id_in_state(state, provider, str(provider_fixture_id))
+
+
+def get_provider_fixture_id(fixture_id, provider: str, memory_dir: Path | None = None) -> str | None:
+    fixture = get_fixture_state(fixture_id, memory_dir=memory_dir)
+    if not fixture:
+        return None
+    provider_ids = fixture.get("provider_ids", {})
+    if not isinstance(provider_ids, dict):
+        return None
+    value = provider_ids.get(provider)
+    return str(value) if value is not None else None
+
+
 def upsert_fixture_from_match(
     match: dict,
     now_utc: datetime,
@@ -115,20 +249,27 @@ def upsert_fixture_from_match(
     expected_ft = match_lifecycle.expected_ft_check_utc(match)
     status = match_lifecycle.status_short(match)
     terminal_utc = now_utc if match_lifecycle.is_terminal(match) else None
+    provider = _provider_name(match.get("provider") or source)
+    provider_id = _provider_fixture_id(match, provider)
 
     def mutator(state: dict) -> dict:
+        if provider_id is not None:
+            linked_id = _find_canonical_fixture_id_in_state(state, provider, provider_id)
+            if linked_id and linked_id != fixture_id:
+                _link_provider_fixture_id_in_state(state, fixture_id, provider, provider_id)
         fixture = state["fixtures"].setdefault(
             fixture_id,
             {
                 "fixture_id": fixture_id,
                 "ft_announced": False,
                 "memory_updated": False,
+                "provider_ids": {},
             },
         )
         fixture.update(
             {
                 "fixture_id": fixture_id,
-                "provider": source,
+                "provider": provider,
                 "kickoff_utc": _iso(kickoff),
                 "expected_ft_utc": _iso(expected_ft),
                 "last_status": status,
@@ -136,6 +277,12 @@ def upsert_fixture_from_match(
                 "last_seen_utc": _iso(now_utc),
             }
         )
+        provider_ids = fixture.setdefault("provider_ids", {})
+        if provider_id is not None:
+            provider_ids[provider] = provider_id
+        for extra_provider, extra_provider_id in (match.get("provider_ids") or {}).items():
+            if extra_provider_id is not None:
+                provider_ids[str(extra_provider)] = str(extra_provider_id)
         if terminal_utc and not fixture.get("terminal_utc"):
             fixture["terminal_utc"] = _iso(terminal_utc)
         return deepcopy(fixture)

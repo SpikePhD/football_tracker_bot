@@ -310,13 +310,111 @@ def _dedupe_by_fixture_id(matches: list[dict]) -> list[dict]:
     return list(deduped.values())
 
 
+def _cached_espn_matches() -> list[dict]:
+    candidates: dict[str, dict] = {}
+    for cached in _football_scoreboard_cache.values():
+        for match in cached.get("matches", []):
+            if match.get("provider") == "api_football":
+                continue
+            raw_id = match.get("fixture", {}).get("id")
+            if raw_id is not None:
+                candidates[str(raw_id)] = match
+    for match in _cache:
+        if match.get("provider") == "api_football":
+            continue
+        raw_id = match.get("fixture", {}).get("id")
+        if raw_id is not None:
+            candidates[str(raw_id)] = match
+    return list(candidates.values())
+
+
+def _map_api_football_to_cached_espn(api_match: dict) -> str | None:
+    api_fixture_id = api_match.get("fixture", {}).get("id")
+    if api_fixture_id is None:
+        return None
+
+    best: tuple[float, str] | None = None
+    for espn_match in _cached_espn_matches():
+        try:
+            league_id = int(espn_match.get("league", {}).get("id"))
+        except (TypeError, ValueError):
+            continue
+        matched_api_id, confidence = _match_api_fixture_candidate(
+            espn_match,
+            [api_match],
+            league_id,
+        )
+        if matched_api_id is None or str(matched_api_id) != str(api_fixture_id):
+            continue
+        espn_fixture_id = espn_match.get("fixture", {}).get("id")
+        if espn_fixture_id is None:
+            continue
+        if best is None or confidence > best[0]:
+            best = (confidence, str(espn_fixture_id))
+    return best[1] if best else None
+
+
+def _annotate_api_football_fixture(match: dict) -> dict:
+    raw_fixture_id = match.get("fixture", {}).get("id")
+    if raw_fixture_id is None:
+        return {**match, "provider": "api_football"}
+
+    api_fixture_id = str(raw_fixture_id)
+    annotated = {
+        **match,
+        "provider": "api_football",
+        "provider_fixture_id": api_fixture_id,
+        "provider_ids": {
+            **(match.get("provider_ids") if isinstance(match.get("provider_ids"), dict) else {}),
+            "api_football": api_fixture_id,
+        },
+    }
+
+    canonical_id = match.get("canonical_fixture_id")
+    if canonical_id is None:
+        canonical_id = match_state.find_canonical_fixture_id("api_football", api_fixture_id)
+    if canonical_id is None:
+        canonical_id = _map_api_football_to_cached_espn(annotated)
+
+    if canonical_id is not None and str(canonical_id) != api_fixture_id:
+        canonical_id = str(canonical_id)
+        annotated["canonical_fixture_id"] = canonical_id
+        annotated["provider_ids"] = {
+            **annotated["provider_ids"],
+            "espn": canonical_id,
+            "api_football": api_fixture_id,
+        }
+        match_state.link_provider_fixture_id(canonical_id, "espn", canonical_id)
+        match_state.link_provider_fixture_id(canonical_id, "api_football", api_fixture_id)
+
+    return annotated
+
+
+def _annotate_api_football_fixtures(matches: list[dict]) -> list[dict]:
+    return [_annotate_api_football_fixture(match) for match in matches]
+
+
+def _remember_api_fixture_mapping(espn_fixture_id: str, api_fixture_id) -> None:
+    _api_fixture_id_cache[str(espn_fixture_id)] = api_fixture_id
+    try:
+        match_state.link_provider_fixture_id(str(espn_fixture_id), "espn", str(espn_fixture_id))
+        match_state.link_provider_fixture_id(str(espn_fixture_id), "api_football", str(api_fixture_id))
+    except Exception as exc:
+        logger.warning(
+            "[Enrich] Could not persist ESPN/API-Football fixture mapping %s -> %s: %s",
+            espn_fixture_id,
+            api_fixture_id,
+            exc,
+        )
+
+
 async def _fetch_api_football_date(session: aiohttp.ClientSession, provider_date: str) -> list[dict]:
     now = bot_now()
     cached = _api_football_date_cache.get(provider_date)
     if cached and (now - cached["fetched_at"]).total_seconds() < CACHE_TTL_SEC:
         return cached["matches"]
 
-    matches = await api_client.fetch_fixtures_by_date(session, provider_date)
+    matches = _annotate_api_football_fixtures(await api_client.fetch_fixtures_by_date(session, provider_date))
     _api_football_date_cache[provider_date] = {"matches": matches, "fetched_at": now}
     return matches
 
@@ -333,7 +431,7 @@ async def _fetch_api_football_live_matches(session: aiohttp.ClientSession) -> li
         response = _api_live_fixtures_cache.get("response")
         return response if isinstance(response, list) else []
 
-    matches = await api_client.fetch_live_fixtures(session)
+    matches = _annotate_api_football_fixtures(await api_client.fetch_live_fixtures(session))
     _api_live_fixtures_cache = {"response": matches}
     _api_live_fixtures_cache_ts = now
     return matches
@@ -362,7 +460,7 @@ async def fetch_football_window(
         date_results = await asyncio.gather(
             *(_fetch_api_football_date(session, provider_date) for provider_date in provider_dates)
         )
-        matches = _dedupe_by_fixture_id([m for result in date_results for m in result])
+        matches = _dedupe_by_fixture_id(_annotate_api_football_fixtures([m for result in date_results for m in result]))
 
     start_utc = start_utc.astimezone(timezone.utc)
     end_utc = end_utc.astimezone(timezone.utc)
@@ -1097,7 +1195,7 @@ async def _resolve_live_api_football_fixture_id(
         )
         return None
 
-    _api_fixture_id_cache[espn_fixture_id] = api_fixture_id
+    _remember_api_fixture_mapping(espn_fixture_id, api_fixture_id)
     logger.info(
         f"[Enrich] Mapped ESPN fixture {espn_fixture_id} -> API-Football live fixture "
         f"{api_fixture_id} (confidence {confidence:.2f})"
@@ -1121,6 +1219,7 @@ async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_m
             f"[Enrich] Using cached ESPN -> API-Football fixture mapping: "
             f"{espn_fixture_id} -> {_api_fixture_id_cache[espn_fixture_id]}"
         )
+        _remember_api_fixture_mapping(espn_fixture_id, _api_fixture_id_cache[espn_fixture_id])
         return _api_fixture_id_cache[espn_fixture_id]
 
     now_local = bot_now()
@@ -1176,7 +1275,7 @@ async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_m
         )
         return None
 
-    _api_fixture_id_cache[espn_fixture_id] = api_fixture_id
+    _remember_api_fixture_mapping(espn_fixture_id, api_fixture_id)
     logger.info(
         f"[Enrich] Mapped ESPN fixture {espn_fixture_id} -> API-Football fixture "
         f"{api_fixture_id} (confidence {confidence:.2f})"

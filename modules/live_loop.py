@@ -112,7 +112,9 @@ def seed_already_posted(fixtures: list) -> None:
     for match in fixtures:
         if not match_lifecycle.is_live(match):
             continue
-        match_id = str(match["fixture"]["id"])
+        match_id = match_lifecycle.fixture_identity(match)
+        if match_id is None:
+            continue
         status_short = match_lifecycle.status_short(match)
         score = match.get("goals", {})
         events = match.get("events", [])
@@ -152,16 +154,27 @@ async def run_live_loop(bot):
         seen_live_ids: set[str] = set()
 
         for match in matches:
-            match_id = str(match["fixture"]["id"])
+            match_id = match_lifecycle.fixture_identity(match)
+            if match_id is None:
+                continue
             seen_live_ids.add(match_id)
             _missing_since.pop(match_id, None)
             if not is_tracked_for_ft(match_id):
                 track_match_for_ft(match, now_utc=now_utc)
             else:
-                match_state.upsert_fixture_from_match(match, now_utc, source="espn")
+                match_state.upsert_fixture_from_match(
+                    match,
+                    now_utc,
+                    source=match.get("provider") or "espn",
+                )
 
             # Enrich first so dedup key and outgoing message reflect final data.
             enriched = await api_provider.enrich_fixture_events(bot.http_session, match)
+            enriched_id = match_lifecycle.fixture_identity(enriched)
+            if enriched_id is not None and enriched_id != match_id:
+                match_id = enriched_id
+                seen_live_ids.add(match_id)
+                _missing_since.pop(match_id, None)
 
             home = enriched["teams"]["home"]["name"]
             away = enriched["teams"]["away"]["name"]

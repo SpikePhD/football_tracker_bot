@@ -253,7 +253,7 @@ async def update_match_data(
     Process a Full-Time match and return updates for memory.
     Returns: {"match": {...}, "home_team": {...}, "away_team": {...}}
     """
-    match_id = str(match["fixture"]["id"])
+    match_id = match_lifecycle.fixture_identity(match)
     home_id = str(match["teams"]["home"]["id"])
     away_id = str(match["teams"]["away"]["id"])
     league_id = match["league"]["id"]
@@ -509,7 +509,7 @@ async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> dict:
     if not update_result:
         return {"updated": False, "reason": "missing_required_data"}
 
-    match_id = str(match["fixture"]["id"])
+    match_id = match_lifecycle.fixture_identity(match)
     home_id = str(match["teams"]["home"]["id"])
     away_id = str(match["teams"]["away"]["id"])
 

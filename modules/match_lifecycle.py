@@ -29,6 +29,9 @@ def _coerce_utc(value: datetime | str | None) -> datetime | None:
 
 
 def fixture_identity(match: dict) -> str | None:
+    canonical_id = match.get("canonical_fixture_id")
+    if canonical_id is not None:
+        return str(canonical_id)
     fixture_id = match.get("fixture", {}).get("id")
     return str(fixture_id) if fixture_id is not None else None
 

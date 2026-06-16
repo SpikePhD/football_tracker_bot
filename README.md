@@ -30,21 +30,23 @@ Football data flows through `modules/api_provider.py`.
 - ESPN is primary for fixtures, live polling, and full-time detection.
 - API-Football is secondary for provider fallback and sparse event enrichment.
 - Enrichment is bounded by retry delays, per-tick caps, daily call budgets, mapping caches, incomplete-response cooldowns, and best-known event reuse.
-- Football fixture lookup uses rolling UTC-aware windows and dedupes by fixture ID across provider dates.
+- Football fixture lookup uses rolling UTC-aware windows and dedupes by canonical fixture identity across provider dates.
+- ESPN fixture IDs are preferred as the canonical identity when known. API-Football fixture IDs are stored as provider aliases so fallback/live/FT data for the same real match does not create a second lifecycle.
 - Public football snapshots reuse the same enrichment/best-known event layer used by live and FT paths, so `!matches` should not regress to a stale ESPN event list after richer event data has already been learned.
 
 ## Football Lifecycle
 
-Football match lifecycle is UTC-first and fixture-ID-first. The bot tracks a fixture by provider fixture ID, UTC kickoff, provider status, retention windows, and persisted state in `bot_memory/match_state.json`.
+Football match lifecycle is UTC-first and canonical-fixture-ID-first. The bot tracks a fixture by canonical fixture ID, provider aliases, UTC kickoff, provider status, retention windows, and persisted state in `bot_memory/match_state.json`.
 
 The configured timezone is not used to decide whether a football match is active, finished, stale, or eligible for memory updates. It is used only for display, logs, local daily summaries, and scheduled human-facing routines. This prevents cross-midnight tournament fixtures from being dropped when the configured local date changes.
 
 Important lifecycle behavior:
 
 - live and FT state survives local midnight, restarts, provider outages, and Discord reconnects
-- FT announcements are exactly-once per fixture ID
-- football memory updates are exactly-once per fixture ID and retry independently from FT posts
-- live message IDs are fixture-ID based and can be replaced if a Discord message is stale or deleted
+- FT announcements are exactly-once per canonical fixture ID
+- football memory updates are exactly-once per canonical fixture ID and retry independently from FT posts
+- live message IDs are canonical-fixture-ID based and can be replaced if a Discord message is stale or deleted
+- API-Football fallback fixtures are mapped back to ESPN canonical IDs through persisted `provider_ids` aliases when a conservative league/kickoff/team-name match is available
 - old terminal or stale fixtures are pruned by retention windows, not midnight clears
 
 Football and tennis use a sleep/awake scheduler model to reduce idle API calls. When no relevant match is live, near kickoff/start, due for FT handling, or awaiting announcement work, the scheduler sleeps and refreshes the future schedule every 6 hours. It wakes at the configured football pre-match window or tennis pre-announcement window, then polls at the configured provider interval while work remains.
@@ -93,7 +95,7 @@ Do not put secrets in `config.json`. Start from `.env.example`, `.env.deploy.exa
 Important `config.json` sections:
 
 - `bot` - bot name/profile
-- `tracking` - football league IDs, ESPN slugs, tennis players
+- `tracking` - football league IDs, ESPN slugs, provider team-name aliases, tennis players
 - `operations` - polling, caching, live edit window, provider/enrichment behavior
 - `log` - file logging and Discord log export limits
 - `memory` - football memory freshness and ESPN cache settings
@@ -114,6 +116,10 @@ Key `operations` timezone/display/lifecycle settings:
 - `operations.api_provider.fallback_poll_interval_sec` - active fallback polling interval while football is awake
 
 `football_match_lookup_window_hours` is no longer supported. Rename existing deployed configs to `football_display_lookup_window_hours` before restarting the bot.
+
+Key `tracking` provider mapping setting:
+
+- `provider_team_aliases` - operator-editable team-name aliases used when mapping ESPN fixtures to API-Football fixtures, especially for national-team naming differences such as `South Korea` / `Korea Republic`.
 
 ## Local Setup
 
@@ -169,7 +175,7 @@ See `OPERATIONS.md` for the canonical runbook.
 
 ## Runtime State
 
-Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state.
+Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state. `match_state.json` stores provider aliases under `provider_ids`, for example an ESPN canonical fixture plus its API-Football fallback fixture ID.
 
 Daily operational log archives can be collected with `scripts/collect_daily_logs.sh`. On the Pi, the recommended cron job runs at 06:00 and keeps the newest 30 daily archives under `bot_memory/log_exports/daily/`. Each summary splits app-log warning/error counts from systemd journal counts so the app log remains the primary bot-health signal.
 

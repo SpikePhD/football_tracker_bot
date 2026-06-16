@@ -207,6 +207,156 @@ class FtAndLiveLoopTests(unittest.TestCase):
 
         process_terminal.assert_not_awaited()
 
+    def test_process_terminal_fixture_skips_mapped_fallback_when_canonical_is_resolved(self):
+        from modules import api_provider, ft_handler, match_state
+
+        api_match = espn_match(fixture_id="1489379", league_id=1)
+        api_match["canonical_fixture_id"] = "760429"
+        api_match["provider"] = "api_football"
+        api_match["provider_fixture_id"] = "1489379"
+        api_match["fixture"]["status"] = {"short": "FT", "long": "Match Finished"}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run(memory_dir: Path):
+            match_state.save_match_state(
+                {
+                    "version": 1,
+                    "fixtures": {
+                        "760429": {
+                            "fixture_id": "760429",
+                            "provider_ids": {"espn": "760429", "api_football": "1489379"},
+                            "ft_announced": True,
+                            "memory_updated": True,
+                            "last_status": "FT",
+                        },
+                    },
+                },
+                memory_dir=memory_dir,
+            )
+            with (
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=api_match)) as enrich,
+                patch.object(ft_handler, "post_new_general_message", AsyncMock()) as post_msg,
+                patch.object(ft_handler, "update_match_in_memory", AsyncMock()) as update_memory,
+            ):
+                await ft_handler.process_terminal_fixture(fake_bot, api_match, memory_dir=memory_dir)
+                return enrich, post_msg, update_memory
+
+        with tempfile.TemporaryDirectory() as tmp:
+            enrich, post_msg, update_memory = asyncio.run(run(Path(tmp)))
+
+        enrich.assert_not_awaited()
+        post_msg.assert_not_awaited()
+        update_memory.assert_not_awaited()
+
+    def test_fetch_and_post_ft_uses_provider_alias_for_due_direct_fetch(self):
+        from modules import api_provider, ft_handler, match_state
+
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        now_utc = datetime(2026, 6, 16, 0, 0, tzinfo=timezone.utc)
+
+        async def run(memory_dir: Path):
+            match_state.save_match_state(
+                {
+                    "version": 1,
+                    "fixtures": {
+                        "760429": {
+                            "fixture_id": "760429",
+                            "provider_ids": {"espn": "760429", "api_football": "1489379"},
+                            "kickoff_utc": "2026-06-15T22:00:00+00:00",
+                            "expected_ft_utc": "2026-06-15T23:52:00+00:00",
+                            "last_status": "2H",
+                            "ft_announced": False,
+                            "memory_updated": False,
+                        },
+                    },
+                },
+                memory_dir=memory_dir,
+            )
+            payload = {"response": []}
+            with (
+                patch.object(match_state, "BOT_MEMORY_DIR", memory_dir),
+                patch.object(ft_handler, "utc_now", return_value=now_utc),
+                patch.object(api_provider, "fetch_relevant_football", AsyncMock(return_value=[])),
+                patch.object(api_provider, "fetch_fixture", AsyncMock(return_value=payload)) as fetch_fixture,
+            ):
+                await ft_handler.fetch_and_post_ft(fake_bot)
+                return fetch_fixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fetch_fixture = asyncio.run(run(Path(tmp)))
+
+        fetch_fixture.assert_awaited_once_with(None, "1489379")
+
+    def test_unmapped_api_football_terminal_fixture_does_not_post_or_update_memory(self):
+        from modules import api_provider, ft_handler
+
+        api_match = espn_match(fixture_id="1539002", league_id=1)
+        api_match["provider"] = "api_football"
+        api_match["provider_fixture_id"] = "1539002"
+        api_match["fixture"]["status"] = {"short": "FT", "long": "Match Finished"}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run(memory_dir: Path):
+            with (
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=api_match)),
+                patch.object(ft_handler, "post_new_general_message", AsyncMock()) as post_msg,
+                patch.object(ft_handler, "update_match_in_memory", AsyncMock()) as update_memory,
+            ):
+                await ft_handler.process_terminal_fixture(fake_bot, api_match, memory_dir=memory_dir)
+                return post_msg, update_memory
+
+        with tempfile.TemporaryDirectory() as tmp:
+            post_msg, update_memory = asyncio.run(run(Path(tmp)))
+
+        post_msg.assert_not_awaited()
+        update_memory.assert_not_awaited()
+
+    def test_incomplete_mapped_api_football_terminal_fixture_waits_for_better_data(self):
+        from modules import api_provider, ft_handler, match_state
+
+        api_match = espn_match(fixture_id="1489379", league_id=1)
+        api_match["canonical_fixture_id"] = "760429"
+        api_match["provider"] = "api_football"
+        api_match["provider_fixture_id"] = "1489379"
+        api_match["provider_ids"] = {"espn": "760429", "api_football": "1489379"}
+        api_match["fixture"]["status"] = {"short": "FT", "long": "Match Finished"}
+        api_match["goals"] = {"home": 1, "away": 1}
+        api_match["events"] = []
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run(memory_dir: Path):
+            match_state.save_match_state(
+                {
+                    "version": 1,
+                    "fixtures": {
+                        "760429": {
+                            "fixture_id": "760429",
+                            "provider_ids": {"espn": "760429", "api_football": "1489379"},
+                            "ft_announced": False,
+                            "memory_updated": False,
+                            "last_status": "2H",
+                        },
+                    },
+                },
+                memory_dir=memory_dir,
+            )
+            with (
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=api_match)),
+                patch.object(ft_handler, "post_new_general_message", AsyncMock()) as post_msg,
+                patch.object(ft_handler, "update_match_in_memory", AsyncMock()) as update_memory,
+            ):
+                await ft_handler.process_terminal_fixture(fake_bot, api_match, memory_dir=memory_dir)
+                state = match_state.get_fixture_state("760429", memory_dir=memory_dir)
+                return state, post_msg, update_memory
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state, post_msg, update_memory = asyncio.run(run(Path(tmp)))
+
+        self.assertFalse(state["ft_announced"])
+        self.assertFalse(state["memory_updated"])
+        post_msg.assert_not_awaited()
+        update_memory.assert_not_awaited()
+
     def test_live_penalty_update_includes_penalty_score(self):
         from modules import live_loop
         from modules import api_provider
@@ -373,6 +523,52 @@ class FtAndLiveLoopTests(unittest.TestCase):
         upsert_live.assert_awaited_once()
         self.assertEqual(upsert_live.await_args.kwargs["message_id"], 777)
         update_live_id.assert_called_once_with("persisted-live-id", 777)
+
+    def test_live_loop_uses_canonical_fixture_id_for_mapped_fallback_live_message(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        match = espn_match(fixture_id="1489379")
+        match["canonical_fixture_id"] = "760429"
+        match["provider"] = "api_football"
+        match["provider_fixture_id"] = "1489379"
+        match["provider_ids"] = {"espn": "760429", "api_football": "1489379"}
+        match["fixture"]["status"] = {"short": "1H", "elapsed": 9}
+        match["goals"] = {"home": 1, "away": 0}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        replacement_message = type("FakeMessage", (), {"id": 888})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+
+            def get_state(fixture_id):
+                self.assertEqual(fixture_id, "760429")
+                return {"live_message_id": 777}
+
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop.match_state, "get_fixture_state", side_effect=get_state),
+                patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
+                patch.object(live_loop.match_state, "update_live_message_id") as update_live_id,
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=replacement_message)) as upsert_live,
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+            ):
+                await live_loop.run_live_loop(fake_bot)
+                return upsert_live, update_live_id, dict(live_loop.live_message_ids)
+
+        upsert_live, update_live_id, live_ids = asyncio.run(run())
+
+        self.assertEqual(upsert_live.await_args.kwargs["message_id"], 777)
+        update_live_id.assert_called_once_with("760429", 888)
+        self.assertEqual(live_ids["760429"], 888)
+        self.assertNotIn("1489379", live_ids)
 
     def test_live_loop_persists_replacement_message_id_from_stale_upsert(self):
         from modules import live_loop

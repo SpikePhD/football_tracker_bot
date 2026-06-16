@@ -100,6 +100,82 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual(match_lifecycle.expected_ft_check_utc(match), datetime(2026, 6, 3, 23, 22, tzinfo=timezone.utc))
         self.assertTrue(match_lifecycle.should_track_fixture(match, now_utc))
 
+    def test_match_state_links_provider_ids_to_canonical_fixture(self):
+        from modules import match_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_dir = Path(tmp)
+            match_state.link_provider_fixture_id(
+                "760429",
+                "espn",
+                "760429",
+                memory_dir=memory_dir,
+            )
+            match_state.link_provider_fixture_id(
+                "760429",
+                "api_football",
+                "1489379",
+                memory_dir=memory_dir,
+            )
+
+            state = match_state.get_fixture_state("760429", memory_dir=memory_dir)
+            canonical = match_state.find_canonical_fixture_id(
+                "api_football",
+                "1489379",
+                memory_dir=memory_dir,
+            )
+
+        self.assertEqual(state["provider_ids"]["espn"], "760429")
+        self.assertEqual(state["provider_ids"]["api_football"], "1489379")
+        self.assertEqual(canonical, "760429")
+
+    def test_match_state_merges_duplicate_provider_record_into_espn_canonical(self):
+        from modules import match_state
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_dir = Path(tmp)
+            match_state.save_match_state(
+                {
+                    "version": 1,
+                    "fixtures": {
+                        "1489379": {
+                            "fixture_id": "1489379",
+                            "provider_ids": {"api_football": "1489379"},
+                            "ft_announced": True,
+                            "memory_updated": False,
+                            "live_message_id": 123,
+                            "last_status": "FT",
+                        },
+                        "760429": {
+                            "fixture_id": "760429",
+                            "provider_ids": {"espn": "760429"},
+                            "ft_announced": False,
+                            "memory_updated": True,
+                            "last_status": "2H",
+                        },
+                    },
+                },
+                memory_dir=memory_dir,
+            )
+
+            merged = match_state.link_provider_fixture_id(
+                "760429",
+                "api_football",
+                "1489379",
+                memory_dir=memory_dir,
+            )
+            state = match_state.load_match_state(memory_dir=memory_dir)
+
+        self.assertEqual(merged["fixture_id"], "760429")
+        self.assertNotIn("1489379", state["fixtures"])
+        self.assertTrue(state["fixtures"]["760429"]["ft_announced"])
+        self.assertTrue(state["fixtures"]["760429"]["memory_updated"])
+        self.assertEqual(state["fixtures"]["760429"]["live_message_id"], 123)
+        self.assertEqual(
+            state["fixtures"]["760429"]["provider_ids"]["api_football"],
+            "1489379",
+        )
+
     def test_pruning_retains_live_and_recent_terminal_fixtures_only(self):
         from modules import match_state
 
@@ -672,6 +748,42 @@ class UtcFootballLifecycleTests(unittest.TestCase):
                     match_state,
                     "get_fixture_state",
                     return_value={"fixture_id": "resolved-ft", "ft_announced": True, "memory_updated": True},
+                ),
+            ):
+                needed = await scheduler._football_poll_needed(fake_bot, now_utc)
+                return needed, live_check
+
+        needed, live_check = asyncio.run(run())
+
+        self.assertFalse(needed)
+        live_check.assert_awaited_once()
+
+    def test_scheduler_does_not_wake_for_mapped_fallback_terminal_ft_when_canonical_resolved(self):
+        from modules import match_state, scheduler
+
+        terminal = espn_match(fixture_id="1489379")
+        terminal["canonical_fixture_id"] = "760429"
+        terminal["provider"] = "api_football"
+        terminal["provider_fixture_id"] = "1489379"
+        terminal["fixture"]["date"] = "2026-06-15T22:00:00Z"
+        terminal["fixture"]["status"] = {"short": "FT", "long": "Match Finished"}
+        now_utc = datetime(2026, 6, 16, 0, 30, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            with (
+                patch.object(scheduler, "expected_ft_due_fixture_ids", return_value=[]),
+                patch.object(scheduler.api_provider, "fetch_relevant_football", AsyncMock(return_value=[terminal])),
+                patch.object(scheduler.api_provider, "has_live_football", AsyncMock(return_value=False)) as live_check,
+                patch.object(
+                    match_state,
+                    "get_fixture_state",
+                    return_value={
+                        "fixture_id": "760429",
+                        "provider_ids": {"espn": "760429", "api_football": "1489379"},
+                        "ft_announced": True,
+                        "memory_updated": True,
+                    },
                 ),
             ):
                 needed = await scheduler._football_poll_needed(fake_bot, now_utc)

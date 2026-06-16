@@ -55,6 +55,37 @@ class FootballMemoryTests(unittest.TestCase):
         self.assertEqual(memory["teams"]["100"]["players"]["Scorer"]["goals"], 1)
         self.assertEqual(len(memory["matches"]), 1)
 
+    def test_match_memory_uses_canonical_fixture_id_for_mapped_provider_match(self):
+        from modules import football_memory
+
+        match = {
+            "canonical_fixture_id": "760429",
+            "provider": "api_football",
+            "provider_fixture_id": "1489379",
+            "fixture": {
+                "id": "1489379",
+                "date": "2026-06-15T22:00:00+00:00",
+                "status": {"short": "FT", "long": "Match Finished"},
+            },
+            "league": {"id": 1},
+            "teams": {
+                "home": {"id": "100", "name": "Saudi Arabia"},
+                "away": {"id": "200", "name": "Uruguay"},
+            },
+            "goals": {"home": 1, "away": 1},
+            "events": [],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                result = asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, {"updated": True, "reason": "updated"})
+        self.assertIn("760429", memory["matches"])
+        self.assertNotIn("1489379", memory["matches"])
+
     def test_match_memory_updates_terminal_penalty_result(self):
         from modules import football_memory
 

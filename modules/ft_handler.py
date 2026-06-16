@@ -118,11 +118,43 @@ def _build_ft_message(match_details: dict) -> str:
     return ft_message
 
 
-def _fixture_fully_resolved(fixture_id: str | None) -> bool:
+def _fixture_fully_resolved(fixture_id: str | None, memory_dir: Path | None = None) -> bool:
     if fixture_id is None:
         return False
-    current = match_state.get_fixture_state(fixture_id) or {}
+    current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
     return current.get("ft_announced") is True and current.get("memory_updated") is True
+
+
+def _is_api_football_fixture(match: dict) -> bool:
+    return (
+        match.get("provider") == "api_football"
+        or match.get("source") == "api_football"
+        or match.get("fixture", {}).get("provider") == "api_football"
+    )
+
+
+def _api_football_fixture_is_known(match: dict, memory_dir: Path | None = None) -> bool:
+    provider_fixture_id = match.get("provider_fixture_id") or match.get("fixture", {}).get("id")
+    if provider_fixture_id is None:
+        return False
+    if match_state.find_canonical_fixture_id("api_football", provider_fixture_id, memory_dir=memory_dir):
+        return True
+    state = match_state.get_fixture_state(provider_fixture_id, memory_dir=memory_dir)
+    return state is not None and state.get("last_status") in match_lifecycle.LIVE_STATUSES
+
+
+def _has_incomplete_goal_events(match: dict) -> bool:
+    goals = match.get("goals", {}) or {}
+    try:
+        total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    goal_events = sum(
+        1
+        for event in match.get("events", [])
+        if event.get("type") == "Goal" and not is_shootout_event(event)
+    )
+    return goal_events < total_goals
 
 
 async def _post_ft_from_data(bot: discord.Client, match_details: dict) -> bool:
@@ -146,6 +178,22 @@ async def process_terminal_fixture(
 
     now_utc = now_utc or utc_now()
     match_state.migrate_ft_state_if_needed(memory_dir=memory_dir)
+    fixture_id = match_lifecycle.fixture_identity(match_details)
+    if match_lifecycle.is_ft(match_details) and _fixture_fully_resolved(fixture_id, memory_dir=memory_dir):
+        logger.info("Skipping terminal fixture %s because it is already fully resolved.", fixture_id)
+        return
+    if (
+        match_lifecycle.is_ft(match_details)
+        and _is_api_football_fixture(match_details)
+        and not match_details.get("canonical_fixture_id")
+        and not _api_football_fixture_is_known(match_details, memory_dir=memory_dir)
+    ):
+        logger.info(
+            "Skipping unmapped API-Football terminal fixture %s; it was not previously tracked.",
+            match_details.get("fixture", {}).get("id"),
+        )
+        return
+
     enriched = await api_provider.enrich_fixture_events(bot.http_session, match_details)
     status_payload = enriched.get("fixture", {}).get("status", {}) or {}
     raw_status = status_payload.get("short")
@@ -170,10 +218,18 @@ async def process_terminal_fixture(
         normalized_status,
         raw_status_text,
     )
-    fixture = match_state.upsert_fixture_from_match(enriched, now_utc, source="espn", memory_dir=memory_dir)
+    source = "api_football" if _is_api_football_fixture(enriched) else "espn"
+    fixture = match_state.upsert_fixture_from_match(enriched, now_utc, source=source, memory_dir=memory_dir)
     fixture_id = fixture["fixture_id"]
     current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
     memory_result = None
+
+    if match_lifecycle.is_ft(enriched) and _is_api_football_fixture(enriched) and _has_incomplete_goal_events(enriched):
+        logger.info(
+            "Delaying API-Football FT processing for fixture %s because event data is incomplete.",
+            fixture_id,
+        )
+        return
 
     if match_lifecycle.is_ft(enriched) and not current.get("memory_updated"):
         if _has_required_memory_keys(enriched):
@@ -296,11 +352,31 @@ async def fetch_and_post_ft(bot: discord.Client) -> None:
     for fixture_id in due_ids:
         if fixture_id in matches_by_id:
             continue
-        payload = await api_provider.fetch_fixture(bot.http_session, fixture_id)
+        state = match_state.get_fixture_state(fixture_id) or {}
+        provider_ids = state.get("provider_ids", {}) if isinstance(state, dict) else {}
+        fetch_fixture_id = provider_ids.get("api_football") if isinstance(provider_ids, dict) else None
+        if fetch_fixture_id is None:
+            if provider_ids.get("espn") == str(fixture_id) or state.get("provider") == "espn":
+                logger.info(
+                    "Skipping direct FT fetch for ESPN fixture %s because no API-Football alias is known.",
+                    fixture_id,
+                )
+                continue
+            fetch_fixture_id = fixture_id
+        payload = await api_provider.fetch_fixture(bot.http_session, fetch_fixture_id)
         response = payload.get("response") if isinstance(payload, dict) else None
         if not isinstance(response, list) or not response:
             continue
         normalized = _normalize_api_football_match(response[0])
+        normalized["provider"] = "api_football"
+        normalized["provider_fixture_id"] = str(fetch_fixture_id)
+        normalized["canonical_fixture_id"] = str(fixture_id)
+        normalized["provider_ids"] = {
+            **(provider_ids if isinstance(provider_ids, dict) else {}),
+            "api_football": str(fetch_fixture_id),
+        }
+        if provider_ids.get("espn"):
+            normalized["provider_ids"]["espn"] = str(provider_ids["espn"])
         if match_lifecycle.is_terminal(normalized):
             await process_terminal_fixture(bot, normalized, now_utc=now)
 
