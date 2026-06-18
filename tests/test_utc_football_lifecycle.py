@@ -345,6 +345,15 @@ class UtcFootballLifecycleTests(unittest.TestCase):
 
         match = espn_match(fixture_id="independent-1")
         match["fixture"]["status"]["short"] = "FT"
+        match["events"] = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Scorer"},
+                "team": {"id": "50", "name": "Parma"},
+                "time": {"elapsed": 20},
+            }
+        ]
         fake_bot = type("FakeBot", (), {"http_session": None})()
 
         async def run(memory_dir: Path):

@@ -14,14 +14,28 @@ mkdir -p "$EXPORT_DIR"
 APP_EXPORT="$EXPORT_DIR/bot_app_${TARGET_DATE}.log"
 JOURNAL_EXPORT="$EXPORT_DIR/journal_${SERVICE_NAME}_${TARGET_DATE}.log"
 SUMMARY="$EXPORT_DIR/summary_${TARGET_DATE}.txt"
+APP_EXPORT_TMP="$(mktemp)"
+trap 'rm -f "${APP_EXPORT_TMP:-}"' EXIT
+
+APP_WARNING_RE="^\[$TARGET_DATE [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[(WARNING|ERROR|CRITICAL)[[:space:]]*\]"
+APP_ERROR_RE="^\[$TARGET_DATE [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[(ERROR|CRITICAL)[[:space:]]*\]"
+JOURNAL_WARNING_RE="\[$TARGET_DATE [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[(WARNING|ERROR|CRITICAL)[[:space:]]*\]"
+JOURNAL_ERROR_RE="\[$TARGET_DATE [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[(ERROR|CRITICAL)[[:space:]]*\]"
+
+count_log_matches() {
+  local pattern="$1"
+  local file="$2"
+  grep -E "$pattern" "$file" 2>/dev/null | wc -l | tr -d ' '
+}
 
 shopt -s nullglob
 APP_LOG_FILES=("$ROOT_DIR"/bot_memory/logs/bot.log*)
 if (( ${#APP_LOG_FILES[@]} > 0 )); then
-  : > "$APP_EXPORT"
+  : > "$APP_EXPORT_TMP"
   for log_file in "${APP_LOG_FILES[@]}"; do
-    grep "^\[$TARGET_DATE " "$log_file" >> "$APP_EXPORT" || true
+    grep "^\[$TARGET_DATE " "$log_file" >> "$APP_EXPORT_TMP" || true
   done
+  sort "$APP_EXPORT_TMP" > "$APP_EXPORT"
 else
   printf 'App log not found: %s\n' "$APP_LOG" > "$APP_EXPORT"
 fi
@@ -45,13 +59,13 @@ fi
   printf 'journal=%s\n' "$JOURNAL_EXPORT"
   printf 'app_log_lines=%s\n' "$(wc -l < "$APP_EXPORT" | tr -d ' ')"
   printf 'journal_lines=%s\n' "$(wc -l < "$JOURNAL_EXPORT" | tr -d ' ')"
-  printf 'app_warning_error_count=%s\n' "$(grep -Eih 'WARNING|ERROR|CRITICAL|Traceback|Exception' "$APP_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
-  printf 'journal_warning_error_count=%s\n' "$(grep -Eih 'WARNING|ERROR|CRITICAL|Traceback|Exception' "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
-  printf 'app_error_count=%s\n' "$(grep -Eih 'ERROR|CRITICAL|Traceback|Exception' "$APP_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
-  printf 'app_warning_count=%s\n' "$(grep -Eih 'WARNING' "$APP_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
-  printf 'journal_error_count=%s\n' "$(grep -Eih 'ERROR|CRITICAL|Traceback|Exception' "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
-  printf 'journal_warning_count=%s\n' "$(grep -Eih 'WARNING' "$JOURNAL_EXPORT" 2>/dev/null | wc -l | tr -d ' ')"
-  printf 'note=%s\n' 'Use app_warning_error_count as the main bot signal; systemd journal may duplicate app output captured from stdout/stderr.'
+  printf 'app_warning_error_count=%s\n' "$(count_log_matches "$APP_WARNING_RE" "$APP_EXPORT")"
+  printf 'journal_warning_error_count=%s\n' "$(count_log_matches "$JOURNAL_WARNING_RE" "$JOURNAL_EXPORT")"
+  printf 'app_error_count=%s\n' "$(count_log_matches "$APP_ERROR_RE" "$APP_EXPORT")"
+  printf 'app_warning_count=%s\n' "$(count_log_matches "^\[$TARGET_DATE [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[WARNING[[:space:]]*\]" "$APP_EXPORT")"
+  printf 'journal_error_count=%s\n' "$(count_log_matches "$JOURNAL_ERROR_RE" "$JOURNAL_EXPORT")"
+  printf 'journal_warning_count=%s\n' "$(count_log_matches "\[$TARGET_DATE [0-9]{2}:[0-9]{2}:[0-9]{2}\] \[WARNING[[:space:]]*\]" "$JOURNAL_EXPORT")"
+  printf 'note=%s\n' 'Counts use logger severity labels; use app_warning_error_count as the main bot signal. App export lines are sorted chronologically. The systemd journal may duplicate app output captured from stdout/stderr.'
 } > "$SUMMARY"
 
 tar -czf "$DAILY_DIR/logs_${TARGET_DATE}.tar.gz" -C "$EXPORT_DIR" .

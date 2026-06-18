@@ -21,13 +21,15 @@ def shootout_events(events: list) -> list:
     return [event for event in events if is_shootout_event(event)]
 
 
-def event_completeness_note(goals: dict, events: list) -> str:
+def event_completeness_note(goals: dict, events: list, *, show_warning: bool = False) -> str:
     """
     Return a warning string if the goal events don't account for all goals in
     the score (a known ESPN public API limitation), otherwise return empty string.
 
     Example return value: ' ⚠️ 2 goal(s) missing from event data'
     """
+    if not show_warning:
+        return ""
     try:
         total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
         goal_events = sum(1 for e in normal_match_events(events) if e.get("type") == "Goal")

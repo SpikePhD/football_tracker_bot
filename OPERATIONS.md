@@ -67,7 +67,9 @@ bot_memory/log_exports/daily/YYYY-MM-DD/
 bot_memory/log_exports/daily/logs_YYYY-MM-DD.tar.gz
 ```
 
-Each daily folder includes `summary_YYYY-MM-DD.txt`. Treat `app_warning_error_count` as the main bot health signal. Use `journal_warning_error_count` for service, restart, and systemd context; the journal can include duplicated app output because systemd captures service stdout/stderr.
+Each daily folder includes `summary_YYYY-MM-DD.txt`. Treat `app_warning_error_count` as the main bot health signal. Counts are based on logger severity labels such as `[WARNING ]`, `[ERROR   ]`, and `[CRITICAL]`, so INFO text containing words like "error" is not counted as an error. Use `journal_warning_error_count` for service, restart, and systemd context; the journal can include duplicated app output because systemd captures service stdout/stderr.
+
+The app export is normalized into chronological order after collecting matching lines from current and rotated `bot.log*` files. This makes review easier when rotation wraps the current log before older same-day lines.
 
 To collect a specific date:
 

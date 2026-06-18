@@ -144,6 +144,10 @@ def _merge_fixture_records(canonical_id: str, canonical: dict, duplicate: dict) 
 
     if canonical.get("live_message_id") is None and duplicate.get("live_message_id") is not None:
         canonical["live_message_id"] = duplicate.get("live_message_id")
+    if canonical.get("ft_message_id") is None and duplicate.get("ft_message_id") is not None:
+        canonical["ft_message_id"] = duplicate.get("ft_message_id")
+    if canonical.get("ft_message_content") is None and duplicate.get("ft_message_content") is not None:
+        canonical["ft_message_content"] = duplicate.get("ft_message_content")
 
     for key in (
         "provider",
@@ -153,6 +157,10 @@ def _merge_fixture_records(canonical_id: str, canonical: dict, duplicate: dict) 
         "last_score",
         "last_seen_utc",
         "terminal_utc",
+        "event_completeness_key",
+        "event_completeness_status",
+        "event_missing_goal_count",
+        "event_completeness_updated_utc",
     ):
         if canonical.get(key) is None and duplicate.get(key) is not None:
             canonical[key] = duplicate.get(key)
@@ -326,6 +334,42 @@ def update_live_message_id(fixture_id, message_id: int | None, memory_dir: Path 
     def mutator(state: dict) -> None:
         fixture = state["fixtures"].setdefault(mid, {"fixture_id": mid})
         fixture["live_message_id"] = message_id
+
+    update_match_state(mutator, memory_dir=memory_dir)
+
+
+def update_ft_message(
+    fixture_id,
+    message_id: int | None,
+    content: str | None,
+    memory_dir: Path | None = None,
+) -> None:
+    mid = str(fixture_id)
+
+    def mutator(state: dict) -> None:
+        fixture = state["fixtures"].setdefault(mid, {"fixture_id": mid})
+        fixture["ft_message_id"] = message_id
+        fixture["ft_message_content"] = content
+
+    update_match_state(mutator, memory_dir=memory_dir)
+
+
+def update_event_completeness(
+    fixture_id,
+    score_key: str | None,
+    status: str,
+    missing_goal_count: int = 0,
+    now_utc: datetime | None = None,
+    memory_dir: Path | None = None,
+) -> None:
+    mid = str(fixture_id)
+
+    def mutator(state: dict) -> None:
+        fixture = state["fixtures"].setdefault(mid, {"fixture_id": mid})
+        fixture["event_completeness_key"] = score_key
+        fixture["event_completeness_status"] = status
+        fixture["event_missing_goal_count"] = int(missing_goal_count or 0)
+        fixture["event_completeness_updated_utc"] = _iso(now_utc or datetime.now(timezone.utc))
 
     update_match_state(mutator, memory_dir=memory_dir)
 

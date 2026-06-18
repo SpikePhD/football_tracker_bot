@@ -27,9 +27,18 @@ _MISSING_GRACE_SEC = 180
 _REGRESSION_CONFIRM_TICKS = 3
 
 
-def _render_live_line(match: dict, home: str, away: str, score: dict, events: list, status_short: str) -> str:
+def _render_live_line(
+    match: dict,
+    home: str,
+    away: str,
+    score: dict,
+    events: list,
+    status_short: str,
+    *,
+    show_missing_warning: bool = False,
+) -> str:
     event_strings = format_match_events(events, home, away)
-    completeness = event_completeness_note(score, events)
+    completeness = event_completeness_note(score, events, show_warning=show_missing_warning)
 
     if status_short == "PEN":
         line_content = f"⚽ Football LIVE [PEN]: {home} {score['home']} - {score['away']} {away}"
@@ -182,7 +191,20 @@ async def run_live_loop(bot):
             events = enriched.get("events", [])
             elapsed = enriched.get("fixture", {}).get("status", {}).get("elapsed")
             status_short = match_lifecycle.status_short(enriched)
-            state_key = f"{match_id}_{status_short}_{score['home']}-{score['away']}_{len(events)}"
+            event_status = api_provider.event_completeness_status(enriched)
+            show_missing_warning = event_status["status"] == api_provider.EVENTS_EXHAUSTED_MISSING
+            if event_status.get("score_key"):
+                match_state.update_event_completeness(
+                    match_id,
+                    event_status.get("score_key"),
+                    event_status["status"],
+                    event_status.get("missing_goals", 0),
+                    now_utc=now_utc,
+                )
+            state_key = (
+                f"{match_id}_{status_short}_{score['home']}-{score['away']}_"
+                f"{len(events)}_{event_status['status']}"
+            )
 
             previous_observed = _last_observed.get(match_id)
             if previous_observed:
@@ -246,7 +268,15 @@ async def run_live_loop(bot):
                 }
                 continue
 
-            line_content = _render_live_line(enriched, home, away, score, events, status_short)
+            line_content = _render_live_line(
+                enriched,
+                home,
+                away,
+                score,
+                events,
+                status_short,
+                show_missing_warning=show_missing_warning,
+            )
 
             last_sent = _last_sent_content.get(match_id)
             if last_sent:

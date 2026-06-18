@@ -31,6 +31,12 @@ class FakeTextChannel:
         self.sent.append(message)
         return message
 
+    async def fetch_message(self, message_id):
+        for message in self.messages:
+            if message.id == message_id:
+                return message
+        raise discord.NotFound(response=SimpleNamespace(status=404, reason="Not Found"), message="missing")
+
 
 class FakeMessage:
     def __init__(self, message_id, edit_error=None):
@@ -118,6 +124,46 @@ class DiscordPosterTests(unittest.TestCase):
 
         self.assertIs(result, existing)
         self.assertEqual(existing.edited_content, "edited live update")
+        self.assertEqual(channel.sent, [])
+
+    def test_edit_general_message_edits_existing_message(self):
+        from modules import discord_poster
+
+        existing = FakeMessage(55)
+        channel = FakeTextChannel(messages=[existing])
+
+        async def run():
+            with patch.object(discord_poster.discord, "TextChannel", FakeTextChannel):
+                return await discord_poster.edit_general_message(
+                    bot=FakeBot(channel),
+                    channel_id=123,
+                    message_id=55,
+                    content="edited ft",
+                )
+
+        result = asyncio.run(run())
+
+        self.assertIs(result, existing)
+        self.assertEqual(existing.edited_content, "edited ft")
+        self.assertEqual(channel.sent, [])
+
+    def test_edit_general_message_does_not_repost_when_missing(self):
+        from modules import discord_poster
+
+        channel = FakeTextChannel(messages=[])
+
+        async def run():
+            with patch.object(discord_poster.discord, "TextChannel", FakeTextChannel):
+                return await discord_poster.edit_general_message(
+                    bot=FakeBot(channel),
+                    channel_id=123,
+                    message_id=55,
+                    content="edited ft",
+                )
+
+        result = asyncio.run(run())
+
+        self.assertIsNone(result)
         self.assertEqual(channel.sent, [])
 
 

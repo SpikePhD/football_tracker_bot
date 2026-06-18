@@ -128,7 +128,12 @@ def _format_football_fixture_line(match: dict) -> str:
         events = match.get("events", [])
         ft_event_parts = format_match_events(events, home, away)
         score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
-        note = event_completeness_note(goals, events)
+        completeness = api_provider.event_completeness_status(match)
+        note = event_completeness_note(
+            goals,
+            events,
+            show_warning=completeness["status"] == api_provider.EVENTS_EXHAUSTED_MISSING,
+        )
         shootout_segments = format_shootout_segments(match, final=True)
         if ft_event_parts:
             line = f"- FT: {score_str} ({'; '.join(ft_event_parts)})"
@@ -149,7 +154,12 @@ def _format_football_fixture_line(match: dict) -> str:
     events = match.get("events", [])
     event_parts = format_match_events(events, home, away)
     score_str = f"{home} {goals.get('home', '?')}-{goals.get('away', '?')} {away}"
-    note = event_completeness_note(goals, events)
+    completeness = api_provider.event_completeness_status(match)
+    note = event_completeness_note(
+        goals,
+        events,
+        show_warning=completeness["status"] == api_provider.EVENTS_EXHAUSTED_MISSING,
+    )
     shootout_segments = format_shootout_segments(match, final=False)
     if event_parts:
         line = f"- LIVE [{minute_str}]: {score_str} ({'; '.join(event_parts)})"

@@ -194,6 +194,66 @@ async def post_new_general_message(
 
     return None
 
+
+async def edit_general_message(
+    bot: discord.Client,
+    channel_id: int,
+    message_id: int | None,
+    content: str,
+) -> discord.Message | None:
+    """
+    Edit an existing general bot message by ID.
+    Missing/deleted messages are not replaced here to preserve exactly-once announcements.
+    """
+    if message_id is None or not content:
+        logger.warning("DiscordPoster: edit_general_message called with missing message_id or content.")
+        return None
+
+    channel = bot.get_channel(channel_id)
+    if not isinstance(channel, discord.TextChannel):
+        logger.error(f"DiscordPoster: Channel ID {channel_id} did not yield a valid TextChannel for message edit.")
+        return None
+
+    try:
+        if hasattr(channel, "fetch_message"):
+            message = await channel.fetch_message(message_id)
+        else:
+            message = await _find_recent_message(channel, message_id, LIVE_UPDATE_EDIT_WINDOW_MESSAGES)
+        if message is None:
+            logger.warning(
+                f"DiscordPoster: General message {message_id} was not found in #{channel.name}; not reposting."
+            )
+            return None
+        await message.edit(content=content, suppress=True)
+        logger.info(f"DiscordPoster: Edited general message {message_id} in #{channel.name}")
+        return message
+    except discord.NotFound:
+        logger.warning(
+            f"DiscordPoster: General message {message_id} was deleted or unavailable in #{channel.name}; not reposting.",
+            exc_info=True,
+        )
+    except discord.Forbidden:
+        logger.error(f"DiscordPoster: Missing permissions to edit general message in #{channel.name}.", exc_info=True)
+    except discord.HTTPException as e:
+        if getattr(e, "status", None) == 404:
+            logger.warning(
+                f"DiscordPoster: General message {message_id} was unavailable in #{channel.name}; not reposting.",
+                exc_info=True,
+            )
+        else:
+            logger.error(
+                f"DiscordPoster: Failed to edit general message {message_id} in #{channel.name}: {e}",
+                exc_info=True,
+            )
+    except Exception as e:
+        logger.error(
+            f"DiscordPoster: Failed to edit general message {message_id} in #{channel.name}: {e}",
+            exc_info=True,
+        )
+
+    return None
+
+
 async def post_new_message_to_context(
     ctx: commands.Context,
     content: str | None = None,

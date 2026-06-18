@@ -171,7 +171,7 @@ class ClientsAndFormattersTests(unittest.TestCase):
 
         normal_events = format_match_events(match["events"], "Home", "Away")
         shootout_segments = format_shootout_segments(match, final=True)
-        note = event_completeness_note(match["goals"], match["events"])
+        note = event_completeness_note(match["goals"], match["events"], show_warning=True)
 
         self.assertEqual(normal_events, ["5' - Home Goal (H)", "64' - Away Goal (Penalty) (A)"])
         self.assertEqual(shootout_segments[0], "After 90': 1 - 1")

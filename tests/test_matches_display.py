@@ -154,6 +154,63 @@ class MatchesDisplayTests(unittest.TestCase):
         self.assertIn("J. Lukic", content)
         self.assertNotIn("missing from event data", content)
 
+    def test_daily_snapshot_hides_pending_missing_event_warning(self):
+        from cogs import matches
+        from modules import api_provider
+
+        now_utc = datetime(2026, 6, 12, 20, 35, tzinfo=timezone.utc)
+        live = _fixture("pending-display-warning", "2026-06-12T19:00:00Z", status="2H", elapsed=73)
+        live["goals"] = {"home": 2, "away": 0}
+        live["events"] = []
+
+        async def run():
+            with (
+                patch.object(matches, "utc_now", return_value=now_utc),
+                patch.object(matches.api_provider, "fetch_day", AsyncMock(return_value=[live])),
+                patch.object(matches.api_provider, "enrich_fixtures", AsyncMock(return_value=[live])),
+                patch.object(matches.api_provider, "fetch_tennis_day", AsyncMock(return_value=[])),
+                patch.object(matches.api_provider, "event_completeness_status", return_value={
+                    "status": api_provider.EVENTS_PENDING_ENRICHMENT,
+                    "missing_goals": 2,
+                    "score_key": "pending-display-warning:2:0",
+                }),
+            ):
+                return await matches.fetch_combined_matches_snapshot(None)
+
+        _football_fixtures, _tennis, content = asyncio.run(run())
+
+        self.assertIn("LIVE [73']", content)
+        self.assertIn("Home pending-display-warning 2-0 Away pending-display-warning", content)
+        self.assertNotIn("missing from event data", content)
+
+    def test_daily_snapshot_shows_exhausted_missing_event_warning(self):
+        from cogs import matches
+        from modules import api_provider
+
+        now_utc = datetime(2026, 6, 12, 20, 35, tzinfo=timezone.utc)
+        live = _fixture("exhausted-display-warning", "2026-06-12T19:00:00Z", status="2H", elapsed=73)
+        live["goals"] = {"home": 2, "away": 0}
+        live["events"] = []
+
+        async def run():
+            with (
+                patch.object(matches, "utc_now", return_value=now_utc),
+                patch.object(matches.api_provider, "fetch_day", AsyncMock(return_value=[live])),
+                patch.object(matches.api_provider, "enrich_fixtures", AsyncMock(return_value=[live])),
+                patch.object(matches.api_provider, "fetch_tennis_day", AsyncMock(return_value=[])),
+                patch.object(matches.api_provider, "event_completeness_status", return_value={
+                    "status": api_provider.EVENTS_EXHAUSTED_MISSING,
+                    "missing_goals": 2,
+                    "score_key": "exhausted-display-warning:2:0",
+                }),
+            ):
+                return await matches.fetch_combined_matches_snapshot(None)
+
+        _football_fixtures, _tennis, content = asyncio.run(run())
+
+        self.assertIn("LIVE [73']", content)
+        self.assertIn("missing from event data", content)
+
     def test_fetch_combined_snapshot_uses_persisted_ft_events_before_warning(self):
         from cogs import matches
         from modules import football_memory

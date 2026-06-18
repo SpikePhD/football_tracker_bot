@@ -1,4 +1,7 @@
 import os
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,22 +13,32 @@ os.environ.setdefault("CHANNEL_ID", "123456789")
 
 class CommandErrorsAndHygieneTests(unittest.TestCase):
 
-    def test_production_python_sources_do_not_contain_mojibake_markers(self):
+    def test_git_tracked_text_files_do_not_contain_mojibake_markers(self):
         repo_root = Path(__file__).resolve().parents[1]
-        production_paths = [
-            repo_root / "football_tracker_bot.py",
-            *(repo_root / "modules").glob("*.py"),
-            *(repo_root / "cogs").glob("*.py"),
-            *(repo_root / "utils").glob("*.py"),
-        ]
+        tracked_files = subprocess.check_output(
+            ["git", "ls-files"],
+            cwd=repo_root,
+            text=True,
+            encoding="utf-8",
+        ).splitlines()
         mojibake_markers = ("ðŸ", "â€”", "â€“", "â„", "â", "âš", "âœ", "ï¸", "�")
         offenders = []
 
-        for path in production_paths:
-            text = path.read_text(encoding="utf-8")
-            for marker in mojibake_markers:
-                if marker in text:
-                    offenders.append(f"{path.relative_to(repo_root)} contains {marker!r}")
+        for relative_path in tracked_files:
+            path = repo_root / relative_path
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if (
+                    relative_path == "tests/test_command_errors_and_hygiene.py"
+                    and "mojibake_markers =" in line
+                ):
+                    continue
+                for marker in mojibake_markers:
+                    if marker in line:
+                        offenders.append(f"{relative_path}:{line_number} contains {marker!r}")
 
         self.assertEqual(offenders, [])
 
@@ -102,6 +115,10 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertIn("journal_error_count=", text)
         self.assertIn("journal_warning_count=", text)
         self.assertNotIn("printf 'warning_error_count=", text)
+        self.assertIn("APP_WARNING_RE=", text)
+        self.assertIn("APP_ERROR_RE=", text)
+        self.assertIn("sort \"$APP_EXPORT_TMP\" > \"$APP_EXPORT\"", text)
+        self.assertNotIn("grep -Eih 'ERROR|CRITICAL|Traceback|Exception' \"$APP_EXPORT\"", text)
         self.assertIn("systemd journal may duplicate app output", text)
         self.assertIn("collect_daily_logs.sh", operations)
         self.assertIn("Daily log rotation", operations)
@@ -109,6 +126,59 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertIn("keeps the newest 30 daily archives", operations)
         self.assertIn("app_warning_error_count", operations)
         self.assertIn("journal_warning_error_count", operations)
+        self.assertIn("severity labels", operations)
+        self.assertIn("chronological order", operations)
+
+    def test_daily_log_collection_sorts_app_lines_and_counts_severity_labels(self):
+        if os.name == "nt":
+            self.skipTest("Bash integration test is exercised on POSIX deployment hosts.")
+        if not shutil.which("bash") or not shutil.which("tar"):
+            self.skipTest("bash/tar not available")
+
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts" / "collect_daily_logs.sh"
+        target_date = "2026-06-17"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_dir = root / "bot_memory" / "logs"
+            log_dir.mkdir(parents=True)
+            (log_dir / "bot.log").write_text(
+                "\n".join([
+                    "[2026-06-17 23:59:50] [INFO    ] [modules.live_loop] later line",
+                    "[2026-06-17 00:00:41] [INFO    ] [modules.live_loop] No live fixtures returned or fetch error.",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            (log_dir / "bot.log.1").write_text(
+                "\n".join([
+                    "[2026-06-17 06:00:00] [WARNING ] [modules.test] warning line",
+                    "[2026-06-17 07:00:00] [ERROR   ] [modules.test] error line",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(
+                ["bash", str(script), target_date],
+                cwd=repo_root,
+                env={**os.environ, "ROOT_DIR": str(root), "SERVICE_NAME": "missing_test_service"},
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            export_dir = root / "bot_memory" / "log_exports" / "daily" / target_date
+            app_export = export_dir / f"bot_app_{target_date}.log"
+            summary = export_dir / f"summary_{target_date}.txt"
+
+            lines = app_export.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines, sorted(lines))
+
+            summary_text = summary.read_text(encoding="utf-8")
+            self.assertIn("app_warning_error_count=2", summary_text)
+            self.assertIn("app_error_count=1", summary_text)
+            self.assertIn("app_warning_count=1", summary_text)
 
     def test_command_error_context_includes_full_content_and_discord_ids(self):
         import football_tracker_bot

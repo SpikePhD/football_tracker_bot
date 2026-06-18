@@ -94,6 +94,15 @@ API_ENRICH_RETRY_DELAYS_SEC = CONFIG_API_ENRICH_RETRY_DELAYS_SEC
 API_LIVE_FIXTURES_CACHE_TTL_SEC = 60
 API_FIXTURE_EVENTS_CACHE_TTL_SEC = 90
 
+EVENTS_COMPLETE = "complete"
+EVENTS_PENDING_ENRICHMENT = "pending_enrichment"
+EVENTS_EXHAUSTED_MISSING = "exhausted_missing"
+_EVENT_COMPLETENESS_STATUSES = {
+    EVENTS_COMPLETE,
+    EVENTS_PENDING_ENRICHMENT,
+    EVENTS_EXHAUSTED_MISSING,
+}
+
 
 # ── Health management ─────────────────────────────────────────────────────────
 
@@ -776,6 +785,92 @@ def _goal_event_count(events: list) -> int:
     return sum(1 for e in events if e.get("type") == "Goal" and not is_shootout_event(e))
 
 
+def _event_score_key(match: dict) -> str | None:
+    fixture_id = match_lifecycle.fixture_identity(match) or match.get("fixture", {}).get("id")
+    if fixture_id is None:
+        return None
+    goals = match.get("goals", {}) or {}
+    return f"{fixture_id}:{goals.get('home')}:{goals.get('away')}"
+
+
+def _event_retry_state_key(match: dict, events: list | None = None) -> str | None:
+    score_key = _event_score_key(match)
+    if score_key is None:
+        return None
+    current_events = events if events is not None else match.get("events", [])
+    return f"{score_key}:{len(current_events or [])}"
+
+
+def _event_goal_gap(match: dict) -> tuple[int, int, int] | None:
+    goals = match.get("goals", {}) or {}
+    try:
+        total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    goal_events = _goal_event_count(match.get("events", []))
+    return total_goals, goal_events, max(0, total_goals - goal_events)
+
+
+def _annotate_event_completeness(match: dict, status: str, missing_goals: int, score_key: str | None) -> dict:
+    annotated = {**match}
+    annotated["_event_completeness"] = {
+        "status": status,
+        "missing_goals": int(missing_goals or 0),
+        "score_key": score_key,
+    }
+    return annotated
+
+
+def event_completeness_status(match: dict, memory_dir=None) -> dict:
+    """
+    Return display/reporting status for goal-event completeness.
+    Warnings are shown only when this returns exhausted_missing.
+    """
+    score_key = _event_score_key(match)
+    gap = _event_goal_gap(match)
+    if gap is None:
+        return {"status": EVENTS_COMPLETE, "missing_goals": 0, "score_key": score_key}
+
+    total_goals, goal_events, missing = gap
+    if goal_events >= total_goals:
+        return {"status": EVENTS_COMPLETE, "missing_goals": 0, "score_key": score_key}
+
+    annotated = match.get("_event_completeness")
+    if isinstance(annotated, dict) and annotated.get("score_key") == score_key:
+        status = annotated.get("status")
+        if status in _EVENT_COMPLETENESS_STATUSES:
+            return {
+                "status": status,
+                "missing_goals": int(annotated.get("missing_goals") or missing),
+                "score_key": score_key,
+            }
+
+    fixture_id = match_lifecycle.fixture_identity(match)
+    if fixture_id and memory_dir is not None:
+        persisted = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir)
+    elif fixture_id:
+        persisted = match_state.get_fixture_state(fixture_id)
+    else:
+        persisted = None
+    if (
+        isinstance(persisted, dict)
+        and persisted.get("event_completeness_key") == score_key
+        and persisted.get("event_completeness_status") in _EVENT_COMPLETENESS_STATUSES
+    ):
+        return {
+            "status": persisted["event_completeness_status"],
+            "missing_goals": int(persisted.get("event_missing_goal_count") or missing),
+            "score_key": score_key,
+        }
+
+    retry_key = _event_retry_state_key(match)
+    retry_state = _enrich_retry_states.get(retry_key) if retry_key else None
+    if retry_state and (retry_state.get("exhausted_missing") or retry_state.get("exhausted")):
+        return {"status": EVENTS_EXHAUSTED_MISSING, "missing_goals": missing, "score_key": score_key}
+
+    return {"status": EVENTS_PENDING_ENRICHMENT, "missing_goals": missing, "score_key": score_key}
+
+
 def _event_quality(events: list) -> tuple[int, int, int]:
     goal_count = _goal_event_count(events)
     red_cards = sum(1 for e in events if e.get("type") == "Card" and e.get("detail") == "Red Card")
@@ -1302,6 +1397,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     fixture_id = match.get("fixture", {}).get("id")
     if not fixture_id:
         return match
+    score_key = _event_score_key(match)
 
     global _enrich_attempted_date, _enrich_tick_key, _enrich_tick_count
     _reset_enrich_state_for_today()
@@ -1310,9 +1406,9 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     if goal_events >= total_goals:
         best_known = _apply_best_known_events_if_better(match, total_goals, goal_events)
         if best_known is not None:
-            return best_known
+            return _annotate_event_completeness(best_known, EVENTS_COMPLETE, 0, _event_score_key(best_known))
         _remember_best_known_events(match, events, total_goals, "ESPN")
-        return match
+        return _annotate_event_completeness(match, EVENTS_COMPLETE, 0, score_key)
 
     best_known = _apply_best_known_events_if_better(match, total_goals, goal_events)
     if best_known is not None:
@@ -1320,7 +1416,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
         events = match.get("events", [])
         goal_events = _goal_event_count(events)
         if goal_events >= total_goals:
-            return match
+            return _annotate_event_completeness(match, EVENTS_COMPLETE, 0, _event_score_key(match))
 
     cached_api_fixture_id = _api_fixture_id_cache.get(str(fixture_id))
     if cached_api_fixture_id is not None:
@@ -1339,9 +1435,9 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
                 "cached API-Football events",
             )
             if merged is not None:
-                return merged
+                return _annotate_event_completeness(merged, EVENTS_COMPLETE, 0, _event_score_key(merged))
 
-    enrich_state = f"{fixture_id}:{goals.get('home')}:{goals.get('away')}:{len(events)}"
+    enrich_state = _event_retry_state_key(match, events)
     retry_state = _enrich_retry_states.get(enrich_state)
     if retry_state is None:
         first_retry_delay = max(API_ENRICH_GRACE_SEC, API_ENRICH_RETRY_DELAYS_SEC[0])
@@ -1356,20 +1452,20 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
             f"[Enrich] Fixture {fixture_id} has {missing} missing goal event(s); "
             f"first retry in {first_retry_delay}s."
         )
-        return match
+        return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
 
-    if retry_state.get("exhausted"):
-        return match
+    if retry_state.get("exhausted_missing") or retry_state.get("exhausted"):
+        return _annotate_event_completeness(match, EVENTS_EXHAUSTED_MISSING, missing, score_key)
 
     attempt_count = int(retry_state.get("attempt_count", 0))
     if attempt_count >= len(API_ENRICH_RETRY_DELAYS_SEC):
-        retry_state["exhausted"] = True
-        return match
+        retry_state["exhausted_missing"] = True
+        return _annotate_event_completeness(match, EVENTS_EXHAUSTED_MISSING, missing, score_key)
 
     first_seen = retry_state.get("first_seen") or now_local
     required_delay = max(API_ENRICH_GRACE_SEC, API_ENRICH_RETRY_DELAYS_SEC[attempt_count])
     if (now_local - first_seen).total_seconds() < required_delay:
-        return match
+        return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
 
     tick_key = now_local.strftime("%Y%m%d%H%M")
     if _enrich_tick_key != tick_key:
@@ -1380,10 +1476,10 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
             f"[Enrich] Skipping fixture {fixture_id}: per-tick cap "
             f"{API_ENRICH_MAX_CALLS_PER_TICK} reached."
         )
-        return match
+        return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
 
     if api_client.is_quota_exceeded_today():
-        return match
+        return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
 
     _enrich_tick_count += 1
     retry_state["attempt_count"] = attempt_count + 1
@@ -1396,7 +1492,10 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
                 f"[Enrich] Skipping enrichment for ESPN fixture {fixture_id}: "
                 f"no API-Football fixture mapping exists."
             )
-            return match
+            if attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
+                retry_state["exhausted_missing"] = True
+                return _annotate_event_completeness(match, EVENTS_EXHAUSTED_MISSING, missing, score_key)
+            return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
 
         logger.info(
             f"[Enrich] Loading API-Football events for mapped fixture "
@@ -1408,7 +1507,10 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
             total_goals,
         )
         if enriched_events is None:
-            return match
+            if not from_cache and attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
+                retry_state["exhausted_missing"] = True
+                return _annotate_event_completeness(match, EVENTS_EXHAUSTED_MISSING, missing, score_key)
+            return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
 
         source_label = "cached API-Football events" if from_cache else "API-Football events"
         merged = _merge_enriched_events_if_better(
@@ -1421,14 +1523,15 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
         )
         if merged is not None:
             retry_state["exhausted"] = True
-            return merged
+            return _annotate_event_completeness(merged, EVENTS_COMPLETE, 0, _event_score_key(merged))
 
         if attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
-            retry_state["exhausted"] = True
-        return match
+            retry_state["exhausted_missing"] = True
+            return _annotate_event_completeness(match, EVENTS_EXHAUSTED_MISSING, missing, score_key)
+        return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
     except Exception as e:
         logger.warning(f"[Enrich] Failed to enrich ESPN fixture {fixture_id}: {e}")
-        return match
+        return _annotate_event_completeness(match, EVENTS_PENDING_ENRICHMENT, missing, score_key)
 
 
 async def enrich_fixtures(session: aiohttp.ClientSession, fixtures: list) -> list:

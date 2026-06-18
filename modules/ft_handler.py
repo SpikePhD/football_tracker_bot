@@ -7,7 +7,7 @@ import discord
 from config import CHANNEL_ID
 from modules import match_lifecycle, match_state
 from modules.bot_mode import is_silent
-from modules.discord_poster import post_new_general_message
+from modules.discord_poster import edit_general_message, post_new_general_message
 from modules.football_memory import update_match_in_memory
 from utils.event_formatter import (
     event_completeness_note,
@@ -90,7 +90,7 @@ def _has_required_memory_keys(match_details: dict) -> bool:
     )
 
 
-def _build_ft_message(match_details: dict) -> str:
+def _build_ft_message(match_details: dict, *, show_missing_warning: bool = False) -> str:
     home_team = match_details.get("teams", {}).get("home", {}).get("name", "Home Team")
     away_team = match_details.get("teams", {}).get("away", {}).get("name", "Away Team")
     goals = match_details.get("goals", {"home": "?", "away": "?"})
@@ -105,7 +105,7 @@ def _build_ft_message(match_details: dict) -> str:
     if shootout_segments:
         ft_message += " | " + " | ".join(shootout_segments)
 
-    note = event_completeness_note(goals, events)
+    note = event_completeness_note(goals, events, show_warning=show_missing_warning)
     if note:
         ft_message += note
         logger.warning(
@@ -123,6 +123,21 @@ def _fixture_fully_resolved(fixture_id: str | None, memory_dir: Path | None = No
         return False
     current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
     return current.get("ft_announced") is True and current.get("memory_updated") is True
+
+
+def _fully_resolved_fixture_can_repair_ft_message(
+    fixture_id: str | None,
+    memory_dir: Path | None = None,
+) -> bool:
+    if fixture_id is None:
+        return False
+    current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
+    return (
+        current.get("ft_announced") is True
+        and current.get("memory_updated") is True
+        and current.get("ft_message_id") is not None
+        and current.get("event_completeness_status") == "exhausted_missing"
+    )
 
 
 def _is_api_football_fixture(match: dict) -> bool:
@@ -157,12 +172,23 @@ def _has_incomplete_goal_events(match: dict) -> bool:
     return goal_events < total_goals
 
 
-async def _post_ft_from_data(bot: discord.Client, match_details: dict) -> bool:
-    ft_message = _build_ft_message(match_details)
+def _message_id_or_none(message) -> int | str | None:
+    message_id = getattr(message, "id", None)
+    if isinstance(message_id, (int, str)):
+        return message_id
+    return None
+
+
+async def _post_ft_from_data(
+    bot: discord.Client,
+    match_details: dict,
+    *,
+    show_missing_warning: bool = False,
+):
+    ft_message = _build_ft_message(match_details, show_missing_warning=show_missing_warning)
     safe_message = ft_message.encode("ascii", "backslashreplace").decode("ascii")
     logger.info("Posting FT result: %s", safe_message)
-    sent = await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
-    return sent is not None
+    return await post_new_general_message(bot, CHANNEL_ID, content=ft_message)
 
 
 async def process_terminal_fixture(
@@ -180,8 +206,13 @@ async def process_terminal_fixture(
     match_state.migrate_ft_state_if_needed(memory_dir=memory_dir)
     fixture_id = match_lifecycle.fixture_identity(match_details)
     if match_lifecycle.is_ft(match_details) and _fixture_fully_resolved(fixture_id, memory_dir=memory_dir):
-        logger.info("Skipping terminal fixture %s because it is already fully resolved.", fixture_id)
-        return
+        if not _fully_resolved_fixture_can_repair_ft_message(fixture_id, memory_dir=memory_dir):
+            logger.info("Skipping terminal fixture %s because it is already fully resolved.", fixture_id)
+            return
+        logger.info(
+            "Processing fully resolved terminal fixture %s to check for late FT message enrichment.",
+            fixture_id,
+        )
     if (
         match_lifecycle.is_ft(match_details)
         and _is_api_football_fixture(match_details)
@@ -224,15 +255,29 @@ async def process_terminal_fixture(
     current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
     memory_result = None
 
-    if match_lifecycle.is_ft(enriched) and _is_api_football_fixture(enriched) and _has_incomplete_goal_events(enriched):
-        logger.info(
-            "Delaying API-Football FT processing for fixture %s because event data is incomplete.",
-            fixture_id,
-        )
-        return
+    event_status = None
+    show_missing_warning = False
+    if match_lifecycle.is_ft(enriched):
+        event_status = api_provider.event_completeness_status(enriched, memory_dir=memory_dir)
+        show_missing_warning = event_status["status"] == api_provider.EVENTS_EXHAUSTED_MISSING
+        if event_status.get("score_key"):
+            match_state.update_event_completeness(
+                fixture_id,
+                event_status.get("score_key"),
+                event_status["status"],
+                event_status.get("missing_goals", 0),
+                now_utc=now_utc,
+                memory_dir=memory_dir,
+            )
 
     if match_lifecycle.is_ft(enriched) and not current.get("memory_updated"):
-        if _has_required_memory_keys(enriched):
+        if event_status and event_status["status"] == api_provider.EVENTS_PENDING_ENRICHMENT:
+            logger.info(
+                "Deferring football memory update for FT fixture %s while event enrichment is pending.",
+                fixture_id,
+            )
+            memory_result = {"updated": False, "reason": "event_enrichment_pending"}
+        elif _has_required_memory_keys(enriched):
             try:
                 memory_result = await update_match_in_memory(bot.http_session, enriched)
             except Exception as e:
@@ -260,13 +305,47 @@ async def process_terminal_fixture(
     current = match_state.get_fixture_state(fixture_id, memory_dir=memory_dir) or {}
     ft_posted = None
     if match_lifecycle.is_ft(enriched) and not current.get("ft_announced"):
-        ft_posted = await _post_ft_from_data(bot, enriched)
-        if ft_posted:
+        sent = await _post_ft_from_data(
+            bot,
+            enriched,
+            show_missing_warning=show_missing_warning,
+        )
+        ft_posted = sent is not None
+        if sent is not None:
+            ft_content = _build_ft_message(enriched, show_missing_warning=show_missing_warning)
+            match_state.update_ft_message(
+                fixture_id,
+                _message_id_or_none(sent),
+                ft_content,
+                memory_dir=memory_dir,
+            )
             match_state.mark_ft_announced(fixture_id, memory_dir=memory_dir)
         else:
             logger.warning("FT announcement skipped or failed for fixture %s.", fixture_id)
     elif match_lifecycle.is_ft(enriched):
         ft_posted = "already_announced"
+        ft_content = _build_ft_message(enriched, show_missing_warning=show_missing_warning)
+        message_id = current.get("ft_message_id")
+        if message_id is not None and current.get("ft_message_content") != ft_content:
+            edited = await edit_general_message(
+                bot=bot,
+                channel_id=CHANNEL_ID,
+                message_id=message_id,
+                content=ft_content,
+            )
+            if edited is not None:
+                match_state.update_ft_message(
+                    fixture_id,
+                    _message_id_or_none(edited) or message_id,
+                    ft_content,
+                    memory_dir=memory_dir,
+                )
+            else:
+                logger.warning(
+                    "Could not edit stored FT message %s for fixture %s; not reposting.",
+                    message_id,
+                    fixture_id,
+                )
     logger.info(
         "Terminal fixture processing result: fixture_id=%s memory_update=%s ft_announcement=%s.",
         fixture_id,
@@ -342,7 +421,11 @@ async def fetch_and_post_ft(bot: discord.Client) -> None:
                 _past_expected_live_logged.add(fixture_id)
             continue
         if match_lifecycle.is_terminal(match):
-            if match_lifecycle.is_ft(match) and _fixture_fully_resolved(fixture_id):
+            if (
+                match_lifecycle.is_ft(match)
+                and _fixture_fully_resolved(fixture_id)
+                and not _fully_resolved_fixture_can_repair_ft_message(fixture_id)
+            ):
                 _past_expected_live_logged.discard(fixture_id)
                 continue
             await process_terminal_fixture(bot, match, now_utc=now)

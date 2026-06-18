@@ -21,6 +21,100 @@ class ProviderEnrichmentTests(unittest.TestCase):
     def setUp(self):
         reset_api_provider_state()
 
+    def test_event_completeness_is_pending_before_enrichment_exhausts(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="pending-events")
+        match["goals"] = {"home": 2, "away": 0}
+        match["events"] = []
+
+        status = api_provider.event_completeness_status(match)
+
+        self.assertEqual(status["status"], api_provider.EVENTS_PENDING_ENRICHMENT)
+        self.assertEqual(status["missing_goals"], 2)
+
+    def test_event_completeness_becomes_exhausted_after_final_retry(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="exhausted-events")
+        match["goals"] = {"home": 1, "away": 0}
+        match["events"] = []
+        t0 = datetime(2026, 5, 24, 15, 0, 0)
+
+        async def run():
+            with (
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
+                patch.object(api_provider, "bot_now", return_value=t0),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=None)),
+            ):
+                await api_provider.enrich_fixture_events(None, match)
+                await api_provider.enrich_fixture_events(None, match)
+                return api_provider.event_completeness_status(match)
+
+        status = asyncio.run(run())
+
+        self.assertEqual(status["status"], api_provider.EVENTS_EXHAUSTED_MISSING)
+        self.assertEqual(status["missing_goals"], 1)
+
+    def test_event_completeness_persisted_exhausted_status_survives_reload(self):
+        from modules import api_provider, match_state
+
+        match = espn_match(fixture_id="persisted-exhausted")
+        match["goals"] = {"home": 1, "away": 0}
+        match["events"] = []
+        status = api_provider.event_completeness_status(match)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_dir = Path(tmp)
+            match_state.upsert_fixture_from_match(
+                match,
+                datetime(2026, 5, 24, 15, 0, tzinfo=api_provider.timezone.utc),
+                memory_dir=memory_dir,
+            )
+            match_state.update_event_completeness(
+                "persisted-exhausted",
+                status["score_key"],
+                api_provider.EVENTS_EXHAUSTED_MISSING,
+                status["missing_goals"],
+                memory_dir=memory_dir,
+            )
+
+            reset_api_provider_state()
+            reloaded = api_provider.event_completeness_status(match, memory_dir=memory_dir)
+
+        self.assertEqual(reloaded["status"], api_provider.EVENTS_EXHAUSTED_MISSING)
+
+    def test_event_completeness_score_change_resets_exhausted_status(self):
+        from modules import api_provider, match_state
+
+        match = espn_match(fixture_id="score-reset")
+        match["goals"] = {"home": 1, "away": 0}
+        match["events"] = []
+        old_status = api_provider.event_completeness_status(match)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            memory_dir = Path(tmp)
+            match_state.upsert_fixture_from_match(
+                match,
+                datetime(2026, 5, 24, 15, 0, tzinfo=api_provider.timezone.utc),
+                memory_dir=memory_dir,
+            )
+            match_state.update_event_completeness(
+                "score-reset",
+                old_status["score_key"],
+                api_provider.EVENTS_EXHAUSTED_MISSING,
+                old_status["missing_goals"],
+                memory_dir=memory_dir,
+            )
+            changed = {**match, "goals": {"home": 2, "away": 0}}
+
+            status = api_provider.event_completeness_status(changed, memory_dir=memory_dir)
+
+        self.assertEqual(status["status"], api_provider.EVENTS_PENDING_ENRICHMENT)
+        self.assertEqual(status["missing_goals"], 2)
+
     def test_fallback_window_maps_api_football_fixture_to_cached_espn_fixture(self):
         from modules import api_provider, match_state
 
