@@ -33,6 +33,7 @@ Football data flows through `modules/api_provider.py`.
 - Football fixture lookup uses rolling UTC-aware windows and dedupes by canonical fixture identity across provider dates.
 - ESPN fixture IDs are preferred as the canonical identity when known. API-Football fixture IDs are stored as provider aliases so fallback/live/FT data for the same real match does not create a second lifecycle.
 - Public football snapshots reuse the same enrichment/best-known event layer used by live and FT paths, so `!matches` should not regress to a stale ESPN event list after richer event data has already been learned.
+- Missing-goal warnings are hidden while enrichment is still pending. Live posts, FT posts, startup snapshots, and `!matches` show the best known score/events first; `⚠️ ... missing from event data` appears only after enrichment is exhausted for that fixture/score state.
 
 ## Football Lifecycle
 
@@ -175,7 +176,7 @@ See `OPERATIONS.md` for the canonical runbook.
 
 ## Runtime State
 
-Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state. `match_state.json` stores provider aliases under `provider_ids`, for example an ESPN canonical fixture plus its API-Football fallback fixture ID.
+Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state. `match_state.json` stores provider aliases under `provider_ids`, for example an ESPN canonical fixture plus its API-Football fallback fixture ID. It also stores FT/live message IDs and event-completeness state so missing-event warnings and later edits survive restart.
 
 Daily operational log archives can be collected with `scripts/collect_daily_logs.sh`. On the Pi, the recommended cron job runs at 06:00 and keeps the newest 30 daily archives under `bot_memory/log_exports/daily/`. Each summary splits app-log warning/error counts from systemd journal counts so the app log remains the primary bot-health signal.
 

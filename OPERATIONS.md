@@ -237,7 +237,11 @@ Useful markers:
 
 If the log only shows stored/reused best-known events, enrichment logic ran but API-Football event enrichment was not needed.
 
-`!matches`, startup snapshots, live updates, and FT posts all pass football fixtures through the same enrichment/best-known event layer before formatting. If live updates show a scorer but `!matches` shows a missing-event warning for the same fixture, inspect `[Enrich]` logs and verify the deployed code includes the latest `cogs/matches.py`.
+`!matches`, startup snapshots, live updates, and FT posts all pass football fixtures through the same enrichment/best-known event layer before formatting. Missing-goal warnings are intentionally hidden while event completeness is `pending_enrichment`; the bot shows the best known score/events and keeps retrying within the configured enrichment budget. The warning appears only after the fixture/score state reaches `exhausted_missing`.
+
+For FT results, the first FT post is sent promptly with the best current data. If enrichment later improves the event list or changes the warning state, the bot edits the stored FT message instead of reposting. Memory updates remain deferred while event completeness is pending, then run once when data is complete or enrichment is exhausted.
+
+If live updates and `!matches` disagree after enrichment is exhausted, inspect `[Enrich]` logs for best-known event reuse and verify `match_state.json` has the expected `event_completeness_key`, `event_completeness_status`, and `ft_message_id` for the fixture.
 
 ### Bot restarts in a loop
 

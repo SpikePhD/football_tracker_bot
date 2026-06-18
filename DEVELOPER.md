@@ -102,6 +102,10 @@ Enrichment protections:
 
 The live loop, FT handler, and public `!matches` snapshot should all reuse `api_provider.enrich_fixture_events(...)` or `api_provider.enrich_fixtures(...)` before formatting football events. This keeps scorer details consistent across proactive live posts, final posts, startup snapshots, and command output.
 
+Event completeness is an explicit persisted lifecycle separate from fixture lifecycle. `complete` means goal events cover the score; `pending_enrichment` means a missing-event gap exists but retry/fallback work may still improve it; `exhausted_missing` means the warning is allowed to be shown for that fixture/score key. Formatters should show `⚠️ ... missing from event data` only when callers explicitly pass the exhausted state through.
+
+FT posts are exactly-once by fixture ID, but their stored Discord message can be edited later if enrichment improves the event list or changes an exhausted warning. Do not repost deleted/uneditable FT messages, and do not recount football memory when better events arrive after `memory_updated=true`. Memory updates should stay deferred while event completeness is pending, then run once when data is complete or exhausted.
+
 ## Scheduler Model
 
 `modules/scheduler.py` owns long idle sleeps for both sports.
