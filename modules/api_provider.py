@@ -1317,6 +1317,25 @@ async def resolve_api_football_fixture_id(session: aiohttp.ClientSession, espn_m
         _remember_api_fixture_mapping(espn_fixture_id, _api_fixture_id_cache[espn_fixture_id])
         return _api_fixture_id_cache[espn_fixture_id]
 
+    persisted_api_fixture_id = match_state.get_provider_fixture_id(espn_fixture_id, "api_football")
+    if persisted_api_fixture_id is not None:
+        try:
+            api_fixture_id = int(persisted_api_fixture_id)
+        except (TypeError, ValueError):
+            logger.warning(
+                "[Enrich] Ignoring invalid persisted API-Football fixture mapping: "
+                "ESPN fixture %s -> %s",
+                espn_fixture_id,
+                persisted_api_fixture_id,
+            )
+        else:
+            logger.info(
+                f"[Enrich] Using persisted ESPN -> API-Football fixture mapping: "
+                f"{espn_fixture_id} -> {api_fixture_id}"
+            )
+            _remember_api_fixture_mapping(espn_fixture_id, api_fixture_id)
+            return api_fixture_id
+
     now_local = bot_now()
     negative_mapping = _get_negative_api_fixture_mapping(espn_fixture_id, now_local)
     if negative_mapping is not None:

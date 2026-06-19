@@ -767,6 +767,42 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertFalse(needed)
         live_check.assert_awaited_once()
 
+    def test_scheduler_does_not_wake_for_fully_resolved_exhausted_missing_ft_fixture(self):
+        from modules import api_provider, match_state, scheduler
+
+        terminal = espn_match(fixture_id="resolved-exhausted-ft")
+        terminal["fixture"]["date"] = "2026-06-03T21:00:00Z"
+        terminal["fixture"]["status"] = {"short": "FT", "long": "Full Time"}
+        terminal["goals"] = {"home": 2, "away": 0}
+        terminal["events"] = []
+        now_utc = datetime(2026, 6, 3, 23, 30, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            with (
+                patch.object(scheduler, "expected_ft_due_fixture_ids", return_value=[]),
+                patch.object(scheduler.api_provider, "fetch_relevant_football", AsyncMock(return_value=[terminal])),
+                patch.object(scheduler.api_provider, "has_live_football", AsyncMock(return_value=False)) as live_check,
+                patch.object(
+                    match_state,
+                    "get_fixture_state",
+                    return_value={
+                        "fixture_id": "resolved-exhausted-ft",
+                        "ft_announced": True,
+                        "memory_updated": True,
+                        "ft_message_id": 765,
+                        "event_completeness_status": api_provider.EVENTS_EXHAUSTED_MISSING,
+                    },
+                ),
+            ):
+                needed = await scheduler._football_poll_needed(fake_bot, now_utc)
+                return needed, live_check
+
+        needed, live_check = asyncio.run(run())
+
+        self.assertFalse(needed)
+        live_check.assert_awaited_once()
+
     def test_scheduler_does_not_wake_for_mapped_fallback_terminal_ft_when_canonical_resolved(self):
         from modules import match_state, scheduler
 

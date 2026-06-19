@@ -20,6 +20,19 @@ class ProviderEnrichmentTests(unittest.TestCase):
 
     def setUp(self):
         reset_api_provider_state()
+        from modules import match_state
+
+        self._memory_tmp = tempfile.TemporaryDirectory()
+        self._match_state_patch = patch.object(
+            match_state,
+            "BOT_MEMORY_DIR",
+            Path(self._memory_tmp.name),
+        )
+        self._match_state_patch.start()
+
+    def tearDown(self):
+        self._match_state_patch.stop()
+        self._memory_tmp.cleanup()
 
     def test_event_completeness_is_pending_before_enrichment_exhausts(self):
         from modules import api_provider
@@ -306,6 +319,38 @@ class ProviderEnrichmentTests(unittest.TestCase):
         self.assertEqual(first, 999999)
         self.assertEqual(second, 999998)
         self.assertEqual(live_fetch.await_count, 1)
+
+    def test_mapping_reuses_persisted_provider_alias_after_restart(self):
+        from modules import api_provider, match_state
+
+        match = espn_match(fixture_id="737155")
+        t0 = datetime(2026, 5, 24, 15, 0, 0)
+
+        async def run(memory_dir: Path):
+            api_provider._reset_enrich_state_for_today()
+            api_provider._api_fixture_id_cache.clear()
+            api_provider._api_fixture_id_negative_cache["737155"] = {
+                "expires_at": t0 + timedelta(seconds=900),
+                "reason": "date/league lookup returned no candidates",
+            }
+            match_state.link_provider_fixture_id("737155", "espn", "737155", memory_dir=memory_dir)
+            match_state.link_provider_fixture_id("737155", "api_football", "999999", memory_dir=memory_dir)
+            with (
+                patch.object(match_state, "BOT_MEMORY_DIR", memory_dir),
+                patch.object(api_provider, "bot_now", return_value=t0),
+                patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value={"response": []})) as live_fetch,
+                patch.object(api_provider.api_client, "_make_request", AsyncMock(return_value={"response": []})) as make_request,
+            ):
+                resolved = await api_provider.resolve_api_football_fixture_id(None, match)
+                return resolved, live_fetch, make_request, dict(api_provider._api_fixture_id_cache)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            resolved, live_fetch, make_request, cache = asyncio.run(run(Path(tmp)))
+
+        self.assertEqual(str(resolved), "999999")
+        self.assertEqual(str(cache["737155"]), "999999")
+        live_fetch.assert_not_awaited()
+        make_request.assert_not_awaited()
 
     def test_live_mapping_accepts_configured_national_team_aliases(self):
         from modules import api_provider
