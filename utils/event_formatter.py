@@ -21,6 +21,74 @@ def shootout_events(events: list) -> list:
     return [event for event in events if is_shootout_event(event)]
 
 
+def _score_int(value) -> int | None:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _match_score_caps(match: dict) -> tuple[int, int] | None:
+    goals = match.get("goals", {}) or {}
+    home = _score_int(goals.get("home"))
+    away = _score_int(goals.get("away"))
+    if home is None or away is None:
+        return None
+    return home, away
+
+
+def _event_team_side(event: dict, match: dict) -> str | None:
+    teams = match.get("teams", {}) or {}
+    if _event_team_matches(event, teams.get("home", {}) or {}):
+        return "home"
+    if _event_team_matches(event, teams.get("away", {}) or {}):
+        return "away"
+    return None
+
+
+def prune_goal_events_to_score(match: dict) -> tuple[dict, int]:
+    """
+    Return a copy of match whose normal goal events cannot exceed the score.
+
+    Providers can briefly report goals that are later voided. Once the score has
+    been accepted, it is authoritative for display and memory counting. Shootout
+    events are not regular match goals and are never pruned here.
+    """
+    caps = _match_score_caps(match)
+    if caps is None:
+        return match, 0
+
+    remaining = {"home": caps[0], "away": caps[1]}
+    total_remaining = caps[0] + caps[1]
+    pruned = 0
+    sanitized_events = []
+
+    for event in match.get("events", []) or []:
+        if event.get("type") != "Goal" or is_shootout_event(event):
+            sanitized_events.append(event)
+            continue
+
+        side = _event_team_side(event, match)
+        if side in remaining:
+            if remaining[side] > 0:
+                sanitized_events.append(event)
+                remaining[side] -= 1
+                total_remaining -= 1
+            else:
+                pruned += 1
+            continue
+
+        if total_remaining > 0:
+            sanitized_events.append(event)
+            total_remaining -= 1
+        else:
+            pruned += 1
+
+    if pruned == 0:
+        return match, 0
+    return {**match, "events": sanitized_events}, pruned
+
+
 def event_completeness_note(goals: dict, events: list, *, show_warning: bool = False) -> str:
     """
     Return a warning string if the goal events don't account for all goals in

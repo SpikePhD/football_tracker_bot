@@ -11,6 +11,7 @@ from utils.event_formatter import (
     format_shootout_segments,
     event_completeness_note,
     normal_match_events,
+    prune_goal_events_to_score,
 )
 from modules.discord_poster import post_new_message_to_context
 from utils.tennis_formatter import format_tennis_snapshot_line
@@ -41,6 +42,8 @@ def _total_goals(match: dict) -> int | None:
 
 def _events_are_better_for_display(match: dict, candidate_events: list) -> bool:
     current_events = match.get("events", []) or []
+    candidate_match, _pruned = prune_goal_events_to_score({**match, "events": list(candidate_events or [])})
+    candidate_events = candidate_match.get("events", [])
     candidate_goals = _goal_event_count(candidate_events)
     current_goals = _goal_event_count(current_events)
     if candidate_goals <= current_goals:
@@ -72,7 +75,8 @@ def _apply_persisted_ft_events(fixtures: list) -> list:
             and isinstance(persisted_events, list)
             and _events_are_better_for_display(match, persisted_events)
         ):
-            merged.append({**match, "events": list(persisted_events)})
+            sanitized, _pruned = prune_goal_events_to_score({**match, "events": list(persisted_events)})
+            merged.append(sanitized)
         else:
             merged.append(match)
     return merged
@@ -116,6 +120,13 @@ def filter_upcoming_football_fixtures(fixtures: list, now_utc) -> list:
 
 
 def _format_football_fixture_line(match: dict) -> str:
+    match, pruned_goal_events = prune_goal_events_to_score(match)
+    if pruned_goal_events:
+        logger.info(
+            "Pruned %d surplus goal event(s) before football display render for fixture %s.",
+            pruned_goal_events,
+            match_lifecycle.fixture_identity(match),
+        )
     ko_dt = to_bot_tz(match["fixture"]["date"])
     status = match_lifecycle.status_short(match) or "N/A"
     home = match.get("teams", {}).get("home", {}).get("name", "Home Team")

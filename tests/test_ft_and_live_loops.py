@@ -747,6 +747,82 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertEqual([call.kwargs["message_id"] for call in upsert_live.await_args_list], [None, 100])
         self.assertEqual([call.args[1] for call in update_live_id.call_args_list], [100, 100])
 
+    def test_live_score_rollback_drops_surplus_voided_goal_event_after_guard_accepts(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        base = espn_match(fixture_id="voided-live-goal")
+        base["teams"]["home"] = {"id": "50", "name": "Belgium"}
+        base["teams"]["away"] = {"id": "51", "name": "Iran"}
+        base["fixture"]["status"] = {"short": "1H", "elapsed": 24}
+        base["goals"] = {"home": 0, "away": 0}
+        base["events"] = []
+
+        goal = espn_match(fixture_id="voided-live-goal")
+        goal["teams"] = base["teams"]
+        goal["fixture"]["status"] = {"short": "1H", "elapsed": 26}
+        goal["goals"] = {"home": 0, "away": 1}
+        goal["events"] = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Mehdi Taremi"},
+                "team": {"id": "51", "name": "Iran"},
+                "time": {"elapsed": 24},
+            }
+        ]
+
+        rollback = espn_match(fixture_id="voided-live-goal")
+        rollback["teams"] = base["teams"]
+        rollback["fixture"]["status"] = {"short": "1H", "elapsed": 30}
+        rollback["goals"] = {"home": 0, "away": 0}
+        rollback["events"] = list(goal["events"])
+
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 100})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(side_effect=[
+                    [base],
+                    [goal],
+                    [rollback],
+                    [rollback],
+                    [rollback],
+                ])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(side_effect=[
+                    base,
+                    goal,
+                    rollback,
+                    rollback,
+                    rollback,
+                ])),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop.match_state, "get_fixture_state", return_value={}),
+                patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
+                patch.object(live_loop.match_state, "update_live_message_id"),
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert_live,
+            ):
+                for _ in range(5):
+                    await live_loop.run_live_loop(fake_bot)
+                return upsert_live
+
+        upsert_live = asyncio.run(run())
+        sent_contents = [call.kwargs["content"] for call in upsert_live.await_args_list]
+
+        self.assertTrue(
+            any("Belgium 0 - 1 Iran" in content and "Mehdi Taremi" in content for content in sent_contents)
+        )
+        self.assertIn("Belgium 0 - 0 Iran", sent_contents[-1])
+        self.assertNotIn("Mehdi Taremi", sent_contents[-1])
+
     def test_live_pending_missing_events_do_not_render_warning(self):
         from modules import live_loop
         from modules import api_provider

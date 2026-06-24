@@ -8,7 +8,12 @@ from config import CHANNEL_ID
 from modules import api_provider, match_lifecycle, match_state
 from modules.bot_mode import is_silent
 from utils.time_utils import bot_now, utc_now
-from utils.event_formatter import format_match_events, format_shootout_segments, event_completeness_note
+from utils.event_formatter import (
+    format_match_events,
+    format_shootout_segments,
+    event_completeness_note,
+    prune_goal_events_to_score,
+)
 from modules.ft_handler import is_tracked_for_ft, track_match_for_ft
 from modules.discord_poster import upsert_live_message
 
@@ -179,6 +184,13 @@ async def run_live_loop(bot):
 
             # Enrich first so dedup key and outgoing message reflect final data.
             enriched = await api_provider.enrich_fixture_events(bot.http_session, match)
+            enriched, pruned_goal_events = prune_goal_events_to_score(enriched)
+            if pruned_goal_events:
+                logger.info(
+                    "Pruned %d surplus goal event(s) before live render for match %s.",
+                    pruned_goal_events,
+                    match_id,
+                )
             enriched_id = match_lifecycle.fixture_identity(enriched)
             if enriched_id is not None and enriched_id != match_id:
                 match_id = enriched_id

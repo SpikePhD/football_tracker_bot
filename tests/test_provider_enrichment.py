@@ -640,6 +640,43 @@ class ProviderEnrichmentTests(unittest.TestCase):
         self.assertEqual(enriched["events"][0]["player"]["name"], "Scorer")
         self.assertEqual(fetch_events.await_count, 0)
 
+    def test_best_known_goal_events_are_not_reused_after_score_rollback_to_nil(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="voided-goal")
+        match["teams"]["home"] = {"id": "50", "name": "Belgium"}
+        match["teams"]["away"] = {"id": "51", "name": "Iran"}
+        match["goals"] = {"home": 0, "away": 0}
+        match["events"] = []
+        stale_goal = {
+            "time": {"elapsed": 24},
+            "player": {"name": "Mehdi Taremi"},
+            "team": {"id": "51", "name": "Iran"},
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }
+
+        async def run():
+            api_provider._reset_enrich_state_for_today()
+            api_provider._best_known_events_by_espn_fixture["voided-goal"] = {
+                "events": [stale_goal],
+                "goal_count": 1,
+                "event_count": 1,
+                "score_total_at_capture": 1,
+                "source": "ESPN",
+                "api_fixture_id": None,
+                "updated_at": datetime(2026, 6, 21, 21, 26, 0),
+            }
+            with patch.object(api_provider, "bot_now", return_value=datetime(2026, 6, 21, 21, 30, 0)):
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+        self.assertEqual(enriched["goals"], {"home": 0, "away": 0})
+        self.assertEqual(
+            [event for event in enriched["events"] if event.get("type") == "Goal"],
+            [],
+        )
+
     def test_ft_payload_uses_best_known_events_before_missing_note(self):
         from modules import api_provider
 

@@ -59,6 +59,28 @@ class MatchesDisplayTests(unittest.TestCase):
             "**Football**\nNo tracked football matches today.",
         )
 
+    def test_daily_football_section_does_not_show_surplus_voided_goal_event(self):
+        from cogs import matches
+
+        fixture = _fixture("voided-display", "2026-06-21T19:00:00Z", status="FT")
+        fixture["teams"]["home"] = {"id": "100", "name": "Belgium"}
+        fixture["teams"]["away"] = {"id": "200", "name": "Iran"}
+        fixture["goals"] = {"home": 0, "away": 0}
+        fixture["events"] = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Mehdi Taremi"},
+                "team": {"id": "200", "name": "Iran"},
+                "time": {"elapsed": 24},
+            }
+        ]
+
+        content = matches.build_football_section([fixture])
+
+        self.assertIn("FT: Belgium 0-0 Iran", content)
+        self.assertNotIn("Mehdi Taremi", content)
+
     def test_upcoming_football_view_groups_future_fixtures_by_local_date(self):
         from cogs import matches
 

@@ -15,6 +15,7 @@ from utils.event_formatter import (
     format_shootout_segments,
     is_shootout_event,
     normalize_api_football_events,
+    prune_goal_events_to_score,
 )
 from utils.time_utils import utc_now
 
@@ -91,6 +92,13 @@ def _has_required_memory_keys(match_details: dict) -> bool:
 
 
 def _build_ft_message(match_details: dict, *, show_missing_warning: bool = False) -> str:
+    match_details, pruned_goal_events = prune_goal_events_to_score(match_details)
+    if pruned_goal_events:
+        logger.info(
+            "Pruned %d surplus goal event(s) before FT message render for fixture %s.",
+            pruned_goal_events,
+            match_lifecycle.fixture_identity(match_details),
+        )
     home_team = match_details.get("teams", {}).get("home", {}).get("name", "Home Team")
     away_team = match_details.get("teams", {}).get("away", {}).get("name", "Away Team")
     goals = match_details.get("goals", {"home": "?", "away": "?"})
@@ -226,6 +234,13 @@ async def process_terminal_fixture(
         return
 
     enriched = await api_provider.enrich_fixture_events(bot.http_session, match_details)
+    enriched, pruned_goal_events = prune_goal_events_to_score(enriched)
+    if pruned_goal_events:
+        logger.info(
+            "Pruned %d surplus goal event(s) before terminal processing for fixture %s.",
+            pruned_goal_events,
+            match_lifecycle.fixture_identity(enriched),
+        )
     status_payload = enriched.get("fixture", {}).get("status", {}) or {}
     raw_status = status_payload.get("short")
     normalized_status = match_lifecycle.status_short(enriched, log_normalization=True)

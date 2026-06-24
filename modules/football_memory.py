@@ -17,7 +17,7 @@ from config import (
     ESPN_CACHE_TTL_SEC,
 )
 from modules import match_lifecycle
-from utils.event_formatter import is_shootout_event
+from utils.event_formatter import is_shootout_event, prune_goal_events_to_score
 from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
@@ -503,6 +503,14 @@ async def update_match_in_memory(session: Any, match: Dict[str, Any]) -> dict:
 
     if not _match_has_required_memory_data(match):
         return {"updated": False, "reason": "missing_required_data"}
+
+    match, pruned_goal_events = prune_goal_events_to_score(match)
+    if pruned_goal_events:
+        logger.info(
+            "Pruned %d surplus goal event(s) before football memory update for fixture %s.",
+            pruned_goal_events,
+            match_lifecycle.fixture_identity(match),
+        )
 
     # Process match data
     update_result = await update_match_data(session, match)

@@ -43,7 +43,11 @@ from utils.time_utils import (
     to_bot_tz,
     utc_now,
 )
-from utils.event_formatter import is_shootout_event, normalize_api_football_events
+from utils.event_formatter import (
+    is_shootout_event,
+    normalize_api_football_events,
+    prune_goal_events_to_score,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -785,6 +789,23 @@ def _goal_event_count(events: list) -> int:
     return sum(1 for e in events if e.get("type") == "Goal" and not is_shootout_event(e))
 
 
+def _sanitize_goal_events_for_score(match: dict, context: str) -> dict:
+    sanitized, pruned = prune_goal_events_to_score(match)
+    if pruned:
+        fixture_id = match_lifecycle.fixture_identity(match) or match.get("fixture", {}).get("id")
+        goals = match.get("goals", {}) or {}
+        logger.info(
+            "[Enrich] Pruned %d surplus goal event(s) for fixture %s in %s "
+            "to match accepted score %s-%s.",
+            pruned,
+            fixture_id,
+            context,
+            goals.get("home"),
+            goals.get("away"),
+        )
+    return sanitized
+
+
 def _event_score_key(match: dict) -> str | None:
     fixture_id = match_lifecycle.fixture_identity(match) or match.get("fixture", {}).get("id")
     if fixture_id is None:
@@ -826,6 +847,7 @@ def event_completeness_status(match: dict, memory_dir=None) -> dict:
     Return display/reporting status for goal-event completeness.
     Warnings are shown only when this returns exhausted_missing.
     """
+    match = _sanitize_goal_events_for_score(match, "event completeness")
     score_key = _event_score_key(match)
     gap = _event_goal_gap(match)
     if gap is None:
@@ -1010,6 +1032,8 @@ def _remember_best_known_events(
     fixture_id = str(match.get("fixture", {}).get("id") or "")
     if not fixture_id:
         return
+    sanitized_match = _sanitize_goal_events_for_score({**match, "events": list(events)}, "best-known storage")
+    events = sanitized_match.get("events", [])
 
     existing = _best_known_events_by_espn_fixture.get(fixture_id)
     existing_events = existing.get("events", []) if existing else []
@@ -1044,6 +1068,10 @@ def _apply_best_known_events_if_better(match: dict, total_goals: int, goal_event
 
     current_events = match.get("events", [])
     best_events = best.get("events", [])
+    best_match = _sanitize_goal_events_for_score({**match, "events": list(best_events)}, "best-known reuse")
+    best_events = best_match.get("events", [])
+    if _goal_event_count(best_events) > total_goals:
+        return None
     if not _events_are_strictly_better(best_events, current_events):
         return None
 
@@ -1091,6 +1119,10 @@ def _merge_enriched_events_if_better(
         )
         return None
 
+    enriched_match = _sanitize_goal_events_for_score({**match, "events": list(enriched_events)}, source_label)
+    enriched_events = enriched_match.get("events", [])
+    af_goals = _goal_event_count(enriched_events)
+
     espn_non_goal_events = [e for e in events if e.get("type") != "Goal"]
     api_non_goal_events = [e for e in enriched_events if e.get("type") != "Goal"]
     if espn_non_goal_events and not api_non_goal_events:
@@ -1101,7 +1133,7 @@ def _merge_enriched_events_if_better(
         f"with {len(enriched_events)} event(s) from {source_label} "
         f"for API-Football fixture {api_fixture_id} ({af_goals}/{total_goals} goals)."
     )
-    merged = {**match, "events": enriched_events}
+    merged = _sanitize_goal_events_for_score({**match, "events": enriched_events}, f"{source_label} merge")
     _remember_best_known_events(merged, enriched_events, total_goals, source_label, api_fixture_id)
     return merged
 
@@ -1403,6 +1435,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
     from API-Football and return a copy of the match with more complete events.
     Returns the original match unchanged if data is complete or on any error.
     """
+    match = _sanitize_goal_events_for_score(match, "provider snapshot")
     goals = match.get("goals", {})
     events = match.get("events", [])
 

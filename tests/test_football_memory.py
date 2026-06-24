@@ -107,6 +107,44 @@ class FootballMemoryTests(unittest.TestCase):
         self.assertEqual(memory["teams"]["100"]["stats"]["draws"], 1)
         self.assertEqual(memory["teams"]["200"]["stats"]["draws"], 1)
 
+    def test_match_memory_does_not_count_surplus_voided_goal_event(self):
+        from modules import football_memory
+
+        match = {
+            "fixture": {
+                "id": "voided-ft",
+                "date": "2026-06-21T19:00:00+00:00",
+                "status": {"short": "FT"},
+            },
+            "league": {"id": 1},
+            "teams": {
+                "home": {"id": "100", "name": "Belgium"},
+                "away": {"id": "200", "name": "Iran"},
+            },
+            "goals": {"home": 0, "away": 0},
+            "events": [
+                {
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                    "player": {"name": "Mehdi Taremi"},
+                    "team": {"id": "200", "name": "Iran"},
+                    "time": {"elapsed": 24},
+                }
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                result = asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, {"updated": True, "reason": "updated"})
+        self.assertEqual(memory["matches"]["voided-ft"]["events"], [])
+        self.assertEqual(memory["teams"]["100"]["stats"]["draws"], 1)
+        self.assertEqual(memory["teams"]["200"]["stats"]["draws"], 1)
+        self.assertNotIn("Mehdi Taremi", memory["teams"]["200"].get("players", {}))
+
     def test_match_memory_skips_non_ft_without_updating(self):
         from modules import football_memory
 
