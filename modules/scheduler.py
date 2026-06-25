@@ -27,6 +27,10 @@ _football_scheduler_state = {
     "next_schedule_refresh_utc": None,
     "next_planned_kickoff_utc": None,
     "next_planned_wake_utc": None,
+    "wake_reason": None,
+    "wake_reason_detail": None,
+    "sleep_reason": None,
+    "sleep_reason_detail": None,
 }
 _last_logged_football_state: tuple | None = None
 _tennis_scheduler_state = {
@@ -46,6 +50,10 @@ def _set_football_scheduler_state(
     next_schedule_refresh_utc: datetime | None = None,
     next_planned_kickoff_utc: datetime | None = None,
     next_planned_wake_utc: datetime | None = None,
+    wake_reason: str | None = None,
+    wake_reason_detail: str | None = None,
+    sleep_reason: str | None = None,
+    sleep_reason_detail: str | None = None,
 ) -> None:
     global _last_logged_football_state
     _football_scheduler_state.update(
@@ -55,6 +63,10 @@ def _set_football_scheduler_state(
             "next_schedule_refresh_utc": next_schedule_refresh_utc,
             "next_planned_kickoff_utc": next_planned_kickoff_utc,
             "next_planned_wake_utc": next_planned_wake_utc,
+            "wake_reason": wake_reason,
+            "wake_reason_detail": wake_reason_detail,
+            "sleep_reason": sleep_reason,
+            "sleep_reason_detail": sleep_reason_detail,
         }
     )
     snapshot = (
@@ -62,15 +74,24 @@ def _set_football_scheduler_state(
         next_schedule_refresh_utc,
         next_planned_kickoff_utc,
         next_planned_wake_utc,
+        wake_reason,
+        wake_reason_detail,
+        sleep_reason,
+        sleep_reason_detail,
     )
     if snapshot != _last_logged_football_state:
         logger.info(
-            "Football scheduler %s; next check=%s, schedule refresh=%s, planned kickoff=%s, planned wake=%s.",
+            "Football scheduler %s; next check=%s, schedule refresh=%s, planned kickoff=%s, "
+            "planned wake=%s, wake reason=%s, wake detail=%s, sleep reason=%s, sleep detail=%s.",
             mode,
             next_football_check_utc.isoformat() if next_football_check_utc else "n/a",
             next_schedule_refresh_utc.isoformat() if next_schedule_refresh_utc else "n/a",
             next_planned_kickoff_utc.isoformat() if next_planned_kickoff_utc else "n/a",
             next_planned_wake_utc.isoformat() if next_planned_wake_utc else "n/a",
+            wake_reason or "n/a",
+            wake_reason_detail or "n/a",
+            sleep_reason or "n/a",
+            sleep_reason_detail or "n/a",
         )
         _last_logged_football_state = snapshot
 
@@ -140,6 +161,39 @@ def _next_scheduled_football_wake(matches: list[dict], now_utc: datetime) -> tup
     return min(candidates, key=lambda item: item[0])
 
 
+def _short_fixture_list(fixture_ids: list[str]) -> str:
+    shown = [str(fixture_id) for fixture_id in fixture_ids[:5]]
+    if len(fixture_ids) > 5:
+        shown.append(f"+{len(fixture_ids) - 5} more")
+    return ",".join(shown)
+
+
+def _fixture_poll_reason_detail(match: dict) -> str:
+    fixture_id = match_lifecycle.fixture_identity(match) or "unknown"
+    status = match_lifecycle.status_short(match) or "unknown"
+    kickoff = match_lifecycle.fixture_kickoff_utc(match)
+    kickoff_text = kickoff.astimezone(timezone.utc).isoformat() if kickoff else "n/a"
+    return f"fixture={fixture_id} status={status} kickoff={kickoff_text}"
+
+
+def _football_sleep_reason_detail(
+    *,
+    reason: str,
+    schedule_refresh: datetime,
+    kickoff: datetime | None,
+    wake: datetime | None,
+    next_ft_check: datetime | None,
+) -> str:
+    if reason == "unresolved_ft_due" and next_ft_check:
+        return f"expected_ft={next_ft_check.astimezone(timezone.utc).isoformat()}"
+    if reason == "next_fixture_wake" and kickoff and wake:
+        return (
+            f"kickoff={kickoff.astimezone(timezone.utc).isoformat()} "
+            f"wake={wake.astimezone(timezone.utc).isoformat()}"
+        )
+    return f"next_refresh={schedule_refresh.astimezone(timezone.utc).isoformat()}"
+
+
 async def _plan_sleep_until_next_fixture(bot, now_utc: datetime) -> datetime:
     schedule_refresh = now_utc + timedelta(seconds=_FOOTBALL_SLEEP_REFRESH_SEC)
     matches = await api_provider.fetch_upcoming_football_schedule(bot.http_session, now_utc)
@@ -152,12 +206,26 @@ async def _plan_sleep_until_next_fixture(bot, now_utc: datetime) -> datetime:
         next_check_candidates.append(next_ft_check)
     next_check = min(next_check_candidates)
     planned_wake = min((value for value in (wake, next_ft_check) if value), default=None)
+    if next_ft_check and next_check == next_ft_check:
+        sleep_reason = "unresolved_ft_due"
+    elif wake and next_check == wake:
+        sleep_reason = "next_fixture_wake"
+    else:
+        sleep_reason = "schedule_refresh"
     _set_football_scheduler_state(
         mode="sleeping",
         next_football_check_utc=next_check,
         next_schedule_refresh_utc=schedule_refresh,
         next_planned_kickoff_utc=kickoff,
         next_planned_wake_utc=planned_wake,
+        sleep_reason=sleep_reason,
+        sleep_reason_detail=_football_sleep_reason_detail(
+            reason=sleep_reason,
+            schedule_refresh=schedule_refresh,
+            kickoff=kickoff,
+            wake=wake,
+            next_ft_check=next_ft_check,
+        ),
     )
     return next_check
 
@@ -241,19 +309,28 @@ async def run_local_daily_routines(bot, now_utc: datetime | None = None) -> None
 
 
 async def _football_poll_needed(bot, now_utc: datetime) -> bool:
+    needed, _reason, _detail = await _football_poll_decision(bot, now_utc)
+    return needed
+
+
+async def _football_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]:
     due_ids = expected_ft_due_fixture_ids(now_utc)
     if due_ids:
-        return True
+        return True, "ft_due", f"fixtures={_short_fixture_list(due_ids)}"
 
     matches = await api_provider.fetch_relevant_football(bot.http_session, now_utc)
-    if any(_fixture_requires_football_poll(match, now_utc) for match in matches):
-        return True
+    for match in matches:
+        if _fixture_requires_football_poll(match, now_utc):
+            return True, "lifecycle_fixture", _fixture_poll_reason_detail(match)
 
-    return await api_provider.has_live_football(
+    has_fallback_live = await api_provider.has_live_football(
         bot.http_session,
         now_utc=now_utc,
         relevant_matches=matches,
     )
+    if has_fallback_live:
+        return True, "fallback_live", "provider_live_endpoint=true"
+    return False, "no_relevant_fixture", f"due=0 relevant={len(matches)} fallback_live=false"
 
 
 def _fixture_requires_football_poll(match: dict, now_utc: datetime) -> bool:
@@ -338,12 +415,15 @@ async def run_operations_loop(bot) -> None:
 
         if now >= next_football_check:
             try:
-                if await _football_poll_needed(bot, now):
+                football_needed, wake_reason, wake_reason_detail = await _football_poll_decision(bot, now)
+                if football_needed:
                     await run_football_cycle(bot, now)
                     next_football_check = utc_now() + timedelta(seconds=api_provider.get_poll_interval())
                     _set_football_scheduler_state(
                         mode="awake",
                         next_football_check_utc=next_football_check,
+                        wake_reason=wake_reason,
+                        wake_reason_detail=wake_reason_detail,
                     )
                 else:
                     next_football_check = await _plan_sleep_until_next_fixture(bot, utc_now())
@@ -353,6 +433,8 @@ async def run_operations_loop(bot) -> None:
                 _set_football_scheduler_state(
                     mode="awake",
                     next_football_check_utc=next_football_check,
+                    wake_reason="error_recovery",
+                    wake_reason_detail=str(e),
                 )
 
         if now >= next_tennis_check:

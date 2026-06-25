@@ -78,6 +78,13 @@ class LifecycleCommandFormatterTests(unittest.TestCase):
                 "next_schedule_refresh_utc": datetime(2026, 6, 4, 3, 0, tzinfo=timezone.utc),
                 "next_planned_kickoff_utc": datetime(2026, 6, 4, 8, 0, tzinfo=timezone.utc),
                 "next_planned_wake_utc": datetime(2026, 6, 4, 6, 0, tzinfo=timezone.utc),
+                "wake_reason": None,
+                "wake_reason_detail": None,
+                "sleep_reason": "next_fixture_wake",
+                "sleep_reason_detail": (
+                    "kickoff=2026-06-04T08:00:00+00:00 "
+                    "wake=2026-06-04T06:00:00+00:00"
+                ),
             },
         ), patch.object(
             football_lifecycle.scheduler,
@@ -106,6 +113,9 @@ class LifecycleCommandFormatterTests(unittest.TestCase):
         self.assertIn("Next schedule refresh: 2026-06-04T03:00:00+00:00", content)
         self.assertIn("Next planned kickoff: 2026-06-04T08:00:00+00:00", content)
         self.assertIn("Next planned wake: 2026-06-04T06:00:00+00:00", content)
+        self.assertIn("Wake reason: n/a", content)
+        self.assertIn("Sleep reason: next_fixture_wake", content)
+        self.assertIn("Sleep detail: kickoff=2026-06-04T08:00:00+00:00", content)
         self.assertIn("Tennis scheduler: awake", content)
         self.assertIn("Next tennis check: 2026-06-04T00:01:00+00:00", content)
         self.assertIn("Timezone: Europe/Rome", content)
