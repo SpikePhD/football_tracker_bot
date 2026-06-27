@@ -94,6 +94,22 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
 
         self.assertEqual(offenders, [])
 
+    def test_production_logs_do_not_use_misleading_empty_live_fetch_error_phrase(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        checked_paths = [
+            repo_root / "football_tracker_bot.py",
+            *(repo_root / "modules").glob("*.py"),
+            *(repo_root / "cogs").glob("*.py"),
+            *(repo_root / "utils").glob("*.py"),
+        ]
+        offenders = []
+        for path in checked_paths:
+            text = path.read_text(encoding="utf-8")
+            if "No live fixtures returned or fetch error" in text:
+                offenders.append(str(path.relative_to(repo_root)))
+
+        self.assertEqual(offenders, [])
+
     def test_daily_log_collection_script_and_runbook_are_present(self):
         repo_root = Path(__file__).resolve().parents[1]
         script = repo_root / "scripts" / "collect_daily_logs.sh"

@@ -1076,6 +1076,79 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertNotIn("gone-live", live_loop._last_sent_content)
         prune.assert_called_once_with(now)
 
+    def test_live_loop_empty_live_result_logs_clear_message_once_per_throttle_window(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        now = datetime(2026, 6, 12, 16, 0, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            if hasattr(live_loop, "_last_empty_live_log_at"):
+                live_loop._last_empty_live_log_at = None
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(return_value=[])),
+                patch.object(live_loop, "bot_now", return_value=now),
+                patch.object(live_loop, "utc_now", return_value=now),
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+            ):
+                with self.assertLogs("modules.live_loop", level="INFO") as first_logs:
+                    await live_loop.run_live_loop(fake_bot)
+                with self.assertNoLogs("modules.live_loop", level="INFO"):
+                    await live_loop.run_live_loop(fake_bot)
+                return first_logs.output
+
+        logs = asyncio.run(run())
+
+        self.assertTrue(any("No live football fixtures returned" in line for line in logs))
+        self.assertFalse(any("fetch error" in line for line in logs))
+
+    def test_live_loop_empty_live_log_throttle_resets_after_live_match(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        now = datetime(2026, 6, 12, 16, 0, tzinfo=timezone.utc)
+        match = espn_match(fixture_id="live-after-empty")
+        match["fixture"]["status"] = {"short": "1H", "elapsed": 12}
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 123})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            if hasattr(live_loop, "_last_empty_live_log_at"):
+                live_loop._last_empty_live_log_at = None
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(side_effect=[[], [match], []])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(live_loop, "bot_now", return_value=now),
+                patch.object(live_loop, "utc_now", return_value=now),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)),
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+            ):
+                with self.assertLogs("modules.live_loop", level="INFO") as captured:
+                    await live_loop.run_live_loop(fake_bot)
+                    await live_loop.run_live_loop(fake_bot)
+                    await live_loop.run_live_loop(fake_bot)
+                return captured.output
+
+        logs = asyncio.run(run())
+
+        empty_logs = [line for line in logs if "No live football fixtures returned" in line]
+        self.assertEqual(len(empty_logs), 2)
+
     def test_startup_seed_suppresses_duplicate_live_snapshot_post(self):
         from modules import live_loop
         from modules import api_provider

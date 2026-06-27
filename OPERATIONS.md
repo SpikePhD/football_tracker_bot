@@ -71,6 +71,8 @@ Each daily folder includes `summary_YYYY-MM-DD.txt`. Treat `app_warning_error_co
 
 The app export is normalized into chronological order after collecting matching lines from current and rotated `bot.log*` files. This makes review easier when rotation wraps the current log before older same-day lines.
 
+During football awake windows, `No live football fixtures returned` means the live endpoint returned an empty list for that poll. This is normal before kickoff, during provider visibility delays, or shortly after FT while the scheduler is still checking due work; actual provider failures are logged separately by the provider/client layers. Discord disconnect/resume pairs are usually gateway or network churn when a `Discord session RESUMED` line follows; investigate only if disconnects are frequent, not followed by resumes, or accompanied by ERROR/CRITICAL lines.
+
 To collect a specific date:
 
 ```bash

@@ -342,7 +342,7 @@ async def on_disconnect():
     """Called when the bot has disconnected from Discord.
     This could be for a number of reasons. Reconnects are usually automatic.
     """
-    logger.warning("🔌 Bot disconnected. Initiating session cleanup. Reconnection will be attempted by discord.py.")
+    logger.info("Discord gateway disconnected; discord.py will attempt automatic reconnect.")
 
 async def main():
     try:

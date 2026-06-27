@@ -27,9 +27,11 @@ _missing_since: dict[str, object] = {}
 _last_observed: dict[str, dict] = {}
 _regression_hold: dict[str, dict] = {}
 _last_sent_content: dict[str, tuple[str, object]] = {}
+_last_empty_live_log_at = None
 
 _MISSING_GRACE_SEC = 180
 _REGRESSION_CONFIRM_TICKS = 3
+_EMPTY_LIVE_LOG_INTERVAL = timedelta(minutes=30)
 
 
 def _render_live_line(
@@ -115,6 +117,22 @@ def _cleanup_missing_live_state(seen_live_ids: set[str], now) -> None:
         _last_sent_content.pop(mid, None)
 
 
+def _log_empty_live_result(now, now_utc) -> None:
+    global _last_empty_live_log_at
+    if (
+        _last_empty_live_log_at is not None
+        and (now_utc - _last_empty_live_log_at) < _EMPTY_LIVE_LOG_INTERVAL
+    ):
+        return
+    logger.info(f"[{now.strftime('%H:%M')}] No live football fixtures returned.")
+    _last_empty_live_log_at = now_utc
+
+
+def _reset_empty_live_log_state() -> None:
+    global _last_empty_live_log_at
+    _last_empty_live_log_at = None
+
+
 def seed_already_posted(fixtures: list) -> None:
     """
     Pre-populate live dedupe state with the current snapshot of any in-progress
@@ -156,14 +174,15 @@ async def run_live_loop(bot):
 
         now = bot_now()
         now_utc = utc_now()
-        logger.info(f"[{now.strftime('%H:%M')}] Querying live endpoint...")
+        logger.debug(f"[{now.strftime('%H:%M')}] Querying live endpoint...")
 
         matches = await api_provider.fetch_live(bot.http_session)
         if not matches:
-            logger.info(f"[{now.strftime('%H:%M')}] No live fixtures returned or fetch error.")
+            _log_empty_live_result(now, now_utc)
             _cleanup_missing_live_state(set(), now)
             prune_live_state(now_utc)
             return
+        _reset_empty_live_log_state()
 
         seen_live_ids: set[str] = set()
 
