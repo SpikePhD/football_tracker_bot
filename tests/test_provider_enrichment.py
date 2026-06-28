@@ -352,6 +352,174 @@ class ProviderEnrichmentTests(unittest.TestCase):
         live_fetch.assert_not_awaited()
         make_request.assert_not_awaited()
 
+    def test_prelink_live_fixture_stores_alias_without_fetching_events(self):
+        from modules import api_provider, match_state
+
+        match = espn_match(fixture_id="737155")
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 999999, "date": "2026-05-24T13:00:00+00:00"},
+                    "league": {"id": 135},
+                    "teams": {
+                        "home": {"name": "Parma"},
+                        "away": {"name": "Sassuolo"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with (
+                patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value=live_payload)) as live_fetch,
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock()) as event_fetch,
+                patch.object(api_provider.api_client, "_make_request", AsyncMock(return_value={"response": []})) as make_request,
+            ):
+                resolved = await api_provider.prelink_live_api_football_fixture(None, match)
+                state = match_state.get_fixture_state("737155")
+                return resolved, state, live_fetch, event_fetch, make_request
+
+        resolved, state, live_fetch, event_fetch, make_request = asyncio.run(run())
+
+        self.assertEqual(resolved, 999999)
+        self.assertEqual(state["provider_ids"]["espn"], "737155")
+        self.assertEqual(state["provider_ids"]["api_football"], "999999")
+        live_fetch.assert_awaited_once_with(None)
+        event_fetch.assert_not_awaited()
+        make_request.assert_not_awaited()
+
+    def test_prelink_live_fixture_reuses_cached_live_payload_for_multiple_fixtures(self):
+        from modules import api_provider
+
+        match_one = espn_match(fixture_id="737155")
+        match_two = espn_match(fixture_id="737156")
+        match_two["teams"]["home"]["name"] = "Milan"
+        match_two["teams"]["away"]["name"] = "Inter"
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 999999, "date": "2026-05-24T13:00:00+00:00"},
+                    "league": {"id": 135},
+                    "teams": {
+                        "home": {"name": "Parma"},
+                        "away": {"name": "Sassuolo"},
+                    },
+                },
+                {
+                    "fixture": {"id": 999998, "date": "2026-05-24T13:00:00+00:00"},
+                    "league": {"id": 135},
+                    "teams": {
+                        "home": {"name": "AC Milan"},
+                        "away": {"name": "Internazionale"},
+                    },
+                },
+            ]
+        }
+
+        async def run():
+            with patch.object(
+                api_provider.api_client,
+                "fetch_live_fixtures_payload",
+                AsyncMock(return_value=live_payload),
+            ) as live_fetch:
+                first = await api_provider.prelink_live_api_football_fixture(None, match_one)
+                second = await api_provider.prelink_live_api_football_fixture(None, match_two)
+                return first, second, live_fetch
+
+        first, second, live_fetch = asyncio.run(run())
+
+        self.assertEqual(first, 999999)
+        self.assertEqual(second, 999998)
+        self.assertEqual(live_fetch.await_count, 1)
+
+    def test_prelink_live_fixture_skips_when_persisted_alias_exists(self):
+        from modules import api_provider, match_state
+
+        match = espn_match(fixture_id="737155")
+        match_state.link_provider_fixture_id("737155", "espn", "737155")
+        match_state.link_provider_fixture_id("737155", "api_football", "999999")
+
+        async def run():
+            with patch.object(
+                api_provider.api_client,
+                "fetch_live_fixtures_payload",
+                AsyncMock(return_value={"response": []}),
+            ) as live_fetch:
+                resolved = await api_provider.prelink_live_api_football_fixture(None, match)
+                return resolved, live_fetch
+
+        resolved, live_fetch = asyncio.run(run())
+
+        self.assertEqual(resolved, 999999)
+        live_fetch.assert_not_awaited()
+
+    def test_prelink_live_fixture_cooldowns_failed_mapping(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="737155")
+        t0 = datetime(2026, 5, 24, 15, 0, 0)
+
+        async def run():
+            with (
+                patch.object(api_provider, "bot_now", return_value=t0),
+                patch.object(
+                    api_provider.api_client,
+                    "fetch_live_fixtures_payload",
+                    AsyncMock(return_value={"response": []}),
+                ) as live_fetch,
+            ):
+                first = await api_provider.prelink_live_api_football_fixture(None, match)
+                second = await api_provider.prelink_live_api_football_fixture(None, match)
+                return first, second, live_fetch
+
+        first, second, live_fetch = asyncio.run(run())
+
+        self.assertIsNone(first)
+        self.assertIsNone(second)
+        self.assertEqual(live_fetch.await_count, 1)
+
+    def test_enrichment_uses_persisted_prelinked_alias_without_date_lookup(self):
+        from modules import api_provider, match_state
+
+        match = espn_match(fixture_id="737155")
+        match["goals"] = {"home": 1, "away": 0}
+        match["events"] = []
+        match_state.link_provider_fixture_id("737155", "espn", "737155")
+        match_state.link_provider_fixture_id("737155", "api_football", "999999")
+        api_events = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Scorer"},
+                "team": {"id": "50", "name": "Parma"},
+                "time": {"elapsed": 8},
+            }
+        ]
+
+        async def run():
+            api_provider._enrich_retry_states[api_provider._event_retry_state_key(match, match["events"])] = {
+                "first_seen": datetime(2026, 5, 24, 15, 0, 0),
+                "attempt_count": 0,
+                "last_attempt_at": None,
+                "exhausted": False,
+            }
+            with (
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 5, 24, 15, 2, 0)),
+                patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "_make_request", AsyncMock(return_value={"response": []})) as make_request,
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": api_events})) as event_fetch,
+            ):
+                enriched = await api_provider.enrich_fixture_events(None, match)
+                return enriched, make_request, event_fetch
+
+        enriched, make_request, event_fetch = asyncio.run(run())
+
+        self.assertEqual(enriched["events"][0]["player"]["name"], "Scorer")
+        make_request.assert_not_awaited()
+        event_fetch.assert_awaited_once_with(None, 999999)
+
     def test_live_mapping_accepts_configured_national_team_aliases(self):
         from modules import api_provider
 

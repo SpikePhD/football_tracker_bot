@@ -89,6 +89,7 @@ _api_live_fixtures_cache: dict | None = None
 _api_live_fixtures_cache_ts: datetime | None = None
 _api_fixture_events_cache: dict[int, dict] = {}
 _api_fixture_id_negative_cache: dict[str, dict] = {}
+_api_fixture_id_prelink_negative_cache: dict[str, dict] = {}
 _best_known_events_by_espn_fixture: dict[str, dict] = {}
 _best_known_reuse_log_keys: set[str] = set()
 _enrich_api_call_count_date: str | None = None
@@ -622,6 +623,7 @@ def _reset_enrich_state_for_today() -> None:
         _enrich_retry_states.clear()
         _api_fixture_events_cache.clear()
         _api_fixture_id_negative_cache.clear()
+        _api_fixture_id_prelink_negative_cache.clear()
         _best_known_events_by_espn_fixture.clear()
         _best_known_reuse_log_keys.clear()
         _api_live_fixtures_cache = None
@@ -688,6 +690,33 @@ def _remember_negative_api_fixture_mapping(espn_fixture_id: str, reason: str) ->
     }
     logger.info(
         f"[Enrich] Cached negative API-Football mapping for ESPN fixture "
+        f"{espn_fixture_id} for {API_ENRICH_NEGATIVE_MAPPING_TTL_SEC}s: {reason}."
+    )
+
+
+def _get_negative_api_fixture_prelink(espn_fixture_id: str, now_local: datetime) -> dict | None:
+    negative = _api_fixture_id_prelink_negative_cache.get(espn_fixture_id)
+    if not negative:
+        return None
+
+    expires_at = negative.get("expires_at")
+    if expires_at is None or now_local >= expires_at:
+        _api_fixture_id_prelink_negative_cache.pop(espn_fixture_id, None)
+        return None
+
+    return negative
+
+
+def _remember_negative_api_fixture_prelink(espn_fixture_id: str, reason: str) -> None:
+    if API_ENRICH_NEGATIVE_MAPPING_TTL_SEC <= 0:
+        return
+
+    _api_fixture_id_prelink_negative_cache[espn_fixture_id] = {
+        "expires_at": bot_now() + timedelta(seconds=API_ENRICH_NEGATIVE_MAPPING_TTL_SEC),
+        "reason": reason,
+    }
+    logger.info(
+        f"[Enrich] Cached negative API-Football live prelink for ESPN fixture "
         f"{espn_fixture_id} for {API_ENRICH_NEGATIVE_MAPPING_TTL_SEC}s: {reason}."
     )
 
@@ -1325,6 +1354,81 @@ async def _resolve_live_api_football_fixture_id(
     _remember_api_fixture_mapping(espn_fixture_id, api_fixture_id)
     logger.info(
         f"[Enrich] Mapped ESPN fixture {espn_fixture_id} -> API-Football live fixture "
+        f"{api_fixture_id} (confidence {confidence:.2f})"
+    )
+    return api_fixture_id
+
+
+async def prelink_live_api_football_fixture(session: aiohttp.ClientSession, espn_match: dict) -> int | None:
+    """
+    Opportunistically store the API-Football ID for a live ESPN fixture.
+
+    This is identity-only preparation for later enrichment. It never fetches
+    API-Football events and keeps a separate negative cache so a failed live
+    prelink does not block the normal enrichment resolver's date lookup.
+    """
+    _reset_enrich_state_for_today()
+
+    provider = espn_match.get("provider") or espn_match.get("source")
+    if provider and provider != "espn":
+        return None
+    if not _is_live_espn_match(espn_match):
+        return None
+
+    espn_fixture_id = str(espn_match.get("fixture", {}).get("id") or "")
+    if not espn_fixture_id:
+        return None
+
+    cached_api_fixture_id = _api_fixture_id_cache.get(espn_fixture_id)
+    if cached_api_fixture_id is not None:
+        return cached_api_fixture_id
+
+    persisted_api_fixture_id = match_state.get_provider_fixture_id(espn_fixture_id, "api_football")
+    if persisted_api_fixture_id is not None:
+        try:
+            api_fixture_id = int(persisted_api_fixture_id)
+        except (TypeError, ValueError):
+            logger.warning(
+                "[Enrich] Ignoring invalid persisted API-Football live prelink: "
+                "ESPN fixture %s -> %s",
+                espn_fixture_id,
+                persisted_api_fixture_id,
+            )
+        else:
+            _api_fixture_id_cache[espn_fixture_id] = api_fixture_id
+            return api_fixture_id
+
+    now_local = bot_now()
+    negative = _get_negative_api_fixture_prelink(espn_fixture_id, now_local)
+    if negative is not None:
+        return None
+
+    try:
+        league_id = int(espn_match.get("league", {}).get("id"))
+    except (TypeError, ValueError):
+        _remember_negative_api_fixture_prelink(espn_fixture_id, "league ID missing")
+        return None
+    if league_id not in LEAGUE_SLUG_MAP:
+        return None
+
+    payload = await _get_api_football_live_payload(session)
+    if payload is None:
+        _remember_negative_api_fixture_prelink(espn_fixture_id, "live payload unavailable")
+        return None
+
+    candidates = payload.get("response", []) if payload else []
+    if not isinstance(candidates, list) or not candidates:
+        _remember_negative_api_fixture_prelink(espn_fixture_id, "live feed returned no candidates")
+        return None
+
+    api_fixture_id, confidence = _match_api_fixture_candidate(espn_match, candidates, league_id)
+    if api_fixture_id is None:
+        _remember_negative_api_fixture_prelink(espn_fixture_id, "no confident live mapping")
+        return None
+
+    _remember_api_fixture_mapping(espn_fixture_id, api_fixture_id)
+    logger.info(
+        f"[Enrich] Prelinked ESPN fixture {espn_fixture_id} -> API-Football live fixture "
         f"{api_fixture_id} (confidence {confidence:.2f})"
     )
     return api_fixture_id

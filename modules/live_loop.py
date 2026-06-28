@@ -201,6 +201,16 @@ async def run_live_loop(bot):
                     source=match.get("provider") or "espn",
                 )
 
+            if getattr(bot, "http_session", None) is not None:
+                try:
+                    await api_provider.prelink_live_api_football_fixture(bot.http_session, match)
+                except Exception as exc:
+                    logger.warning(
+                        "Could not prelink API-Football fixture ID for live match %s: %s",
+                        match_id,
+                        exc,
+                    )
+
             # Enrich first so dedup key and outgoing message reflect final data.
             enriched = await api_provider.enrich_fixture_events(bot.http_session, match)
             enriched, pruned_goal_events = prune_goal_events_to_score(enriched)

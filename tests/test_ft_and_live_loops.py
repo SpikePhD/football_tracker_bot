@@ -1237,6 +1237,52 @@ class FtAndLiveLoopTests(unittest.TestCase):
 
         upsert_live.assert_not_awaited()
 
+    def test_live_loop_prelinks_complete_espn_fixture_without_changing_live_text(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        match = espn_match(fixture_id="prelink-live")
+        match["goals"] = {"home": 1, "away": 0}
+        match["events"] = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Scorer"},
+                "team": {"id": "50", "name": "Parma"},
+                "time": {"elapsed": 8},
+            }
+        ]
+        fake_bot = type("FakeBot", (), {"http_session": object()})()
+        fake_message = type("FakeMessage", (), {"id": 400})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "prelink_live_api_football_fixture", AsyncMock(return_value=999999)) as prelink,
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=match)),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
+                patch.object(live_loop.match_state, "update_live_message_id"),
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert_live,
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+            ):
+                await live_loop.run_live_loop(fake_bot)
+                return prelink, upsert_live
+
+        prelink, upsert_live = asyncio.run(run())
+
+        prelink.assert_awaited_once_with(fake_bot.http_session, match)
+        content = upsert_live.await_args.kwargs["content"]
+        self.assertIn("Football LIVE: Parma 1 - 0 Sassuolo", content)
+        self.assertIn("8' - Scorer", content)
+        self.assertNotIn("missing from event data", content)
+
     def test_same_rendered_live_content_is_not_reposted_when_state_key_changes(self):
         from modules import live_loop
         from modules import api_provider

@@ -18,6 +18,8 @@ def reset_api_provider_state() -> None:
     api_provider._cache_date = None
     api_provider._cache_ts = None
     api_provider._api_fixture_id_cache.clear()
+    if hasattr(api_provider, "_api_fixture_id_prelink_negative_cache"):
+        api_provider._api_fixture_id_prelink_negative_cache.clear()
     api_provider._api_live_fixtures_cache = None
     api_provider._api_live_fixtures_cache_ts = None
     api_provider._api_fixture_events_cache.clear()
