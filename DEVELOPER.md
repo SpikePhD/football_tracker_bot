@@ -118,9 +118,9 @@ Football:
 
 Tennis:
 
-- `_tennis_poll_needed(...)` wakes for live matches, local-day FT posts, or pre-announcement work.
+- `_tennis_poll_needed(...)` wakes for live matches, local-day FT posts, pre-announcement work, or already pre-announced `NS` matches inside the start-watch window.
 - When awake, `tennis_loop.run_tennis_loop(...)` handles posts/upserts and dedupe.
-- When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at most every 6 hours or wakes at `tennis_pre_announce_hours` before the next start.
+- When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at most every 6 hours or wakes at `tennis_pre_announce_hours` before the next start. If that wake is already due but no work is needed, it schedules the next normal tennis poll instead of returning an immediate one-second loop.
 
 Do not reintroduce minute-by-minute provider polling while a sport is idle. The main loop may still wake for lightweight local daily routines.
 

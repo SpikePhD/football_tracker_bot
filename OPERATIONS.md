@@ -185,7 +185,7 @@ Inspect scheduler mode with:
 !football_lifecycle
 ```
 
-The command reports football and tennis scheduler modes, next check times, planned wake times, provider mode, lifecycle windows, and display lookup settings.
+The command reports football and tennis scheduler modes, next check times, planned wake times, wake/sleep reasons, provider mode, lifecycle windows, and display lookup settings. Tennis may stay awake for an already pre-announced match around scheduled start time while waiting for ESPN to change it from `NS` to `LIVE`.
 
 ## 6. Checks After Update
 

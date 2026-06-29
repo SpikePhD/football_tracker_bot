@@ -293,7 +293,7 @@ class TennisLoopTests(unittest.TestCase):
 
         self.assertTrue(asyncio.run(run()))
 
-    def test_scheduler_tennis_poll_not_needed_for_announced_future_match(self):
+    def test_scheduler_tennis_poll_needed_for_announced_match_in_start_watch_window(self):
         from modules import scheduler
 
         match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
@@ -307,11 +307,80 @@ class TennisLoopTests(unittest.TestCase):
                     patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
                     patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
                 ):
-                    return await scheduler._tennis_poll_needed(fake_bot, now_utc)
+                    return await scheduler._tennis_poll_decision(fake_bot, now_utc)
             finally:
                 scheduler.tennis_loop.pre_announced_ids.discard("pre-1")
 
-        self.assertFalse(asyncio.run(run()))
+        needed, reason, detail = asyncio.run(run())
+        self.assertTrue(needed)
+        self.assertEqual(reason, "tennis_start_watch")
+        self.assertIn("fixture=pre-1", detail)
+
+    def test_scheduler_tennis_poll_needed_for_announced_match_after_scheduled_start(self):
+        from modules import scheduler
+
+        match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
+        fake_bot = SimpleNamespace(http_session=None)
+        now_utc = datetime(2026, 6, 12, 13, 0, tzinfo=timezone.utc)
+
+        async def run():
+            scheduler.tennis_loop.pre_announced_ids.add("pre-1")
+            try:
+                with (
+                    patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                    patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
+                ):
+                    return await scheduler._tennis_poll_decision(fake_bot, now_utc)
+            finally:
+                scheduler.tennis_loop.pre_announced_ids.discard("pre-1")
+
+        needed, reason, detail = asyncio.run(run())
+        self.assertTrue(needed)
+        self.assertEqual(reason, "tennis_start_watch")
+        self.assertIn("fixture=pre-1", detail)
+
+    def test_scheduler_tennis_poll_not_needed_for_stale_announced_ns_match(self):
+        from modules import scheduler
+
+        match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
+        fake_bot = SimpleNamespace(http_session=None)
+        now_utc = datetime(2026, 6, 12, 17, 1, tzinfo=timezone.utc)
+
+        async def run():
+            scheduler.tennis_loop.pre_announced_ids.add("pre-1")
+            try:
+                with (
+                    patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                    patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
+                ):
+                    return await scheduler._tennis_poll_decision(fake_bot, now_utc)
+            finally:
+                scheduler.tennis_loop.pre_announced_ids.discard("pre-1")
+
+        needed, reason, detail = asyncio.run(run())
+        self.assertFalse(needed)
+        self.assertEqual(reason, "no_relevant_tennis")
+        self.assertIn("matches=1", detail)
+
+    def test_scheduler_tennis_sleep_plan_does_not_return_now_when_wake_is_due(self):
+        from modules import scheduler
+
+        future = tennis_match(match_id="future-2h", start_time="2026-06-12T12:00:00+00:00")
+        now_utc = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                patch.object(scheduler.api_provider, "fetch_upcoming_tennis_schedule", AsyncMock(return_value=[future])),
+            ):
+                return await scheduler._plan_tennis_sleep_until_next_match(fake_bot, now_utc)
+
+        next_check = asyncio.run(run())
+
+        self.assertEqual(next_check, now_utc + timedelta(seconds=scheduler._TENNIS_INTERVAL_SEC))
+        status = scheduler.get_tennis_scheduler_status()
+        self.assertEqual(status["sleep_reason"], "next_tennis_wake")
 
     def test_scheduler_tennis_poll_needed_for_unannounced_ft_uses_injected_day(self):
         from modules import scheduler
@@ -337,6 +406,8 @@ class TennisLoopTests(unittest.TestCase):
             scheduler._set_tennis_scheduler_state(
                 mode="awake",
                 next_tennis_check_utc=datetime(2026, 6, 12, 10, 1, tzinfo=timezone.utc),
+                wake_reason="tennis_live",
+                wake_reason_detail="fixture=live-1 status=LIVE start=n/a",
             )
 
         self.assertEqual(len(logs.output), 1)
@@ -350,6 +421,8 @@ class TennisLoopTests(unittest.TestCase):
             scheduler._set_tennis_scheduler_state(
                 mode="awake",
                 next_tennis_check_utc=datetime(2026, 6, 12, 10, 2, tzinfo=timezone.utc),
+                wake_reason="tennis_live",
+                wake_reason_detail="fixture=live-1 status=LIVE start=n/a",
             )
 
         self.assertEqual(
@@ -364,10 +437,36 @@ class TennisLoopTests(unittest.TestCase):
                 next_schedule_refresh_utc=datetime(2026, 6, 12, 16, 0, tzinfo=timezone.utc),
                 next_planned_start_utc=datetime(2026, 6, 12, 21, 0, tzinfo=timezone.utc),
                 next_planned_wake_utc=datetime(2026, 6, 12, 17, 0, tzinfo=timezone.utc),
+                sleep_reason="next_tennis_wake",
+                sleep_reason_detail="start=2026-06-12T21:00:00+00:00 wake=2026-06-12T17:00:00+00:00",
             )
 
         self.assertEqual(len(logs.output), 1)
         self.assertIn("Tennis scheduler sleeping", logs.output[0])
+
+        with self.assertNoLogs("modules.scheduler", level="INFO"):
+            scheduler._set_tennis_scheduler_state(
+                mode="sleeping",
+                next_tennis_check_utc=datetime(2026, 6, 12, 16, 1, tzinfo=timezone.utc),
+                next_schedule_refresh_utc=datetime(2026, 6, 12, 16, 1, tzinfo=timezone.utc),
+                next_planned_start_utc=datetime(2026, 6, 12, 21, 0, tzinfo=timezone.utc),
+                next_planned_wake_utc=datetime(2026, 6, 12, 17, 0, tzinfo=timezone.utc),
+                sleep_reason="next_tennis_wake",
+                sleep_reason_detail="start=2026-06-12T21:00:00+00:00 wake=2026-06-12T17:00:00+00:00",
+            )
+
+        with self.assertLogs("modules.scheduler", level="INFO") as logs:
+            scheduler._set_tennis_scheduler_state(
+                mode="sleeping",
+                next_tennis_check_utc=datetime(2026, 6, 12, 16, 2, tzinfo=timezone.utc),
+                next_schedule_refresh_utc=datetime(2026, 6, 12, 16, 2, tzinfo=timezone.utc),
+                next_planned_start_utc=datetime(2026, 6, 12, 22, 0, tzinfo=timezone.utc),
+                next_planned_wake_utc=datetime(2026, 6, 12, 18, 0, tzinfo=timezone.utc),
+                sleep_reason="next_tennis_wake",
+                sleep_reason_detail="start=2026-06-12T22:00:00+00:00 wake=2026-06-12T18:00:00+00:00",
+            )
+
+        self.assertEqual(len(logs.output), 1)
 
 
 if __name__ == "__main__":

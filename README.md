@@ -112,7 +112,7 @@ Key `operations` timezone/display/lifecycle settings:
 - `football_state_retention_hours` - stale state retention for non-terminal records
 - `football_expected_ft_minutes` - expected FT check offset from UTC kickoff
 - `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
-- `tennis_pre_announce_hours` - rolling tennis pre-announcement and scheduler wake window
+- `tennis_pre_announce_hours` - rolling tennis pre-announcement and scheduler wake lead; already-announced matches stay awake around start time so delayed ESPN live transitions are caught
 - `operations.api_provider.espn_poll_interval_sec` - active ESPN polling interval while football is awake
 - `operations.api_provider.fallback_poll_interval_sec` - active fallback polling interval while football is awake
 

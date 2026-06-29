@@ -95,6 +95,10 @@ class LifecycleCommandFormatterTests(unittest.TestCase):
                 "next_schedule_refresh_utc": None,
                 "next_planned_start_utc": None,
                 "next_planned_wake_utc": None,
+                "wake_reason": "tennis_live",
+                "wake_reason_detail": "fixture=tennis-1 status=LIVE start=2026-06-04T00:00:00+00:00",
+                "sleep_reason": None,
+                "sleep_reason_detail": None,
             },
         ):
             content = football_lifecycle.build_lifecycle_summary(
@@ -118,6 +122,9 @@ class LifecycleCommandFormatterTests(unittest.TestCase):
         self.assertIn("Sleep detail: kickoff=2026-06-04T08:00:00+00:00", content)
         self.assertIn("Tennis scheduler: awake", content)
         self.assertIn("Next tennis check: 2026-06-04T00:01:00+00:00", content)
+        self.assertIn("Tennis wake reason: tennis_live", content)
+        self.assertIn("Tennis wake detail: fixture=tennis-1 status=LIVE", content)
+        self.assertIn("Tennis sleep reason: n/a", content)
         self.assertIn("Timezone: Europe/Rome", content)
         self.assertIn("Display lookup: +/-", content)
         self.assertLessEqual(len(content), 1900)

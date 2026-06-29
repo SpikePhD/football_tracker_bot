@@ -187,6 +187,10 @@ def build_lifecycle_summary(state: dict, now_utc: datetime) -> str:
         f"Next tennis schedule refresh: {_fmt_utc_value(tennis_scheduler_status.get('next_schedule_refresh_utc'))}",
         f"Next tennis planned start: {_fmt_utc_value(tennis_scheduler_status.get('next_planned_start_utc'))}",
         f"Next tennis planned wake: {_fmt_utc_value(tennis_scheduler_status.get('next_planned_wake_utc'))}",
+        f"Tennis wake reason: {tennis_scheduler_status.get('wake_reason') or 'n/a'}",
+        f"Tennis wake detail: {tennis_scheduler_status.get('wake_reason_detail') or 'n/a'}",
+        f"Tennis sleep reason: {tennis_scheduler_status.get('sleep_reason') or 'n/a'}",
+        f"Tennis sleep detail: {tennis_scheduler_status.get('sleep_reason_detail') or 'n/a'}",
         f"Timezone: {OPERATIONS_TIMEZONE}",
         f"Display lookup: +/-{FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS}h",
         (

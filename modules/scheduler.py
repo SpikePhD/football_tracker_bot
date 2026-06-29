@@ -21,6 +21,7 @@ _last_provider_was_espn: bool | None = None
 _FOOTBALL_SLEEP_REFRESH_SEC = 21600
 _TENNIS_INTERVAL_SEC = 60
 _TENNIS_SLEEP_REFRESH_SEC = 21600
+_TENNIS_POST_START_WATCH_HOURS = 4
 _football_scheduler_state = {
     "mode": "sleeping",
     "next_football_check_utc": None,
@@ -39,6 +40,10 @@ _tennis_scheduler_state = {
     "next_schedule_refresh_utc": None,
     "next_planned_start_utc": None,
     "next_planned_wake_utc": None,
+    "wake_reason": None,
+    "wake_reason_detail": None,
+    "sleep_reason": None,
+    "sleep_reason_detail": None,
 }
 _last_logged_tennis_state: tuple | None = None
 
@@ -107,6 +112,10 @@ def _set_tennis_scheduler_state(
     next_schedule_refresh_utc: datetime | None = None,
     next_planned_start_utc: datetime | None = None,
     next_planned_wake_utc: datetime | None = None,
+    wake_reason: str | None = None,
+    wake_reason_detail: str | None = None,
+    sleep_reason: str | None = None,
+    sleep_reason_detail: str | None = None,
 ) -> None:
     global _last_logged_tennis_state
     _tennis_scheduler_state.update(
@@ -116,22 +125,32 @@ def _set_tennis_scheduler_state(
             "next_schedule_refresh_utc": next_schedule_refresh_utc,
             "next_planned_start_utc": next_planned_start_utc,
             "next_planned_wake_utc": next_planned_wake_utc,
+            "wake_reason": wake_reason,
+            "wake_reason_detail": wake_reason_detail,
+            "sleep_reason": sleep_reason,
+            "sleep_reason_detail": sleep_reason_detail,
         }
     )
     snapshot = (
         mode,
-        next_schedule_refresh_utc,
         next_planned_start_utc,
         next_planned_wake_utc,
+        wake_reason,
+        sleep_reason,
     )
     if snapshot != _last_logged_tennis_state:
         logger.info(
-            "Tennis scheduler %s; next check=%s, schedule refresh=%s, planned start=%s, planned wake=%s.",
+            "Tennis scheduler %s; next check=%s, schedule refresh=%s, planned start=%s, "
+            "planned wake=%s, wake reason=%s, wake detail=%s, sleep reason=%s, sleep detail=%s.",
             mode,
             next_tennis_check_utc.isoformat() if next_tennis_check_utc else "n/a",
             next_schedule_refresh_utc.isoformat() if next_schedule_refresh_utc else "n/a",
             next_planned_start_utc.isoformat() if next_planned_start_utc else "n/a",
             next_planned_wake_utc.isoformat() if next_planned_wake_utc else "n/a",
+            wake_reason or "n/a",
+            wake_reason_detail or "n/a",
+            sleep_reason or "n/a",
+            sleep_reason_detail or "n/a",
         )
         _last_logged_tennis_state = snapshot
 
@@ -272,17 +291,63 @@ def _next_scheduled_tennis_wake(matches: list[dict], now_utc: datetime) -> tuple
     return min(candidates, key=lambda item: item[0])
 
 
+def _tennis_in_start_watch_window(match: dict, now_utc: datetime) -> bool:
+    start = _tennis_start_utc(match)
+    if start is None:
+        return False
+    now_utc = now_utc.astimezone(timezone.utc)
+    start = start.astimezone(timezone.utc)
+    wake = start - timedelta(hours=TENNIS_PRE_ANNOUNCE_HOURS)
+    stale_at = start + timedelta(hours=_TENNIS_POST_START_WATCH_HOURS)
+    return wake <= now_utc <= stale_at
+
+
+def _tennis_poll_reason_detail(match: dict) -> str:
+    track_id = _tennis_track_id(match) or "unknown"
+    status = match.get("status", {}).get("short") or "unknown"
+    start = _tennis_start_utc(match)
+    start_text = start.astimezone(timezone.utc).isoformat() if start else "n/a"
+    return f"fixture={track_id} status={status} start={start_text}"
+
+
+def _tennis_sleep_reason_detail(
+    *,
+    reason: str,
+    schedule_refresh: datetime,
+    start: datetime | None,
+    wake: datetime | None,
+) -> str:
+    if reason == "next_tennis_wake" and start and wake:
+        return (
+            f"start={start.astimezone(timezone.utc).isoformat()} "
+            f"wake={wake.astimezone(timezone.utc).isoformat()}"
+        )
+    if reason == "no_relevant_tennis":
+        return "no tracked future tennis match"
+    return f"next_refresh={schedule_refresh.astimezone(timezone.utc).isoformat()}"
+
+
 async def _plan_tennis_sleep_until_next_match(bot, now_utc: datetime) -> datetime:
     schedule_refresh = now_utc + timedelta(seconds=_TENNIS_SLEEP_REFRESH_SEC)
     matches = await api_provider.fetch_upcoming_tennis_schedule(bot.http_session, now_utc)
     start, wake = _next_scheduled_tennis_wake(matches, now_utc)
     next_check = min(schedule_refresh, wake) if wake else schedule_refresh
+    sleep_reason = "next_tennis_wake" if wake else "schedule_refresh"
+    if next_check <= now_utc:
+        next_check = now_utc + timedelta(seconds=_TENNIS_INTERVAL_SEC)
     _set_tennis_scheduler_state(
         mode="sleeping",
         next_tennis_check_utc=next_check,
         next_schedule_refresh_utc=schedule_refresh,
         next_planned_start_utc=start,
         next_planned_wake_utc=wake,
+        sleep_reason=sleep_reason,
+        sleep_reason_detail=_tennis_sleep_reason_detail(
+            reason=sleep_reason,
+            schedule_refresh=schedule_refresh,
+            start=start,
+            wake=wake,
+        ),
     )
     return next_check
 
@@ -361,6 +426,11 @@ async def run_football_cycle(bot, now_utc: datetime | None = None) -> None:
 
 
 async def _tennis_poll_needed(bot, now_utc: datetime) -> bool:
+    needed, _reason, _detail = await _tennis_poll_decision(bot, now_utc)
+    return needed
+
+
+async def _tennis_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]:
     matches = await api_provider.fetch_tennis_day(bot.http_session)
     local_now = to_bot_tz(now_utc)
     for match in matches:
@@ -370,16 +440,18 @@ async def _tennis_poll_needed(bot, now_utc: datetime) -> bool:
         status = match.get("status", {}).get("short")
         if status == "LIVE":
             if track_id not in tennis_loop.final_announced_ids:
-                return True
+                return True, "tennis_live", _tennis_poll_reason_detail(match)
             continue
         if status == "FT":
             if track_id not in tennis_loop.final_announced_ids and _tennis_started_local_today(match, now_utc):
-                return True
+                return True, "tennis_ft_due", _tennis_poll_reason_detail(match)
             continue
         if status == "NS":
             if track_id not in tennis_loop.pre_announced_ids and tennis_loop.should_pre_announce_tennis(match, now=local_now):
-                return True
-    return False
+                return True, "tennis_preannounce_due", _tennis_poll_reason_detail(match)
+            if _tennis_in_start_watch_window(match, now_utc):
+                return True, "tennis_start_watch", _tennis_poll_reason_detail(match)
+    return False, "no_relevant_tennis", f"matches={len(matches)}"
 
 
 async def run_operations_loop(bot) -> None:
@@ -439,12 +511,15 @@ async def run_operations_loop(bot) -> None:
 
         if now >= next_tennis_check:
             try:
-                if await _tennis_poll_needed(bot, now):
+                tennis_needed, wake_reason, wake_reason_detail = await _tennis_poll_decision(bot, now)
+                if tennis_needed:
                     await tennis_loop.run_tennis_loop(bot)
                     next_tennis_check = utc_now() + timedelta(seconds=_TENNIS_INTERVAL_SEC)
                     _set_tennis_scheduler_state(
                         mode="awake",
                         next_tennis_check_utc=next_tennis_check,
+                        wake_reason=wake_reason,
+                        wake_reason_detail=wake_reason_detail,
                     )
                 else:
                     next_tennis_check = await _plan_tennis_sleep_until_next_match(bot, utc_now())
@@ -454,6 +529,8 @@ async def run_operations_loop(bot) -> None:
                 _set_tennis_scheduler_state(
                     mode="awake",
                     next_tennis_check_utc=next_tennis_check,
+                    wake_reason="error_recovery",
+                    wake_reason_detail=str(e),
                 )
 
         next_due = min(next_daily_check, next_football_check, next_tennis_check)
