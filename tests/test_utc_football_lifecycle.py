@@ -100,6 +100,36 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual(match_lifecycle.expected_ft_check_utc(match), datetime(2026, 6, 3, 23, 22, tzinfo=timezone.utc))
         self.assertTrue(match_lifecycle.should_track_fixture(match, now_utc))
 
+    def test_non_terminal_recently_started_fixture_remains_trackable(self):
+        from modules import match_lifecycle
+
+        match = espn_match(fixture_id="recent-start")
+        match["fixture"]["date"] = "2026-06-03T18:00:00Z"
+        match["fixture"]["status"] = {"short": "NS", "elapsed": None}
+        now_utc = datetime(2026, 6, 3, 21, 0, tzinfo=timezone.utc)
+
+        self.assertTrue(match_lifecycle.should_track_fixture(match, now_utc))
+
+    def test_non_terminal_old_started_fixture_is_not_trackable_after_max_live_window(self):
+        from modules import match_lifecycle
+
+        match = espn_match(fixture_id="old-start")
+        match["fixture"]["date"] = "2026-06-03T15:00:00Z"
+        match["fixture"]["status"] = {"short": "NS", "elapsed": None}
+        now_utc = datetime(2026, 6, 3, 21, 1, tzinfo=timezone.utc)
+
+        self.assertFalse(match_lifecycle.should_track_fixture(match, now_utc))
+
+    def test_non_terminal_future_prematch_fixture_still_trackable(self):
+        from modules import match_lifecycle
+
+        match = espn_match(fixture_id="prematch")
+        match["fixture"]["date"] = "2026-06-03T22:00:00Z"
+        match["fixture"]["status"] = {"short": "NS", "elapsed": None}
+        now_utc = datetime(2026, 6, 3, 21, 0, tzinfo=timezone.utc)
+
+        self.assertTrue(match_lifecycle.should_track_fixture(match, now_utc))
+
     def test_match_state_links_provider_ids_to_canonical_fixture(self):
         from modules import match_state
 
@@ -505,8 +535,46 @@ class UtcFootballLifecycleTests(unittest.TestCase):
 
         fetch_window = asyncio.run(run())
         _, start_utc, end_utc = fetch_window.await_args.args
-        self.assertEqual(start_utc, now_utc)
+        self.assertEqual(start_utc, now_utc - timedelta(hours=5))
         self.assertEqual(end_utc, now_utc + timedelta(hours=10))
+
+    def test_fetch_upcoming_football_schedule_includes_recent_non_terminal_fixture(self):
+        from modules import api_provider
+
+        recent = espn_match(fixture_id="recent-start")
+        recent["fixture"]["date"] = "2026-06-03T09:00:00Z"
+        recent["fixture"]["status"] = {"short": "NS", "elapsed": None}
+
+        async def run():
+            with patch.object(api_provider, "fetch_football_window", AsyncMock(return_value=[recent])):
+                return await api_provider.fetch_upcoming_football_schedule(
+                    None,
+                    datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
+                    horizon_hours=10,
+                )
+
+        matches = asyncio.run(run())
+
+        self.assertEqual([match["fixture"]["id"] for match in matches], ["recent-start"])
+
+    def test_fetch_upcoming_football_schedule_excludes_old_non_terminal_fixture(self):
+        from modules import api_provider
+
+        old = espn_match(fixture_id="old-start")
+        old["fixture"]["date"] = "2026-06-03T06:00:00Z"
+        old["fixture"]["status"] = {"short": "NS", "elapsed": None}
+
+        async def run():
+            with patch.object(api_provider, "fetch_football_window", AsyncMock(return_value=[old])):
+                return await api_provider.fetch_upcoming_football_schedule(
+                    None,
+                    datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc),
+                    horizon_hours=10,
+                )
+
+        matches = asyncio.run(run())
+
+        self.assertEqual(matches, [])
 
     def test_fetch_relevant_default_window_keeps_provider_dates_bounded(self):
         from modules import api_provider
@@ -795,6 +863,63 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertIn("kickoff=2026-06-03T22:00:00+00:00", decision[2])
         live_check.assert_not_awaited()
 
+    def test_scheduler_decision_wakes_for_recently_started_non_terminal_fixture(self):
+        from modules import scheduler
+
+        stale_ns = espn_match(fixture_id="recent-ns")
+        stale_ns["fixture"]["date"] = "2026-06-03T18:00:00Z"
+        stale_ns["fixture"]["status"] = {"short": "NS", "elapsed": None}
+        now_utc = datetime(2026, 6, 3, 21, 0, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            with (
+                patch.object(scheduler, "expected_ft_due_fixture_ids", return_value=[]),
+                patch.object(
+                    scheduler.api_provider,
+                    "fetch_relevant_football",
+                    AsyncMock(return_value=[stale_ns]),
+                ),
+                patch.object(scheduler.api_provider, "has_live_football", AsyncMock()) as live_check,
+            ):
+                decision = await scheduler._football_poll_decision(fake_bot, now_utc)
+                return decision, live_check
+
+        decision, live_check = asyncio.run(run())
+
+        self.assertTrue(decision[0])
+        self.assertEqual(decision[1], "lifecycle_fixture")
+        self.assertIn("fixture=recent-ns", decision[2])
+        self.assertIn("status=NS", decision[2])
+        live_check.assert_not_awaited()
+
+    def test_scheduler_decision_does_not_wake_for_old_non_terminal_fixture(self):
+        from modules import scheduler
+
+        old_ns = espn_match(fixture_id="old-ns")
+        old_ns["fixture"]["date"] = "2026-06-03T15:00:00Z"
+        old_ns["fixture"]["status"] = {"short": "NS", "elapsed": None}
+        now_utc = datetime(2026, 6, 3, 21, 1, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            with (
+                patch.object(scheduler, "expected_ft_due_fixture_ids", return_value=[]),
+                patch.object(
+                    scheduler.api_provider,
+                    "fetch_relevant_football",
+                    AsyncMock(return_value=[old_ns]),
+                ),
+                patch.object(scheduler.api_provider, "has_live_football", AsyncMock(return_value=False)) as live_check,
+            ):
+                decision = await scheduler._football_poll_decision(fake_bot, now_utc)
+                return decision, live_check
+
+        decision, live_check = asyncio.run(run())
+
+        self.assertEqual(decision, (False, "no_relevant_fixture", "due=0 relevant=1 fallback_live=false"))
+        live_check.assert_awaited_once()
+
     def test_scheduler_decision_reports_fallback_live_reason(self):
         from modules import scheduler
 
@@ -1072,6 +1197,32 @@ class UtcFootballLifecycleTests(unittest.TestCase):
             "kickoff=2026-06-03T15:00:00+00:00",
             scheduler.get_football_scheduler_status()["sleep_reason_detail"],
         )
+
+    def test_scheduler_sleep_plan_wakes_immediately_for_recently_started_non_terminal_fixture(self):
+        from modules import scheduler
+
+        recent = espn_match(fixture_id="recent-start")
+        recent["fixture"]["date"] = "2026-06-03T09:00:00Z"
+        recent["fixture"]["status"] = {"short": "NS", "elapsed": None}
+        now_utc = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            with patch.object(
+                scheduler.api_provider,
+                "fetch_upcoming_football_schedule",
+                AsyncMock(return_value=[recent]),
+            ):
+                return await scheduler._plan_sleep_until_next_fixture(fake_bot, now_utc)
+
+        next_check = asyncio.run(run())
+
+        self.assertEqual(next_check, now_utc)
+        status = scheduler.get_football_scheduler_status()
+        self.assertEqual(status["next_planned_kickoff_utc"], datetime(2026, 6, 3, 9, 0, tzinfo=timezone.utc))
+        self.assertEqual(status["next_planned_wake_utc"], now_utc)
+        self.assertEqual(status["sleep_reason"], "next_fixture_wake")
+        self.assertIn("kickoff=2026-06-03T09:00:00+00:00", status["sleep_reason_detail"])
 
     def test_scheduler_sleep_plan_wakes_for_unresolved_expected_ft_before_next_kickoff(self):
         from modules import match_state, scheduler

@@ -11,19 +11,18 @@ from utils.time_utils import bot_now, to_bot_tz
 from utils.tennis_formatter import (
     format_tennis_final_message,
     format_tennis_live_message,
-    format_tennis_pre_message,
     tennis_live_state_key,
 )
 
 logger = logging.getLogger(__name__)
 
-pre_announced_ids: set[str] = set()
+start_watch_prepared_ids: set[str] = set()
 final_announced_ids: set[str] = set()
 live_message_ids: dict[str, int] = {}
 live_state_keys: dict[str, str] = {}
 _TENNIS_STATE_FILE = "tennis_state.json"
 _TENNIS_STATE_DEFAULT = {
-    "pre_announced_ids": [],
+    "start_watch_prepared_ids": [],
     "final_announced_ids": [],
     "last_reset_date": None,
 }
@@ -64,8 +63,8 @@ def _is_within_window(start_time: str | None, hours: int = 48) -> bool:
         return False
 
 
-def should_pre_announce_tennis(match: dict, now=None) -> bool:
-    """Return true when an NS tennis match is inside the configured rolling window."""
+def should_prepare_tennis_start_watch(match: dict, now=None) -> bool:
+    """Return true when an NS tennis match should keep tennis polling awake."""
     if match.get("status", {}).get("short") != "NS":
         return False
 
@@ -86,17 +85,21 @@ def _load_state_once() -> None:
     if _state_loaded:
         return
     state = load(_TENNIS_STATE_FILE, _TENNIS_STATE_DEFAULT)
-    pre_announced_ids.update(str(mid) for mid in state.get("pre_announced_ids", []))
+    prepared_ids = set(str(mid) for mid in state.get("start_watch_prepared_ids", []))
+    # Legacy key from when this state incorrectly implied a Discord post happened.
+    prepared_ids.update(str(mid) for mid in state.get("pre_announced_ids", []))
+    start_watch_prepared_ids.update(prepared_ids)
     final_announced_ids.update(str(mid) for mid in state.get("final_announced_ids", []))
     _last_reset_date = state.get("last_reset_date")
     _state_loaded = True
 
 
 def _persist_state() -> None:
+    prepared_ids = sorted(start_watch_prepared_ids)
     save(
         _TENNIS_STATE_FILE,
         {
-            "pre_announced_ids": sorted(pre_announced_ids),
+            "start_watch_prepared_ids": prepared_ids,
             "final_announced_ids": sorted(final_announced_ids),
             "last_reset_date": _last_reset_date,
         },
@@ -110,7 +113,7 @@ def clear_tennis_state_today() -> None:
     if _last_reset_date == today_str:
         logger.info("Tennis state already prepared for the local day; keeping dedup IDs.")
         return
-    pre_announced_ids.clear()
+    start_watch_prepared_ids.clear()
     final_announced_ids.clear()
     live_message_ids.clear()
     live_state_keys.clear()
@@ -151,7 +154,7 @@ async def run_tennis_loop(bot) -> None:
             _is_tennis_local_today(start_time) or
             _is_tennis_local_tomorrow(start_time) or
             _is_within_window(start_time, hours=max(48, TENNIS_PRE_ANNOUNCE_HOURS)) or
-            should_pre_announce_tennis(match)
+            should_prepare_tennis_start_watch(match)
         )
         
         if not is_relevant:
@@ -159,17 +162,11 @@ async def run_tennis_loop(bot) -> None:
             continue
 
         if status_short == "NS":
-            if track_id in pre_announced_ids or not should_pre_announce_tennis(match):
+            if track_id in start_watch_prepared_ids or not should_prepare_tennis_start_watch(match):
                 continue
-            sent = await post_new_general_message(
-                bot,
-                CHANNEL_ID,
-                content=format_tennis_pre_message(match),
-            )
-            if sent is not None:
-                pre_announced_ids.add(track_id)
-                _persist_state()
-                logger.info(f"Tennis pre-announced for {track_id}.")
+            start_watch_prepared_ids.add(track_id)
+            _persist_state()
+            logger.info(f"Tennis start-watch prepared for {track_id}.")
             continue
 
         if status_short == "LIVE":

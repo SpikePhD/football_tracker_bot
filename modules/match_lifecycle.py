@@ -112,7 +112,7 @@ def should_track_fixture(match: dict, now_utc: datetime) -> bool:
         return False
 
     return (
-        now_utc - timedelta(hours=FOOTBALL_PREMATCH_WINDOW_HOURS)
+        now_utc - timedelta(hours=FOOTBALL_MAX_LIVE_DURATION_HOURS)
         <= kickoff
         <= now_utc + timedelta(hours=FOOTBALL_PREMATCH_WINDOW_HOURS)
     )

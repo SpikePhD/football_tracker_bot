@@ -2,7 +2,12 @@ import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from config import CHANNEL_ID, FOOTBALL_PREMATCH_WINDOW_HOURS, TENNIS_PRE_ANNOUNCE_HOURS
+from config import (
+    CHANNEL_ID,
+    FOOTBALL_MAX_LIVE_DURATION_HOURS,
+    FOOTBALL_PREMATCH_WINDOW_HOURS,
+    TENNIS_PRE_ANNOUNCE_HOURS,
+)
 from modules import api_provider, match_lifecycle
 from modules.bot_mode import is_verbose
 from modules.discord_poster import post_new_general_message
@@ -170,8 +175,11 @@ def _next_scheduled_football_wake(matches: list[dict], now_utc: datetime) -> tup
             continue
         kickoff = kickoff.astimezone(timezone.utc)
         if kickoff < now_utc:
-            continue
-        wake = kickoff - timedelta(hours=FOOTBALL_PREMATCH_WINDOW_HOURS)
+            if now_utc - kickoff > timedelta(hours=FOOTBALL_MAX_LIVE_DURATION_HOURS):
+                continue
+            wake = now_utc
+        else:
+            wake = kickoff - timedelta(hours=FOOTBALL_PREMATCH_WINDOW_HOURS)
         if wake < now_utc:
             wake = now_utc
         candidates.append((kickoff, wake))
@@ -432,7 +440,6 @@ async def _tennis_poll_needed(bot, now_utc: datetime) -> bool:
 
 async def _tennis_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]:
     matches = await api_provider.fetch_tennis_day(bot.http_session)
-    local_now = to_bot_tz(now_utc)
     for match in matches:
         track_id = _tennis_track_id(match)
         if not track_id:
@@ -447,8 +454,6 @@ async def _tennis_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]
                 return True, "tennis_ft_due", _tennis_poll_reason_detail(match)
             continue
         if status == "NS":
-            if track_id not in tennis_loop.pre_announced_ids and tennis_loop.should_pre_announce_tennis(match, now=local_now):
-                return True, "tennis_preannounce_due", _tennis_poll_reason_detail(match)
             if _tennis_in_start_watch_window(match, now_utc):
                 return True, "tennis_start_watch", _tennis_poll_reason_detail(match)
     return False, "no_relevant_tennis", f"matches={len(matches)}"

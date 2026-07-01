@@ -38,7 +38,7 @@ class TennisLoopTests(unittest.TestCase):
         from modules import tennis_loop
         from utils.time_utils import to_bot_tz
 
-        tennis_loop.pre_announced_ids.clear()
+        tennis_loop.start_watch_prepared_ids.clear()
         tennis_loop.final_announced_ids.clear()
         tennis_loop.live_message_ids.clear()
         tennis_loop.live_state_keys.clear()
@@ -46,12 +46,11 @@ class TennisLoopTests(unittest.TestCase):
         tennis_loop._last_reset_date = None
         self.now = to_bot_tz("2026-06-12T10:00:00+00:00")
 
-    def test_ns_match_inside_pre_announce_window_posts_once_and_persists(self):
+    def test_ns_match_inside_start_watch_window_prepares_without_posting(self):
         from modules import api_provider, tennis_loop
 
         match = tennis_match(canonical_id="canonical-tennis-1")
         fake_bot = SimpleNamespace(http_session=None)
-        fake_msg = SimpleNamespace(id=42)
 
         async def run():
             with (
@@ -60,7 +59,7 @@ class TennisLoopTests(unittest.TestCase):
                 patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
                 patch.object(tennis_loop, "save", Mock()) as save_state,
                 patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
-                patch.object(tennis_loop, "post_new_general_message", AsyncMock(return_value=fake_msg)) as post_msg,
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
             ):
                 await tennis_loop.run_tennis_loop(fake_bot)
                 await tennis_loop.run_tennis_loop(fake_bot)
@@ -68,12 +67,14 @@ class TennisLoopTests(unittest.TestCase):
 
         post_msg, save_state = asyncio.run(run())
 
-        post_msg.assert_awaited_once()
-        self.assertIn("Tennis Upcoming", post_msg.await_args.kwargs["content"])
-        self.assertIn("canonical-tennis-1", tennis_loop.pre_announced_ids)
+        post_msg.assert_not_awaited()
+        self.assertIn("canonical-tennis-1", tennis_loop.start_watch_prepared_ids)
         self.assertTrue(save_state.called)
+        saved_state = save_state.call_args.args[1]
+        self.assertIn("start_watch_prepared_ids", saved_state)
+        self.assertNotIn("pre_announced_ids", saved_state)
 
-    def test_ns_match_outside_pre_announce_window_does_not_post(self):
+    def test_ns_match_outside_start_watch_window_does_not_post(self):
         from modules import api_provider, tennis_loop
 
         match = tennis_match(start_time="2026-06-12T17:00:00+00:00")
@@ -94,10 +95,10 @@ class TennisLoopTests(unittest.TestCase):
         post_msg, save_state = asyncio.run(run())
 
         post_msg.assert_not_awaited()
-        self.assertFalse(tennis_loop.pre_announced_ids)
+        self.assertFalse(tennis_loop.start_watch_prepared_ids)
         self.assertFalse(save_state.called)
 
-    def test_pre_announce_config_larger_than_old_48_hour_window_is_honored(self):
+    def test_start_watch_config_larger_than_old_48_hour_window_is_honored(self):
         from modules import api_provider, tennis_loop
 
         match = tennis_match(start_time="2026-06-14T22:00:00+00:00")
@@ -110,16 +111,17 @@ class TennisLoopTests(unittest.TestCase):
                 patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
                 patch.object(tennis_loop, "save", Mock()),
                 patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
-                patch.object(tennis_loop, "post_new_general_message", AsyncMock(return_value=SimpleNamespace(id=77))) as post_msg,
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
             ):
                 await tennis_loop.run_tennis_loop(fake_bot)
                 return post_msg
 
         post_msg = asyncio.run(run())
 
-        post_msg.assert_awaited_once()
+        post_msg.assert_not_awaited()
+        self.assertIn("tennis-1", tennis_loop.start_watch_prepared_ids)
 
-    def test_pre_announce_window_is_rolling_across_local_midnight(self):
+    def test_start_watch_window_is_rolling_across_local_midnight(self):
         from modules import api_provider, tennis_loop
         from utils.time_utils import to_bot_tz
 
@@ -134,16 +136,17 @@ class TennisLoopTests(unittest.TestCase):
                 patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
                 patch.object(tennis_loop, "save", Mock()),
                 patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
-                patch.object(tennis_loop, "post_new_general_message", AsyncMock(return_value=SimpleNamespace(id=99))) as post_msg,
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
             ):
                 await tennis_loop.run_tennis_loop(fake_bot)
                 return post_msg
 
         post_msg = asyncio.run(run())
 
-        post_msg.assert_awaited_once()
+        post_msg.assert_not_awaited()
+        self.assertIn("tennis-1", tennis_loop.start_watch_prepared_ids)
 
-    def test_failed_pre_announce_post_does_not_mark_announced(self):
+    def test_silent_start_watch_prepare_persists_without_discord_message(self):
         from modules import api_provider, tennis_loop
 
         match = tennis_match()
@@ -156,15 +159,47 @@ class TennisLoopTests(unittest.TestCase):
                 patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
                 patch.object(tennis_loop, "save", Mock()) as save_state,
                 patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
-                patch.object(tennis_loop, "post_new_general_message", AsyncMock(return_value=None)) as post_msg,
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
             ):
                 await tennis_loop.run_tennis_loop(fake_bot)
                 return post_msg, save_state
 
         post_msg, save_state = asyncio.run(run())
 
-        post_msg.assert_awaited_once()
-        self.assertFalse(tennis_loop.pre_announced_ids)
+        post_msg.assert_not_awaited()
+        self.assertIn("tennis-1", tennis_loop.start_watch_prepared_ids)
+        self.assertTrue(save_state.called)
+
+    def test_legacy_pre_announced_state_seeds_start_watch_prepared_ids(self):
+        from modules import api_provider, tennis_loop
+
+        match = tennis_match(match_id="legacy-1")
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(
+                    tennis_loop,
+                    "load",
+                    Mock(return_value={
+                        "pre_announced_ids": ["legacy-1"],
+                        "final_announced_ids": [],
+                        "last_reset_date": None,
+                    }),
+                ),
+                patch.object(tennis_loop, "save", Mock()) as save_state,
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg, save_state
+
+        post_msg, save_state = asyncio.run(run())
+
+        post_msg.assert_not_awaited()
+        self.assertIn("legacy-1", tennis_loop.start_watch_prepared_ids)
         self.assertFalse(save_state.called)
 
     def test_live_and_ft_behavior_stays_unchanged(self):
@@ -197,7 +232,7 @@ class TennisLoopTests(unittest.TestCase):
         self.assertIn("ft-1", tennis_loop.final_announced_ids)
         self.assertTrue(save_state.called)
 
-    def test_should_pre_announce_accepts_injected_now(self):
+    def test_should_prepare_tennis_start_watch_accepts_injected_now(self):
         from modules import tennis_loop
         from utils.time_utils import to_bot_tz
 
@@ -205,7 +240,7 @@ class TennisLoopTests(unittest.TestCase):
         match = tennis_match(start_time="2026-06-12T12:00:00+00:00")
 
         with patch.object(tennis_loop, "TENNIS_PRE_ANNOUNCE_HOURS", 4):
-            self.assertTrue(tennis_loop.should_pre_announce_tennis(match, now=now))
+            self.assertTrue(tennis_loop.should_prepare_tennis_start_watch(match, now=now))
 
     def test_fetch_upcoming_tennis_schedule_returns_future_matches_only(self):
         from modules import api_provider
@@ -245,7 +280,7 @@ class TennisLoopTests(unittest.TestCase):
         self.assertEqual(status["next_planned_start_utc"], datetime(2026, 6, 12, 21, 0, tzinfo=timezone.utc))
         self.assertEqual(status["next_planned_wake_utc"], datetime(2026, 6, 12, 17, 0, tzinfo=timezone.utc))
 
-    def test_scheduler_tennis_sleep_plan_wakes_at_preannounce_window(self):
+    def test_scheduler_tennis_sleep_plan_wakes_at_start_watch_window(self):
         from modules import scheduler
 
         future = tennis_match(match_id="future-5h", start_time="2026-06-12T15:00:00+00:00")
@@ -275,9 +310,8 @@ class TennisLoopTests(unittest.TestCase):
 
         self.assertTrue(asyncio.run(run()))
 
-    def test_scheduler_tennis_poll_needed_for_preannounce_due_match(self):
+    def test_scheduler_tennis_poll_needed_for_ns_match_in_start_watch_window(self):
         from modules import scheduler
-        from utils.time_utils import to_bot_tz
 
         match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
         fake_bot = SimpleNamespace(http_session=None)
@@ -286,14 +320,16 @@ class TennisLoopTests(unittest.TestCase):
         async def run():
             with (
                 patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
-                patch.object(scheduler.tennis_loop, "bot_now", return_value=to_bot_tz(now_utc)),
                 patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])),
             ):
-                return await scheduler._tennis_poll_needed(fake_bot, now_utc)
+                return await scheduler._tennis_poll_decision(fake_bot, now_utc)
 
-        self.assertTrue(asyncio.run(run()))
+        needed, reason, detail = asyncio.run(run())
+        self.assertTrue(needed)
+        self.assertEqual(reason, "tennis_start_watch")
+        self.assertIn("fixture=pre-1", detail)
 
-    def test_scheduler_tennis_poll_needed_for_announced_match_in_start_watch_window(self):
+    def test_scheduler_tennis_poll_needed_for_prepared_match_in_start_watch_window(self):
         from modules import scheduler
 
         match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
@@ -301,7 +337,7 @@ class TennisLoopTests(unittest.TestCase):
         now_utc = datetime(2026, 6, 12, 10, 0, tzinfo=timezone.utc)
 
         async def run():
-            scheduler.tennis_loop.pre_announced_ids.add("pre-1")
+            scheduler.tennis_loop.start_watch_prepared_ids.add("pre-1")
             try:
                 with (
                     patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
@@ -309,14 +345,14 @@ class TennisLoopTests(unittest.TestCase):
                 ):
                     return await scheduler._tennis_poll_decision(fake_bot, now_utc)
             finally:
-                scheduler.tennis_loop.pre_announced_ids.discard("pre-1")
+                scheduler.tennis_loop.start_watch_prepared_ids.discard("pre-1")
 
         needed, reason, detail = asyncio.run(run())
         self.assertTrue(needed)
         self.assertEqual(reason, "tennis_start_watch")
         self.assertIn("fixture=pre-1", detail)
 
-    def test_scheduler_tennis_poll_needed_for_announced_match_after_scheduled_start(self):
+    def test_scheduler_tennis_poll_needed_for_prepared_match_after_scheduled_start(self):
         from modules import scheduler
 
         match = tennis_match(match_id="pre-1", start_time="2026-06-12T12:00:00+00:00")
@@ -324,7 +360,7 @@ class TennisLoopTests(unittest.TestCase):
         now_utc = datetime(2026, 6, 12, 13, 0, tzinfo=timezone.utc)
 
         async def run():
-            scheduler.tennis_loop.pre_announced_ids.add("pre-1")
+            scheduler.tennis_loop.start_watch_prepared_ids.add("pre-1")
             try:
                 with (
                     patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
@@ -332,7 +368,7 @@ class TennisLoopTests(unittest.TestCase):
                 ):
                     return await scheduler._tennis_poll_decision(fake_bot, now_utc)
             finally:
-                scheduler.tennis_loop.pre_announced_ids.discard("pre-1")
+                scheduler.tennis_loop.start_watch_prepared_ids.discard("pre-1")
 
         needed, reason, detail = asyncio.run(run())
         self.assertTrue(needed)
@@ -347,7 +383,7 @@ class TennisLoopTests(unittest.TestCase):
         now_utc = datetime(2026, 6, 12, 17, 1, tzinfo=timezone.utc)
 
         async def run():
-            scheduler.tennis_loop.pre_announced_ids.add("pre-1")
+            scheduler.tennis_loop.start_watch_prepared_ids.add("pre-1")
             try:
                 with (
                     patch.object(scheduler, "TENNIS_PRE_ANNOUNCE_HOURS", 4),
@@ -355,7 +391,7 @@ class TennisLoopTests(unittest.TestCase):
                 ):
                     return await scheduler._tennis_poll_decision(fake_bot, now_utc)
             finally:
-                scheduler.tennis_loop.pre_announced_ids.discard("pre-1")
+                scheduler.tennis_loop.start_watch_prepared_ids.discard("pre-1")
 
         needed, reason, detail = asyncio.run(run())
         self.assertFalse(needed)

@@ -32,7 +32,7 @@ modules/match_state.py
   -> atomic persisted football fixture state in bot_memory/match_state.json
 
 modules/tennis_loop.py
-  -> tracked tennis live, pre-announcement, and FT processing
+  -> tracked tennis live/start-watch and FT processing
 
 modules/api_provider.py
   -> ESPN primary provider plus API-Football fallback/enrichment policy
@@ -118,8 +118,8 @@ Football:
 
 Tennis:
 
-- `_tennis_poll_needed(...)` wakes for live matches, local-day FT posts, pre-announcement work, or already pre-announced `NS` matches inside the start-watch window.
-- When awake, `tennis_loop.run_tennis_loop(...)` handles posts/upserts and dedupe.
+- `_tennis_poll_needed(...)` wakes for live matches, local-day FT posts, or `NS` matches inside the configured start-watch window.
+- When awake, `tennis_loop.run_tennis_loop(...)` handles live/FT posts/upserts and dedupe. It does not send standalone upcoming tennis posts; upcoming matches are shown by snapshots and tennis commands.
 - When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at most every 6 hours or wakes at `tennis_pre_announce_hours` before the next start. If that wake is already due but no work is needed, it schedules the next normal tennis poll instead of returning an immediate one-second loop.
 
 Do not reintroduce minute-by-minute provider polling while a sport is idle. The main loop may still wake for lightweight local daily routines.

@@ -25,6 +25,7 @@ from config import (
     API_RETRY_INTERVAL_SEC,
     API_SCOREBOARD_CACHE_TTL_SEC,
     FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS,
+    FOOTBALL_MAX_LIVE_DURATION_HOURS,
     LEAGUE_SLUG_MAP,
     PROVIDER_TEAM_ALIASES,
     TENNIS_CACHE_TTL_SEC,
@@ -508,19 +509,23 @@ async def fetch_upcoming_football_schedule(
     now_utc: datetime,
     horizon_hours: int | None = None,
 ) -> list[dict]:
-    """Future football fixtures used to plan scheduler wake-up times."""
+    """Future and recently-started fixtures used to plan scheduler wake-up times."""
     horizon = FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS if horizon_hours is None else horizon_hours
     now_utc = now_utc.astimezone(timezone.utc)
+    start_utc = now_utc - timedelta(hours=FOOTBALL_MAX_LIVE_DURATION_HOURS)
     matches = await fetch_football_window(
         session,
-        now_utc,
+        start_utc,
         now_utc + timedelta(hours=horizon),
         now_utc=now_utc,
     )
     upcoming = []
     for match in matches:
         kickoff = match_lifecycle.fixture_kickoff_utc(match)
-        if kickoff and kickoff.astimezone(timezone.utc) >= now_utc:
+        if not kickoff or match_lifecycle.is_terminal(match):
+            continue
+        kickoff = kickoff.astimezone(timezone.utc)
+        if kickoff >= now_utc or now_utc - kickoff <= timedelta(hours=FOOTBALL_MAX_LIVE_DURATION_HOURS):
             upcoming.append(match)
     return _dedupe_by_fixture_id(upcoming)
 

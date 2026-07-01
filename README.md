@@ -50,7 +50,7 @@ Important lifecycle behavior:
 - API-Football fallback fixtures are mapped back to ESPN canonical IDs through persisted `provider_ids` aliases when a conservative league/kickoff/team-name match is available
 - old terminal or stale fixtures are pruned by retention windows, not midnight clears
 
-Football and tennis use a sleep/awake scheduler model to reduce idle API calls. When no relevant match is live, near kickoff/start, due for FT handling, or awaiting announcement work, the scheduler sleeps and refreshes the future schedule every 6 hours. It wakes at the configured football pre-match window or tennis pre-announcement window, then polls at the configured provider interval while work remains.
+Football and tennis use a sleep/awake scheduler model to reduce idle API calls. When no relevant match is live, near kickoff/start, due for FT handling, or awaiting announcement work, the scheduler sleeps and refreshes the future schedule every 6 hours. It wakes at the configured football pre-match window or tennis start-watch window, then polls at the configured provider interval while work remains.
 
 ## Commands
 
@@ -112,7 +112,7 @@ Key `operations` timezone/display/lifecycle settings:
 - `football_state_retention_hours` - stale state retention for non-terminal records
 - `football_expected_ft_minutes` - expected FT check offset from UTC kickoff
 - `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
-- `tennis_pre_announce_hours` - rolling tennis pre-announcement and scheduler wake lead; already-announced matches stay awake around start time so delayed ESPN live transitions are caught
+- `tennis_pre_announce_hours` - rolling tennis scheduler wake lead; it does not send standalone upcoming posts, but keeps matches awake around start time so delayed ESPN live transitions are caught
 - `operations.api_provider.espn_poll_interval_sec` - active ESPN polling interval while football is awake
 - `operations.api_provider.fallback_poll_interval_sec` - active fallback polling interval while football is awake
 
