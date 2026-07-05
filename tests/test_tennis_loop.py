@@ -16,7 +16,13 @@ def tennis_match(
     canonical_id=None,
     status="NS",
     start_time="2026-06-12T12:00:00+00:00",
+    sets=None,
+    winner=None,
 ):
+    if sets is None:
+        sets = [{"a": 6, "b": 4}] if status in ("LIVE", "FT") else []
+    if winner is None and status == "FT":
+        winner = "Player A"
     return {
         "match_id": match_id,
         "canonical_id": canonical_id,
@@ -27,8 +33,8 @@ def tennis_match(
         "event_name": "Tracked Open",
         "tour": "ATP",
         "round": "Round 1",
-        "sets": [{"a": 6, "b": 4}] if status in ("LIVE", "FT") else [],
-        "winner": "Player A" if status == "FT" else None,
+        "sets": sets,
+        "winner": winner,
     }
 
 
@@ -232,6 +238,63 @@ class TennisLoopTests(unittest.TestCase):
         self.assertIn("ft-1", tennis_loop.final_announced_ids)
         self.assertTrue(save_state.called)
 
+    def test_incomplete_ft_without_winner_does_not_post_or_mark_final(self):
+        from modules import api_provider, tennis_loop
+
+        ft = tennis_match(
+            match_id="ft-incomplete",
+            status="FT",
+            sets=[{"a": 3, "b": 6}, {"a": 4, "b": 4}],
+            winner="",
+        )
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(tennis_loop, "save", Mock()) as save_state,
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg, save_state
+
+        post_msg, save_state = asyncio.run(run())
+
+        post_msg.assert_not_awaited()
+        self.assertNotIn("ft-incomplete", tennis_loop.final_announced_ids)
+        self.assertFalse(save_state.called)
+
+    def test_complete_ft_with_winner_and_final_sets_still_posts(self):
+        from modules import api_provider, tennis_loop
+
+        ft = tennis_match(
+            match_id="ft-complete",
+            status="FT",
+            sets=[{"a": 3, "b": 6}, {"a": 6, "b": 4}, {"a": 6, "b": 3}],
+            winner="Player A",
+        )
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(tennis_loop, "save", Mock()),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock(return_value=SimpleNamespace(id=502))) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg
+
+        post_msg = asyncio.run(run())
+
+        post_msg.assert_awaited_once()
+        self.assertIn("Winner: Player A", post_msg.await_args.kwargs["content"])
+        self.assertIn("Final sets: 3-6 | 6-4 | 6-3", post_msg.await_args.kwargs["content"])
+        self.assertIn("ft-complete", tennis_loop.final_announced_ids)
+
     def test_should_prepare_tennis_start_watch_accepts_injected_now(self):
         from modules import tennis_loop
         from utils.time_utils import to_bot_tz
@@ -257,6 +320,32 @@ class TennisLoopTests(unittest.TestCase):
 
         matches = asyncio.run(run())
         self.assertEqual([m["match_id"] for m in matches], ["future"])
+
+    def test_fetch_tennis_finished_today_excludes_incomplete_final_payloads(self):
+        from modules import api_provider
+
+        complete = tennis_match(
+            match_id="complete",
+            status="FT",
+            sets=[{"a": 6, "b": 4}, {"a": 7, "b": 5}],
+            winner="Player A",
+        )
+        incomplete = tennis_match(
+            match_id="incomplete",
+            status="FT",
+            sets=[{"a": 3, "b": 6}, {"a": 4, "b": 4}],
+            winner="",
+        )
+
+        async def run():
+            with (
+                patch.object(api_provider, "bot_now", return_value=self.now),
+                patch.object(api_provider, "_get_cached_tennis_scoreboard", AsyncMock(return_value=[incomplete, complete])),
+            ):
+                return await api_provider.fetch_tennis_finished_today(None)
+
+        matches = asyncio.run(run())
+        self.assertEqual([m["match_id"] for m in matches], ["complete"])
 
     def test_scheduler_tennis_sleep_plan_refreshes_before_distant_start(self):
         from modules import scheduler

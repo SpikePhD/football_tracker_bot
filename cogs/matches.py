@@ -15,6 +15,7 @@ from utils.event_formatter import (
 )
 from modules.discord_poster import post_new_message_to_context
 from utils.tennis_formatter import format_tennis_snapshot_line
+from utils.tennis_lifecycle import tennis_final_data_ready
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +273,7 @@ def build_tennis_section(matches: list) -> str:
             m for m in matches
             if m.get("status", {}).get("short") == "FT"
             and _is_tennis_today(m)
+            and tennis_final_data_ready(m)
         ],
         key=lambda m: m.get("start_time") or "",
         reverse=True,

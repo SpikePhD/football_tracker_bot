@@ -49,6 +49,7 @@ from utils.event_formatter import (
     normalize_api_football_events,
     prune_goal_events_to_score,
 )
+from utils.tennis_lifecycle import tennis_final_data_ready
 
 logger = logging.getLogger(__name__)
 
@@ -1800,7 +1801,12 @@ async def fetch_tennis_live(session: aiohttp.ClientSession) -> list[dict]:
 async def fetch_tennis_finished_today(session: aiohttp.ClientSession) -> list[dict]:
     """Tracked tennis matches that reached final status today."""
     matches = await _get_cached_tennis_scoreboard(session)
-    return [m for m in matches if m.get("status", {}).get("short") == "FT" and _is_today(m.get("start_time"))]
+    return [
+        m for m in matches
+        if m.get("status", {}).get("short") == "FT"
+        and _is_today(m.get("start_time"))
+        and tennis_final_data_ready(m)
+    ]
 
 
 def _match_dt_bot_tz(start_time: str | None):
@@ -1835,7 +1841,7 @@ def _tennis_identity_key(match: dict) -> str:
 def _tennis_status_rank(match: dict) -> int:
     status = (match.get("status") or {}).get("short")
     if status == "FT":
-        return 3
+        return 3 if tennis_final_data_ready(match) else 2
     if status == "LIVE":
         return 2
     if status == "NS":

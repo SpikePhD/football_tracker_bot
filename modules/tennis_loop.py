@@ -13,6 +13,7 @@ from utils.tennis_formatter import (
     format_tennis_live_message,
     tennis_live_state_key,
 )
+from utils.tennis_lifecycle import tennis_final_data_ready
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,15 @@ async def run_tennis_loop(bot) -> None:
             # This prevents re-posting old FT matches after restart
             if not _is_tennis_local_today(start_time):
                 logger.debug(f"Skipping FT match {match_id} - not started today")
+                continue
+            if not tennis_final_data_ready(match):
+                logger.info(
+                    "Deferring tennis FT for %s because final data is incomplete "
+                    "(winner=%r, sets=%r).",
+                    track_id,
+                    match.get("winner"),
+                    match.get("sets"),
+                )
                 continue
             if track_id not in final_announced_ids:
                 await post_new_general_message(

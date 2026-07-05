@@ -114,6 +114,27 @@ class MatchesDisplayTests(unittest.TestCase):
         self.assertIn("Tracked Player vs Opponent", content)
         self.assertNotIn("No tracked tennis", content)
 
+    def test_tennis_today_section_excludes_incomplete_final_payload(self):
+        from cogs import matches
+        from utils.time_utils import to_bot_tz
+
+        incomplete_ft = {
+            "player_a": "Shintaro Mochizuki",
+            "player_b": "Jannik Sinner",
+            "event_name": "Wimbledon",
+            "tour": "ATP",
+            "start_time": "2026-06-11T19:00:00Z",
+            "status": {"short": "FT"},
+            "sets": [{"a": 3, "b": 6}, {"a": 4, "b": 4}],
+            "winner": None,
+        }
+
+        with patch.object(matches, "bot_now", return_value=to_bot_tz("2026-06-11T10:00:00Z")):
+            content = matches.build_tennis_section([incomplete_ft])
+
+        self.assertIn("No tracked tennis matches live, upcoming, or finished today.", content)
+        self.assertNotIn("Winner not available", content)
+
     def test_fetch_combined_snapshot_filters_broad_provider_window_to_today(self):
         from cogs import matches
 
