@@ -13,6 +13,26 @@ def is_shootout_event(event: dict) -> bool:
     )
 
 
+def is_counted_goal_event(event: dict) -> bool:
+    """Return True only for events that should account for the match score."""
+    if event.get("type") != "Goal" or is_shootout_event(event):
+        return False
+    detail = str(event.get("detail") or "").lower()
+    return not any(
+        marker in detail
+        for marker in (
+            "missed",
+            "saved",
+            "disallowed",
+            "cancelled",
+            "canceled",
+            "overturned",
+            "var",
+            "no goal",
+        )
+    )
+
+
 def normal_match_events(events: list) -> list:
     return [event for event in events if not is_shootout_event(event)]
 
@@ -64,7 +84,7 @@ def prune_goal_events_to_score(match: dict) -> tuple[dict, int]:
     sanitized_events = []
 
     for event in match.get("events", []) or []:
-        if event.get("type") != "Goal" or is_shootout_event(event):
+        if not is_counted_goal_event(event):
             sanitized_events.append(event)
             continue
 
@@ -100,7 +120,7 @@ def event_completeness_note(goals: dict, events: list, *, show_warning: bool = F
         return ""
     try:
         total_goals = int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0)
-        goal_events = sum(1 for e in normal_match_events(events) if e.get("type") == "Goal")
+        goal_events = sum(1 for e in normal_match_events(events) if is_counted_goal_event(e))
         if goal_events < total_goals:
             missing = total_goals - goal_events
             return f" ⚠️ {missing} goal(s) missing from event data"
@@ -154,7 +174,7 @@ def format_match_events(events: list, home: str, away: str) -> list[str]:
         event_type = e.get("type")
         detail = e.get("detail")
 
-        if event_type == "Goal":
+        if is_counted_goal_event(e):
             tag = f" ({detail})" if detail and detail != "Normal Goal" else ""
             result.append(f"{minute}' - {player}{tag} {side}")
         elif event_type == "Card" and detail == "Red Card":
@@ -202,7 +222,7 @@ def _regular_time_score(match: dict) -> tuple[int, int]:
     away_score = 0
     goal_events = [
         e for e in normal_match_events(match.get("events", []))
-        if e.get("type") == "Goal"
+        if is_counted_goal_event(e)
     ]
 
     try:

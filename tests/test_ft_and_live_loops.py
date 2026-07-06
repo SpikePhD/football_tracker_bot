@@ -65,6 +65,48 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertIn("5' - Home Goal", content)
         self.assertNotIn("120' - H1", content)
 
+    def test_ft_message_does_not_use_missed_penalty_as_missing_goal(self):
+        from modules import ft_handler
+
+        match = espn_match(fixture_id="missed-penalty-ft")
+        match["fixture"]["status"]["short"] = "FT"
+        match["teams"]["home"]["name"] = "Brazil"
+        match["teams"]["away"]["name"] = "Norway"
+        match["teams"]["home"]["id"] = "100"
+        match["teams"]["away"]["id"] = "200"
+        match["goals"] = {"home": 1, "away": 2}
+        match["events"] = [
+            {
+                "time": {"elapsed": 14},
+                "player": {"name": "Bruno Guimaraes"},
+                "team": {"id": "100", "name": "Brazil"},
+                "type": "Goal",
+                "detail": "Missed Penalty",
+            },
+            {
+                "time": {"elapsed": 79},
+                "player": {"name": "E. Haaland"},
+                "team": {"id": "200", "name": "Norway"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 90},
+                "player": {"name": "E. Haaland"},
+                "team": {"id": "200", "name": "Norway"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+
+        content = ft_handler._build_ft_message(match, show_missing_warning=True)
+
+        self.assertIn("FT: Brazil 1 - 2 Norway", content)
+        self.assertNotIn("Bruno Guimaraes", content)
+        self.assertIn("79' - E. Haaland", content)
+        self.assertIn("90' - E. Haaland", content)
+        self.assertIn("1 goal(s) missing from event data", content)
+
     def test_api_football_terminal_penalty_status_posts_and_updates_memory_once(self):
         from modules import api_provider, ft_handler, match_state
 

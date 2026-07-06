@@ -10,6 +10,7 @@ from utils.event_formatter import (
     format_match_events,
     format_shootout_segments,
     event_completeness_note,
+    is_counted_goal_event,
     normal_match_events,
     prune_goal_events_to_score,
 )
@@ -30,7 +31,7 @@ def _football_local_date(match: dict):
 
 
 def _goal_event_count(events: list) -> int:
-    return sum(1 for event in normal_match_events(events or []) if event.get("type") == "Goal")
+    return sum(1 for event in normal_match_events(events or []) if is_counted_goal_event(event))
 
 
 def _total_goals(match: dict) -> int | None:

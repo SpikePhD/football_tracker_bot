@@ -13,7 +13,7 @@ from utils.event_formatter import (
     event_completeness_note,
     format_match_events,
     format_shootout_segments,
-    is_shootout_event,
+    is_counted_goal_event,
     normalize_api_football_events,
     prune_goal_events_to_score,
 )
@@ -121,7 +121,7 @@ def _build_ft_message(match_details: dict, *, show_missing_warning: bool = False
             home_team,
             away_team,
             int(goals.get("home", 0) or 0) + int(goals.get("away", 0) or 0),
-            sum(1 for e in events if e.get("type") == "Goal" and not is_shootout_event(e)),
+            sum(1 for e in events if is_counted_goal_event(e)),
         )
     return ft_message
 
@@ -175,7 +175,7 @@ def _has_incomplete_goal_events(match: dict) -> bool:
     goal_events = sum(
         1
         for event in match.get("events", [])
-        if event.get("type") == "Goal" and not is_shootout_event(event)
+        if is_counted_goal_event(event)
     )
     return goal_events < total_goals
 

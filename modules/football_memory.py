@@ -17,7 +17,7 @@ from config import (
     ESPN_CACHE_TTL_SEC,
 )
 from modules import match_lifecycle
-from utils.event_formatter import is_shootout_event, prune_goal_events_to_score
+from utils.event_formatter import is_counted_goal_event, is_shootout_event, prune_goal_events_to_score
 from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
@@ -311,6 +311,8 @@ async def update_match_data(
         if is_shootout_event(event):
             continue
         event_type = event.get("type")
+        if event_type == "Goal" and not is_counted_goal_event(event):
+            continue
         player_name = event.get("player", {}).get("name")
         team_id = event.get("team", {}).get("id")
 
@@ -328,7 +330,7 @@ async def update_match_data(
                 "red_cards": 0,
             }
 
-        if event_type == "Goal":
+        if is_counted_goal_event(event):
             player_stats_updates[team_id][player_name]["goals"] += 1
         elif event_type == "Card":
             detail = event.get("detail", "")

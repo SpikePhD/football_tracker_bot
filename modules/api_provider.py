@@ -45,6 +45,7 @@ from utils.time_utils import (
     utc_now,
 )
 from utils.event_formatter import (
+    is_counted_goal_event,
     is_shootout_event,
     normalize_api_football_events,
     prune_goal_events_to_score,
@@ -821,7 +822,7 @@ def _is_live_espn_match(match: dict) -> bool:
 
 
 def _goal_event_count(events: list) -> int:
-    return sum(1 for e in events if e.get("type") == "Goal" and not is_shootout_event(e))
+    return sum(1 for e in events if is_counted_goal_event(e))
 
 
 def _sanitize_goal_events_for_score(match: dict, context: str) -> dict:

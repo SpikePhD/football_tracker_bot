@@ -145,6 +145,49 @@ class FootballMemoryTests(unittest.TestCase):
         self.assertEqual(memory["teams"]["200"]["stats"]["draws"], 1)
         self.assertNotIn("Mehdi Taremi", memory["teams"]["200"].get("players", {}))
 
+    def test_match_memory_does_not_count_missed_penalty_as_goal(self):
+        from modules import football_memory
+
+        match = {
+            "fixture": {
+                "id": "missed-penalty-ft",
+                "date": "2026-07-05T22:00:00+00:00",
+                "status": {"short": "FT"},
+            },
+            "league": {"id": 1},
+            "teams": {
+                "home": {"id": "100", "name": "Brazil"},
+                "away": {"id": "200", "name": "Norway"},
+            },
+            "goals": {"home": 1, "away": 2},
+            "events": [
+                {
+                    "type": "Goal",
+                    "detail": "Missed Penalty",
+                    "player": {"name": "Bruno Guimaraes"},
+                    "team": {"id": "100", "name": "Brazil"},
+                    "time": {"elapsed": 14},
+                },
+                {
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                    "player": {"name": "E. Haaland"},
+                    "team": {"id": "200", "name": "Norway"},
+                    "time": {"elapsed": 79},
+                },
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            memory_path = Path(tmpdir) / "football_memory.json"
+            with patch.object(football_memory, "MEMORY_PATH", memory_path):
+                result = asyncio.run(football_memory.update_match_in_memory(None, match))
+                memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(result, {"updated": True, "reason": "updated"})
+        self.assertNotIn("Bruno Guimaraes", memory["teams"]["100"].get("players", {}))
+        self.assertEqual(memory["teams"]["200"]["players"]["E. Haaland"]["goals"], 1)
+
     def test_match_memory_skips_non_ft_without_updating(self):
         from modules import football_memory
 

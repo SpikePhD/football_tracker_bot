@@ -179,6 +179,47 @@ class ClientsAndFormattersTests(unittest.TestCase):
         self.assertIn("Pens scored: Home: H1, H2, H3, H4; Away: A1, A2, A3", shootout_segments)
         self.assertEqual(note, "")
 
+    def test_missed_penalty_does_not_count_or_render_as_goal(self):
+        from utils.event_formatter import (
+            event_completeness_note,
+            format_match_events,
+            is_counted_goal_event,
+        )
+
+        events = [
+            {
+                "time": {"elapsed": 14},
+                "player": {"name": "Bruno Guimaraes"},
+                "team": {"id": "100", "name": "Brazil"},
+                "type": "Goal",
+                "detail": "Missed Penalty",
+            },
+            {
+                "time": {"elapsed": 79},
+                "player": {"name": "E. Haaland"},
+                "team": {"id": "200", "name": "Norway"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 90},
+                "player": {"name": "E. Haaland"},
+                "team": {"id": "200", "name": "Norway"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+
+        self.assertFalse(is_counted_goal_event(events[0]))
+        self.assertEqual(
+            format_match_events(events, "Brazil", "Norway"),
+            ["79' - E. Haaland (A)", "90' - E. Haaland (A)"],
+        )
+        self.assertIn(
+            "1 goal(s) missing",
+            event_completeness_note({"home": 1, "away": 2}, events, show_warning=True),
+        )
+
     def test_espn_all_leagues_summary_distinguishes_success_and_failure(self):
         from utils import espn_client
 
