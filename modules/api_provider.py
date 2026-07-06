@@ -5,6 +5,7 @@
 import logging
 import re
 import unicodedata
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
@@ -755,6 +756,80 @@ def _normalize_fixture_name(value: str | None) -> str:
     return aliases.get(text, text)
 
 
+def _canonical_team_signature(value: str | None) -> str:
+    normalized = _normalize_fixture_name(value)
+    return PROVIDER_TEAM_ALIASES.get(normalized, normalized)
+
+
+def _cached_api_fixture_by_id(api_fixture_id: int | None) -> dict | None:
+    if api_fixture_id is None or _api_live_fixtures_cache is None:
+        return None
+    for candidate in _api_live_fixtures_cache.get("response", []) or []:
+        if str(candidate.get("fixture", {}).get("id")) == str(api_fixture_id):
+            return candidate
+    return None
+
+
+def _api_fixture_team_id_map(api_fixture_id: int | None) -> dict[str, str]:
+    api_fixture = _cached_api_fixture_by_id(api_fixture_id)
+    if not api_fixture:
+        return {}
+    teams = api_fixture.get("teams", {}) or {}
+    mapping: dict[str, str] = {}
+    home_id = teams.get("home", {}).get("id")
+    away_id = teams.get("away", {}).get("id")
+    if home_id is not None:
+        mapping[str(home_id)] = "home"
+    if away_id is not None:
+        mapping[str(away_id)] = "away"
+    return mapping
+
+
+def _canonicalize_event_team_for_match(
+    event: dict,
+    espn_match: dict,
+    api_fixture_id: int | None = None,
+) -> dict:
+    event_team = event.get("team", {}) or {}
+    teams = espn_match.get("teams", {}) or {}
+    home = teams.get("home", {}) or {}
+    away = teams.get("away", {}) or {}
+
+    side = None
+    event_team_id = event_team.get("id")
+    if event_team_id is not None:
+        side = _api_fixture_team_id_map(api_fixture_id).get(str(event_team_id))
+
+    if side is None:
+        event_name_sig = _canonical_team_signature(event_team.get("name"))
+        if event_name_sig and event_name_sig == _canonical_team_signature(home.get("name")):
+            side = "home"
+        elif event_name_sig and event_name_sig == _canonical_team_signature(away.get("name")):
+            side = "away"
+
+    if side not in ("home", "away"):
+        return event
+
+    canonical_team = home if side == "home" else away
+    canonicalized = deepcopy(event)
+    canonicalized["team"] = {
+        "id": canonical_team.get("id"),
+        "name": canonical_team.get("name"),
+    }
+    return canonicalized
+
+
+def _canonicalize_event_teams_for_match(
+    events: list[dict],
+    espn_match: dict,
+    api_fixture_id: int | None = None,
+) -> list[dict]:
+    return [
+        _canonicalize_event_team_for_match(event, espn_match, api_fixture_id)
+        for event in events
+    ]
+
+
 def _name_similarity(left: str | None, right: str | None) -> float:
     norm_left = _normalize_fixture_name(left)
     norm_right = _normalize_fixture_name(right)
@@ -1013,16 +1088,18 @@ async def _fetch_fixture_events_for_enrichment(
     session: aiohttp.ClientSession,
     api_fixture_id: int,
     total_goals: int,
+    espn_match: dict,
 ) -> tuple[list | None, bool]:
     now_local = bot_now()
     cached_events = _get_cached_complete_fixture_events(api_fixture_id, total_goals, now_local)
     if cached_events is not None:
+        cached_events = _canonicalize_event_teams_for_match(cached_events, espn_match, api_fixture_id)
         return cached_events, True
 
     cached = _api_fixture_events_cache.get(api_fixture_id)
     if cached:
         age = _fresh_age_seconds(cached.get("fetched_at"), now_local)
-        events = cached.get("events", [])
+        events = _canonicalize_event_teams_for_match(cached.get("events", []), espn_match, api_fixture_id)
         if (
             age is not None
             and age < API_ENRICH_INCOMPLETE_EVENTS_COOLDOWN_SEC
@@ -1047,6 +1124,7 @@ async def _fetch_fixture_events_for_enrichment(
         return None, False
 
     events = normalize_api_football_events(response)
+    events = _canonicalize_event_teams_for_match(events, espn_match, api_fixture_id)
     _api_fixture_events_cache[api_fixture_id] = {
         "fetched_at": now_local,
         "events": events,
@@ -1589,6 +1667,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
             now_local,
         )
         if cached_events is not None:
+            cached_events = _canonicalize_event_teams_for_match(cached_events, match, cached_api_fixture_id)
             merged = _merge_enriched_events_if_better(
                 match,
                 cached_events,
@@ -1668,6 +1747,7 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
             session,
             api_fixture_id,
             total_goals,
+            match,
         )
         if enriched_events is None:
             if not from_cache and attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):

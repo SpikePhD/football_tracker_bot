@@ -688,7 +688,6 @@ class ProviderEnrichmentTests(unittest.TestCase):
         match["teams"]["away"]["name"] = "Czechia"
         match["goals"] = {"home": 0, "away": 1}
         match["events"] = []
-        state = "760414:0:1:0"
         live_payload = {
             "response": [
                 {
@@ -710,12 +709,6 @@ class ProviderEnrichmentTests(unittest.TestCase):
         }
 
         async def run():
-            api_provider._enrich_retry_states[state] = {
-                "first_seen": datetime(2026, 6, 12, 4, 0, 0),
-                "attempt_count": 0,
-                "last_attempt_at": None,
-                "exhausted": False,
-            }
             with (
                 patch.object(api_provider, "bot_now", return_value=datetime(2026, 6, 12, 4, 1, 0)),
                 patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
@@ -724,10 +717,97 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value=live_payload)),
                 patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": [api_goal]})),
             ):
+                await api_provider.enrich_fixture_events(None, match)
                 return await api_provider.enrich_fixture_events(None, match)
 
         enriched = asyncio.run(run())
         self.assertEqual(enriched["events"][0]["player"]["name"], "Czech Scorer")
+
+    def test_enrichment_canonicalizes_api_football_event_team_to_espn_side(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"] = {"id": "espn-home", "name": "South Korea"}
+        match["teams"]["away"] = {"id": "espn-away", "name": "Czechia"}
+        match["goals"] = {"home": 0, "away": 1}
+        match["events"] = []
+        api_provider._api_fixture_id_cache["760414"] = 1400414
+        live_payload = {
+            "response": [
+                {
+                    "fixture": {"id": 1400414, "date": "2026-06-12T02:00:00+00:00"},
+                    "league": {"id": 1},
+                    "teams": {
+                        "home": {"id": 10, "name": "Korea Republic"},
+                        "away": {"id": 20, "name": "Czech Republic"},
+                    },
+                },
+            ]
+        }
+        api_goal = {
+            "time": {"elapsed": 22},
+            "player": {"name": "Czech Scorer"},
+            "team": {"id": 20, "name": "Czech Republic"},
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }
+
+        async def run():
+            with (
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 6, 12, 4, 1, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "fetch_live_fixtures_payload", AsyncMock(return_value=live_payload)),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": [api_goal]})),
+            ):
+                await api_provider.enrich_fixture_events(None, match)
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+
+        self.assertEqual(enriched["events"][0]["team"], {"id": "espn-away", "name": "Czechia"})
+
+    def test_cached_api_football_events_are_canonicalized_before_reuse(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760414", league_id=1)
+        match["fixture"]["date"] = "2026-06-12T02:00:00+00:00"
+        match["teams"]["home"] = {"id": "espn-home", "name": "South Korea"}
+        match["teams"]["away"] = {"id": "espn-away", "name": "Czechia"}
+        match["goals"] = {"home": 0, "away": 1}
+        match["events"] = []
+        api_provider._api_fixture_id_cache["760414"] = 1400414
+        api_provider._api_fixture_events_cache[1400414] = {
+            "fetched_at": datetime(2026, 6, 12, 4, 0, 0),
+            "events": [
+                {
+                    "time": {"elapsed": 22},
+                    "player": {"name": "Czech Scorer"},
+                    "team": {"id": 20, "name": "Czech Republic"},
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                }
+            ],
+        }
+
+        async def run():
+            with (
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 6, 12, 4, 1, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock()) as fetch_events,
+            ):
+                await api_provider.enrich_fixture_events(None, match)
+                enriched = await api_provider.enrich_fixture_events(None, match)
+                return enriched, fetch_events
+
+        enriched, fetch_events = asyncio.run(run())
+
+        fetch_events.assert_not_awaited()
+        self.assertEqual(enriched["events"][0]["team"], {"id": "espn-away", "name": "Czechia"})
 
     def test_enrichment_reuses_complete_event_cache_without_refetching(self):
         from modules import api_provider

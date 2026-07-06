@@ -194,7 +194,7 @@ class MatchesDisplayTests(unittest.TestCase):
         _football_fixtures, _tennis, content = asyncio.run(run())
 
         self.assertIn("LIVE [73']", content)
-        self.assertIn("J. Lukic", content)
+        self.assertIn("21' - J. Lukic (A)", content)
         self.assertNotIn("missing from event data", content)
 
     def test_daily_snapshot_hides_pending_missing_event_warning(self):

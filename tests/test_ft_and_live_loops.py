@@ -789,6 +789,55 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertEqual([call.kwargs["message_id"] for call in upsert_live.await_args_list], [None, 100])
         self.assertEqual([call.args[1] for call in update_live_id.call_args_list], [100, 100])
 
+    def test_live_loop_preserves_side_label_for_api_football_enriched_alias_event(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        match = espn_match(fixture_id="alias-live", league_id=1)
+        match["fixture"]["status"] = {"short": "2H", "elapsed": 73}
+        match["teams"]["home"] = {"id": "espn-home", "name": "South Korea"}
+        match["teams"]["away"] = {"id": "espn-away", "name": "Czechia"}
+        match["goals"] = {"home": 0, "away": 1}
+        match["events"] = []
+        enriched = {
+            **match,
+            "events": [
+                {
+                    "time": {"elapsed": 22},
+                    "player": {"name": "Czech Scorer"},
+                    "team": {"id": "espn-away", "name": "Czechia"},
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                }
+            ],
+        }
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 4321})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(return_value=[match])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(return_value=enriched)),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop.match_state, "get_fixture_state", return_value={}),
+                patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert,
+            ):
+                await live_loop.run_live_loop(fake_bot)
+                return upsert
+
+        upsert = asyncio.run(run())
+
+        content = upsert.await_args.kwargs["content"]
+        self.assertIn("22' - Czech Scorer (A)", content)
+
     def test_live_score_rollback_drops_surplus_voided_goal_event_after_guard_accepts(self):
         from modules import live_loop
         from modules import api_provider
