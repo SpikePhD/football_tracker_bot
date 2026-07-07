@@ -914,6 +914,97 @@ class FtAndLiveLoopTests(unittest.TestCase):
         self.assertIn("Belgium 0 - 0 Iran", sent_contents[-1])
         self.assertNotIn("Mehdi Taremi", sent_contents[-1])
 
+    def test_live_output_merges_partial_goals_then_rolls_back_cancelled_goal(self):
+        from modules import live_loop
+        from modules import api_provider
+
+        first = espn_match(fixture_id="partial-live-goals")
+        first["teams"]["home"] = {"id": "100", "name": "Argentina"}
+        first["teams"]["away"] = {"id": "200", "name": "Egypt"}
+        first["fixture"]["status"] = {"short": "1H", "elapsed": 15}
+        first["goals"] = {"home": 0, "away": 1}
+        first["events"] = [
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Y. Ibrahim"},
+                "team": {"id": "200", "name": "Egypt"},
+                "time": {"elapsed": 15},
+            }
+        ]
+
+        second = espn_match(fixture_id="partial-live-goals")
+        second["teams"] = first["teams"]
+        second["fixture"]["status"] = {"short": "2H", "elapsed": 60}
+        second["goals"] = {"home": 0, "away": 2}
+        second["events"] = [
+            *first["events"],
+            {
+                "type": "Goal",
+                "detail": "Normal Goal",
+                "player": {"name": "Mostafa Zico"},
+                "team": {"id": "200", "name": "Egypt"},
+                "time": {"elapsed": 57},
+            },
+        ]
+
+        rollback = espn_match(fixture_id="partial-live-goals")
+        rollback["teams"] = first["teams"]
+        rollback["fixture"]["status"] = {"short": "2H", "elapsed": 63}
+        rollback["goals"] = {"home": 0, "away": 1}
+        rollback["events"] = list(first["events"])
+
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+        fake_message = type("FakeMessage", (), {"id": 100})()
+
+        async def run():
+            live_loop.live_state_keys.clear()
+            live_loop.live_message_ids.clear()
+            live_loop._missing_since.clear()
+            live_loop._last_observed.clear()
+            live_loop._regression_hold.clear()
+            live_loop._last_sent_content.clear()
+            with (
+                patch.object(api_provider, "fetch_live", AsyncMock(side_effect=[
+                    [first],
+                    [second],
+                    [rollback],
+                    [rollback],
+                    [rollback],
+                ])),
+                patch.object(api_provider, "enrich_fixture_events", AsyncMock(side_effect=[
+                    first,
+                    second,
+                    rollback,
+                    rollback,
+                    rollback,
+                ])),
+                patch.object(live_loop, "is_tracked_for_ft", return_value=True),
+                patch.object(live_loop.match_state, "get_fixture_state", return_value={}),
+                patch.object(live_loop.match_state, "upsert_fixture_from_match", return_value={}),
+                patch.object(live_loop.match_state, "update_live_message_id"),
+                patch.object(live_loop, "prune_live_state", return_value=[]),
+                patch.object(live_loop, "upsert_live_message", AsyncMock(return_value=fake_message)) as upsert_live,
+            ):
+                for _ in range(5):
+                    await live_loop.run_live_loop(fake_bot)
+                return upsert_live
+
+        upsert_live = asyncio.run(run())
+        sent_contents = [call.kwargs["content"] for call in upsert_live.await_args_list]
+
+        self.assertTrue(
+            any(
+                "Argentina 0 - 2 Egypt" in content
+                and "15' - Y. Ibrahim (A)" in content
+                and "57' - Mostafa Zico (A)" in content
+                for content in sent_contents
+            )
+        )
+        self.assertIn("Argentina 0 - 1 Egypt", sent_contents[-1])
+        self.assertIn("15' - Y. Ibrahim (A)", sent_contents[-1])
+        self.assertNotIn("Mostafa Zico", sent_contents[-1])
+
     def test_live_pending_missing_events_do_not_render_warning(self):
         from modules import live_loop
         from modules import api_provider

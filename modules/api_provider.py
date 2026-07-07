@@ -1014,6 +1014,118 @@ def _events_are_strictly_better(candidate_events: list, current_events: list) ->
     return _event_quality(candidate_events) > _event_quality(current_events)
 
 
+def _event_elapsed_value(event: dict) -> int:
+    try:
+        return int(event.get("time", {}).get("elapsed") or 9999)
+    except (TypeError, ValueError):
+        return 9999
+
+
+def _event_team_side_for_match(event: dict, match: dict) -> str:
+    event_team = event.get("team", {}) or {}
+    event_team_id = event_team.get("id")
+    event_team_sig = _canonical_team_signature(event_team.get("name"))
+    teams = match.get("teams", {}) or {}
+    for side in ("home", "away"):
+        team = teams.get(side, {}) or {}
+        if event_team_id is not None and team.get("id") is not None and str(event_team_id) == str(team.get("id")):
+            return side
+        if event_team_sig and event_team_sig == _canonical_team_signature(team.get("name")):
+            return side
+    return ""
+
+
+def _event_identity(event: dict, match: dict) -> tuple:
+    player = _normalize_fixture_name(event.get("player", {}).get("name"))
+    detail = str(event.get("detail") or "").strip().lower()
+    return (
+        _event_elapsed_value(event),
+        _event_team_side_for_match(event, match),
+        player,
+        detail,
+    )
+
+
+def _merge_distinct_events(match: dict, event_sources: list[list]) -> list:
+    counted_goals: list[dict] = []
+    non_goals: list[dict] = []
+    seen_goal_keys: set[tuple] = set()
+    seen_non_goal_keys: set[tuple] = set()
+
+    for events in event_sources:
+        for event in events or []:
+            if is_counted_goal_event(event):
+                key = _event_identity(event, match)
+                if key not in seen_goal_keys:
+                    counted_goals.append(event)
+                    seen_goal_keys.add(key)
+                continue
+
+            key = (
+                event.get("type"),
+                event.get("detail"),
+                _event_identity(event, match),
+            )
+            if key not in seen_non_goal_keys:
+                non_goals.append(event)
+                seen_non_goal_keys.add(key)
+
+    counted_goals.sort(key=lambda event: (_event_elapsed_value(event), _event_identity(event, match)))
+    return [*counted_goals, *non_goals]
+
+
+def _best_known_events_for_fixture(match: dict) -> list:
+    fixture_id = str(match.get("fixture", {}).get("id") or "")
+    if not fixture_id:
+        return []
+    best = _best_known_events_by_espn_fixture.get(fixture_id)
+    if not best:
+        return []
+    return list(best.get("events", []) or [])
+
+
+def _merge_complementary_partial_events(
+    match: dict,
+    enriched_events: list,
+    total_goals: int,
+    api_fixture_id: int | None,
+    source_label: str,
+) -> dict | None:
+    current_events = match.get("events", []) or []
+    best_events = _best_known_events_for_fixture(match)
+    merged_events = _merge_distinct_events(match, [best_events, current_events, enriched_events])
+    merged_match = _sanitize_goal_events_for_score(
+        {**match, "events": merged_events},
+        f"{source_label} complementary merge",
+    )
+    merged_events = merged_match.get("events", [])
+    merged_goals = _goal_event_count(merged_events)
+    current_goals = _goal_event_count(current_events)
+    enriched_goals = _goal_event_count(enriched_events)
+    best_goals = _goal_event_count(best_events)
+    best_source_goals = max(current_goals, enriched_goals, best_goals)
+
+    if merged_goals <= best_source_goals:
+        return None
+    if abs(total_goals - merged_goals) >= abs(total_goals - best_source_goals):
+        return None
+
+    fixture_id = match.get("fixture", {}).get("id")
+    logger.info(
+        f"[Enrich] ESPN fixture {fixture_id}: merged complementary partial events "
+        f"from best-known/current/{source_label} for API-Football fixture {api_fixture_id} "
+        f"({merged_goals}/{total_goals} goals)."
+    )
+    _remember_best_known_events(
+        merged_match,
+        merged_events,
+        total_goals,
+        f"merged complementary {source_label}",
+        api_fixture_id,
+    )
+    return merged_match
+
+
 def _fresh_age_seconds(fetched_at: datetime | None, now_local: datetime) -> float | None:
     if fetched_at is None:
         return None
@@ -1216,6 +1328,16 @@ def _merge_enriched_events_if_better(
     events = match.get("events", [])
     af_goals = _goal_event_count(enriched_events)
     fixture_id = match.get("fixture", {}).get("id")
+
+    complementary = _merge_complementary_partial_events(
+        match,
+        enriched_events,
+        total_goals,
+        api_fixture_id,
+        source_label,
+    )
+    if complementary is not None:
+        return complementary
 
     if af_goals <= goal_events:
         logger.info(
@@ -1659,6 +1781,22 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
         if goal_events >= total_goals:
             return _annotate_event_completeness(match, EVENTS_COMPLETE, 0, _event_score_key(match))
 
+    complementary = _merge_complementary_partial_events(
+        match,
+        [],
+        total_goals,
+        None,
+        "best-known events",
+    )
+    if complementary is not None:
+        match = complementary
+        events = match.get("events", [])
+        goal_events = _goal_event_count(events)
+        missing = max(0, total_goals - goal_events)
+        score_key = _event_score_key(match)
+        if goal_events >= total_goals:
+            return _annotate_event_completeness(match, EVENTS_COMPLETE, 0, score_key)
+
     cached_api_fixture_id = _api_fixture_id_cache.get(str(fixture_id))
     if cached_api_fixture_id is not None:
         cached_events = _get_cached_complete_fixture_events(
@@ -1765,8 +1903,26 @@ async def enrich_fixture_events(session: aiohttp.ClientSession, match: dict) -> 
             source_label,
         )
         if merged is not None:
-            retry_state["exhausted"] = True
-            return _annotate_event_completeness(merged, EVENTS_COMPLETE, 0, _event_score_key(merged))
+            merged_goal_events = _goal_event_count(merged.get("events", []))
+            merged_score_key = _event_score_key(merged)
+            if merged_goal_events >= total_goals:
+                retry_state["exhausted"] = True
+                return _annotate_event_completeness(merged, EVENTS_COMPLETE, 0, merged_score_key)
+            merged_missing = max(0, total_goals - merged_goal_events)
+            if attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
+                retry_state["exhausted_missing"] = True
+                return _annotate_event_completeness(
+                    merged,
+                    EVENTS_EXHAUSTED_MISSING,
+                    merged_missing,
+                    merged_score_key,
+                )
+            return _annotate_event_completeness(
+                merged,
+                EVENTS_PENDING_ENRICHMENT,
+                merged_missing,
+                merged_score_key,
+            )
 
         if attempt_count + 1 >= len(API_ENRICH_RETRY_DELAYS_SEC):
             retry_state["exhausted_missing"] = True

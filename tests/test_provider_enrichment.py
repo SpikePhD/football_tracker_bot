@@ -798,6 +798,7 @@ class ProviderEnrichmentTests(unittest.TestCase):
                 patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
                 patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
                 patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=None)),
                 patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock()) as fetch_events,
             ):
                 await api_provider.enrich_fixture_events(None, match)
@@ -808,6 +809,296 @@ class ProviderEnrichmentTests(unittest.TestCase):
 
         fetch_events.assert_not_awaited()
         self.assertEqual(enriched["events"][0]["team"], {"id": "espn-away", "name": "Czechia"})
+
+    def test_enrichment_merges_complementary_partial_goal_events(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760509", league_id=1)
+        match["teams"]["home"] = {"id": "100", "name": "Argentina"}
+        match["teams"]["away"] = {"id": "200", "name": "Egypt"}
+        match["goals"] = {"home": 0, "away": 2}
+        match["events"] = [
+            {
+                "time": {"elapsed": 57},
+                "player": {"name": "Mostafa Zico"},
+                "team": {"id": "200", "name": "Egypt"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }
+        ]
+        best_known = {
+            "events": [
+                {
+                    "time": {"elapsed": 15},
+                    "player": {"name": "Y. Ibrahim"},
+                    "team": {"id": "200", "name": "Egypt"},
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                }
+            ],
+            "goal_count": 1,
+            "event_count": 1,
+            "score_total_at_capture": 1,
+            "source": "API-Football events",
+            "api_fixture_id": 1576804,
+            "updated_at": datetime(2026, 7, 7, 18, 18, 26),
+        }
+        cached_api_events = {
+            "fetched_at": datetime(2026, 7, 7, 19, 24, 37),
+            "events": [
+                {
+                    "time": {"elapsed": 15},
+                    "player": {"name": "Y. Ibrahim"},
+                    "team": {"id": "200", "name": "Egypt"},
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                }
+            ],
+        }
+
+        async def run():
+            with (
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 7, 7, 19, 25, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=None)),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock()) as fetch_events,
+            ):
+                api_provider._reset_enrich_state_for_today()
+                api_provider._api_fixture_id_cache["760509"] = 1576804
+                api_provider._best_known_events_by_espn_fixture["760509"] = best_known
+                api_provider._api_fixture_events_cache[1576804] = cached_api_events
+                await api_provider.enrich_fixture_events(None, match)
+                enriched = await api_provider.enrich_fixture_events(None, match)
+                return enriched, fetch_events
+
+        enriched, fetch_events = asyncio.run(run())
+
+        fetch_events.assert_not_awaited()
+        self.assertEqual(enriched["_event_completeness"]["status"], api_provider.EVENTS_COMPLETE)
+        self.assertEqual(
+            [event["player"]["name"] for event in enriched["events"] if event.get("type") == "Goal"],
+            ["Y. Ibrahim", "Mostafa Zico"],
+        )
+
+    def test_enrichment_merges_complementary_api_refresh_and_espn_events(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760509", league_id=1)
+        match["teams"]["home"] = {"id": "100", "name": "Argentina"}
+        match["teams"]["away"] = {"id": "200", "name": "Egypt"}
+        match["goals"] = {"home": 0, "away": 2}
+        match["events"] = [
+            {
+                "time": {"elapsed": 57},
+                "player": {"name": "Mostafa Zico"},
+                "team": {"id": "200", "name": "Egypt"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }
+        ]
+        api_goal = {
+            "time": {"elapsed": 15},
+            "player": {"name": "Y. Ibrahim"},
+            "team": {"id": 20, "name": "Egypt"},
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }
+
+        async def run():
+            with (
+                patch.object(api_provider, "bot_now", return_value=datetime(2026, 7, 7, 19, 25, 0)),
+                patch.object(api_provider, "API_ENRICH_RETRY_DELAYS_SEC", [0]),
+                patch.object(api_provider, "API_ENRICH_GRACE_SEC", 0),
+                patch.object(api_provider.api_client, "is_quota_exceeded_today", return_value=False),
+                patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=1576804)),
+                patch.object(api_provider.api_client, "fetch_fixture_events", AsyncMock(return_value={"response": [api_goal]})),
+            ):
+                api_provider._reset_enrich_state_for_today()
+                api_provider._api_fixture_id_cache["760509"] = 1576804
+                await api_provider.enrich_fixture_events(None, match)
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+
+        self.assertEqual(enriched["_event_completeness"]["status"], api_provider.EVENTS_COMPLETE)
+        self.assertEqual(
+            [event["player"]["name"] for event in enriched["events"] if event.get("type") == "Goal"],
+            ["Y. Ibrahim", "Mostafa Zico"],
+        )
+
+    def test_complementary_merge_dedupes_duplicate_goal_events(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="dedupe-complementary", league_id=1)
+        match["teams"]["home"] = {"id": "100", "name": "Argentina"}
+        match["teams"]["away"] = {"id": "200", "name": "Egypt"}
+        match["goals"] = {"home": 0, "away": 1}
+        match["events"] = [
+            {
+                "time": {"elapsed": 15},
+                "player": {"name": "Y. Ibrahim"},
+                "team": {"id": "200", "name": "Egypt"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }
+        ]
+        api_provider._best_known_events_by_espn_fixture["dedupe-complementary"] = {
+            "events": list(match["events"]),
+            "goal_count": 1,
+            "event_count": 1,
+            "score_total_at_capture": 1,
+            "source": "API-Football events",
+            "api_fixture_id": 1576804,
+            "updated_at": datetime(2026, 7, 7, 18, 18, 26),
+        }
+
+        enriched = asyncio.run(api_provider.enrich_fixture_events(None, match))
+
+        counted_goals = [event for event in enriched["events"] if event.get("type") == "Goal"]
+        self.assertEqual(len(counted_goals), 1)
+        self.assertEqual(counted_goals[0]["player"]["name"], "Y. Ibrahim")
+
+    def test_complementary_merge_keeps_pending_status_when_still_incomplete(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="partial-still-incomplete", league_id=1)
+        match["teams"]["home"] = {"id": "100", "name": "Argentina"}
+        match["teams"]["away"] = {"id": "200", "name": "Egypt"}
+        match["goals"] = {"home": 0, "away": 3}
+        match["events"] = [
+            {
+                "time": {"elapsed": 57},
+                "player": {"name": "Mostafa Zico"},
+                "team": {"id": "200", "name": "Egypt"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }
+        ]
+        api_provider._best_known_events_by_espn_fixture["partial-still-incomplete"] = {
+            "events": [
+                {
+                    "time": {"elapsed": 15},
+                    "player": {"name": "Y. Ibrahim"},
+                    "team": {"id": "200", "name": "Egypt"},
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                }
+            ],
+            "goal_count": 1,
+            "event_count": 1,
+            "score_total_at_capture": 1,
+            "source": "API-Football events",
+            "api_fixture_id": 1576804,
+            "updated_at": datetime(2026, 7, 7, 18, 18, 26),
+        }
+
+        async def run():
+            with patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=None)):
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+
+        self.assertEqual(enriched["_event_completeness"]["status"], api_provider.EVENTS_PENDING_ENRICHMENT)
+        self.assertEqual(enriched["_event_completeness"]["missing_goals"], 1)
+        self.assertEqual(
+            [event["player"]["name"] for event in enriched["events"] if event.get("type") == "Goal"],
+            ["Y. Ibrahim", "Mostafa Zico"],
+        )
+
+    def test_complementary_merge_prunes_voided_goal_after_score_rollback(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760509", league_id=1)
+        match["teams"]["home"] = {"id": "100", "name": "Argentina"}
+        match["teams"]["away"] = {"id": "200", "name": "Egypt"}
+        match["goals"] = {"home": 0, "away": 1}
+        match["events"] = [
+            {
+                "time": {"elapsed": 15},
+                "player": {"name": "Y. Ibrahim"},
+                "team": {"id": "200", "name": "Egypt"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }
+        ]
+        api_provider._best_known_events_by_espn_fixture["760509"] = {
+            "events": [
+                {
+                    "time": {"elapsed": 15},
+                    "player": {"name": "Y. Ibrahim"},
+                    "team": {"id": "200", "name": "Egypt"},
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                },
+                {
+                    "time": {"elapsed": 57},
+                    "player": {"name": "Mostafa Zico"},
+                    "team": {"id": "200", "name": "Egypt"},
+                    "type": "Goal",
+                    "detail": "Normal Goal",
+                },
+            ],
+            "goal_count": 2,
+            "event_count": 2,
+            "score_total_at_capture": 2,
+            "source": "merged complementary events",
+            "api_fixture_id": 1576804,
+            "updated_at": datetime(2026, 7, 7, 19, 24, 37),
+        }
+
+        enriched = asyncio.run(api_provider.enrich_fixture_events(None, match))
+
+        self.assertEqual(enriched["goals"], {"home": 0, "away": 1})
+        self.assertEqual(
+            [event["player"]["name"] for event in enriched["events"] if event.get("type") == "Goal"],
+            ["Y. Ibrahim"],
+        )
+
+    def test_non_scoring_goal_details_do_not_satisfy_complementary_merge(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="non-scoring-complementary", league_id=1)
+        match["teams"]["home"] = {"id": "100", "name": "Brazil"}
+        match["teams"]["away"] = {"id": "200", "name": "Norway"}
+        match["goals"] = {"home": 1, "away": 2}
+        match["events"] = [
+            {
+                "time": {"elapsed": 14},
+                "player": {"name": "Bruno Guimaraes"},
+                "team": {"id": "100", "name": "Brazil"},
+                "type": "Goal",
+                "detail": "Missed Penalty",
+            },
+            {
+                "time": {"elapsed": 79},
+                "player": {"name": "E. Haaland"},
+                "team": {"id": "200", "name": "Norway"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 90},
+                "player": {"name": "E. Haaland"},
+                "team": {"id": "200", "name": "Norway"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+
+        async def run():
+            with patch.object(api_provider, "resolve_api_football_fixture_id", AsyncMock(return_value=None)):
+                return await api_provider.enrich_fixture_events(None, match)
+
+        enriched = asyncio.run(run())
+
+        self.assertEqual(enriched["_event_completeness"]["status"], api_provider.EVENTS_PENDING_ENRICHMENT)
+        self.assertEqual(enriched["_event_completeness"]["missing_goals"], 1)
+        self.assertEqual(
+            [event["player"]["name"] for event in enriched["events"] if api_provider.is_counted_goal_event(event)],
+            ["E. Haaland", "E. Haaland"],
+        )
 
     def test_enrichment_reuses_complete_event_cache_without_refetching(self):
         from modules import api_provider
