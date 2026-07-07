@@ -47,7 +47,6 @@ from utils.time_utils import (
 )
 from utils.event_formatter import (
     is_counted_goal_event,
-    is_shootout_event,
     normalize_api_football_events,
     prune_goal_events_to_score,
 )
@@ -510,16 +509,15 @@ async def fetch_display_football(session: aiohttp.ClientSession, now_utc: dateti
 async def fetch_upcoming_football_schedule(
     session: aiohttp.ClientSession,
     now_utc: datetime,
-    horizon_hours: int | None = None,
+    horizon_hours: int,
 ) -> list[dict]:
     """Future and recently-started fixtures used to plan scheduler wake-up times."""
-    horizon = FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS if horizon_hours is None else horizon_hours
     now_utc = now_utc.astimezone(timezone.utc)
     start_utc = now_utc - timedelta(hours=FOOTBALL_MAX_LIVE_DURATION_HOURS)
     matches = await fetch_football_window(
         session,
         start_utc,
-        now_utc + timedelta(hours=horizon),
+        now_utc + timedelta(hours=horizon_hours),
         now_utc=now_utc,
     )
     upcoming = []
@@ -2109,13 +2107,6 @@ def _is_future(start_time: str | None, horizon_days: int = TENNIS_UPCOMING_DAYS)
         return False
     now = bot_now()
     return now < dt <= now + timedelta(days=horizon_days)
-
-
-def _is_past(start_time: str | None) -> bool:
-    dt = _match_dt_bot_tz(start_time)
-    if not dt:
-        return False
-    return dt < bot_now()
 
 
 async def fetch_tennis_upcoming(session: aiohttp.ClientSession, horizon_days: int = TENNIS_UPCOMING_DAYS) -> list[dict]:

@@ -1,8 +1,7 @@
 # football_tracker_bot.py
-# line to manually test auto_update.sh. Test 1.
 
 import logging
-import sys # For directing to stdout
+import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
@@ -12,7 +11,7 @@ from datetime import time
 
 import discord
 from discord.ext import commands, tasks
-import aiohttp # Make sure aiohttp is imported
+import aiohttp
 
 from config import (
     BOT_TOKEN,
@@ -67,7 +66,7 @@ _configure_logging()
 
 # --- Intents & bot setup ---
 intents = discord.Intents.default()
-intents.message_content = True # Ensure this is enabled if you use message content
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 operations_task: asyncio.Task | None = None
 _startup_completed = False
@@ -244,7 +243,7 @@ async def on_ready():
 
     logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     logger.info(f"🚀 Running bot from commit: {get_version_info()['sha']}")
-    await ensure_http_session(bot) # Ensure session is ready
+    await ensure_http_session(bot)
     setup_power_management()
 
     channel = bot.get_channel(CHANNEL_ID)
@@ -278,9 +277,9 @@ async def on_ready():
                 except commands.ExtensionError as e:
                     logger.error(f"❌ Failed to load cog {cogs_path}.{fname[:-3]}: {e}", exc_info=True)
         if loaded_cogs_count == 0:
-            logger.warning("ℹ️ No cogs were loaded from the 'cogs' directory.") # Changed to warning
+            logger.warning("ℹ️ No cogs were loaded from the 'cogs' directory.")
     else:
-        logger.warning(f"ℹ️ Cogs directory '{cogs_path}' not found. No cogs loaded.") # Changed to warning
+        logger.warning(f"ℹ️ Cogs directory '{cogs_path}' not found. No cogs loaded.")
 
     logger.info("Bot ready. Starting operations loop.")
     asyncio.create_task(launch_operations_manager(bot))

@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import subprocess
@@ -5,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("BOT_TOKEN", "test-token")
 os.environ.setdefault("API_KEY", "test-api-key")
@@ -109,6 +111,109 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
                 offenders.append(str(path.relative_to(repo_root)))
 
         self.assertEqual(offenders, [])
+
+    def test_log_export_uses_default_line_limit_after_filtering(self):
+        from cogs import log as log_cog
+
+        lines = [f"[2026-07-07 12:00:0{i}] [INFO    ] [tests] line {i}\n" for i in range(5)]
+
+        with (
+            patch.object(log_cog, "LOG_EXPORT_DEFAULT_LINES", 2),
+            patch.object(log_cog, "LOG_EXPORT_MAX_LINES", 10),
+        ):
+            payload, truncated = log_cog._build_export(
+                lines=lines,
+                mode="today",
+                value=None,
+                max_bytes=10000,
+            )
+
+        self.assertFalse(truncated)
+        self.assertNotIn("line 0", payload)
+        self.assertNotIn("line 2", payload)
+        self.assertIn("line 3", payload)
+        self.assertIn("line 4", payload)
+
+    def test_log_export_max_lines_caps_default_line_limit(self):
+        from cogs import log as log_cog
+
+        lines = [f"[2026-07-07 12:00:0{i}] [ERROR   ] [tests] line {i}\n" for i in range(5)]
+
+        with (
+            patch.object(log_cog, "LOG_EXPORT_DEFAULT_LINES", 5),
+            patch.object(log_cog, "LOG_EXPORT_MAX_LINES", 3),
+        ):
+            payload, truncated = log_cog._build_export(
+                lines=lines,
+                mode="errors",
+                value=None,
+                max_bytes=10000,
+            )
+
+        self.assertFalse(truncated)
+        self.assertNotIn("line 0", payload)
+        self.assertNotIn("line 1", payload)
+        self.assertIn("line 2", payload)
+        self.assertIn("line 3", payload)
+        self.assertIn("line 4", payload)
+
+    def test_log_export_still_truncates_at_byte_limit(self):
+        from cogs import log as log_cog
+
+        lines = [
+            "[2026-07-07 12:00:00] [INFO    ] [tests] " + ("x" * 200) + "\n",
+            "[2026-07-07 12:00:01] [INFO    ] [tests] " + ("y" * 200) + "\n",
+        ]
+
+        payload, truncated = log_cog._build_export(
+            lines=lines,
+            mode="today",
+            value=None,
+            max_bytes=160,
+        )
+
+        self.assertTrue(truncated)
+        self.assertIn("[truncated: export hit byte limit]", payload)
+
+    def test_log_export_header_uses_configured_bot_name(self):
+        from cogs import log as log_cog
+
+        with patch.object(log_cog, "BOT_NAME", "Configured Bot", create=True):
+            payload, _ = log_cog._build_export(
+                lines=[],
+                mode="today",
+                value=None,
+                max_bytes=10000,
+            )
+
+        self.assertIn("Configured Bot Log Export", payload)
+        self.assertNotIn("Marco Van Botten Log Export", payload)
+
+    def test_version_command_header_uses_configured_bot_name(self):
+        from cogs import version
+
+        async def run():
+            with (
+                patch.object(version, "BOT_NAME", "Configured Bot"),
+                patch.object(
+                    version,
+                    "get_version_info",
+                    return_value={
+                        "sha": "abc123",
+                        "date": "2026-07-07 12:00",
+                        "message": "test commit",
+                    },
+                ),
+                patch.object(version, "post_new_message_to_context", AsyncMock()) as post_message,
+            ):
+                cog = version.VersionCommand(bot=None)
+                await cog.version_cmd.callback(cog, SimpleNamespace())
+                return post_message.await_args.kwargs["content"]
+
+        content = asyncio.run(run())
+
+        self.assertIn("🤖 **Configured Bot**", content)
+        self.assertNotIn("🤖 **Marco Van Botten**", content)
 
     def test_daily_log_collection_script_and_runbook_are_present(self):
         repo_root = Path(__file__).resolve().parents[1]

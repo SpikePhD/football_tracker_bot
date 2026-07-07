@@ -523,7 +523,7 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual(start_utc, now_utc - timedelta(hours=36))
         self.assertEqual(end_utc, now_utc + timedelta(hours=36))
 
-    def test_fetch_upcoming_football_schedule_uses_future_display_horizon(self):
+    def test_fetch_upcoming_football_schedule_uses_explicit_future_horizon(self):
         from modules import api_provider
 
         now_utc = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
@@ -1165,6 +1165,57 @@ class UtcFootballLifecycleTests(unittest.TestCase):
         self.assertEqual(status["next_planned_wake_utc"], datetime(2026, 6, 3, 21, 0, tzinfo=timezone.utc))
         self.assertEqual(status["sleep_reason"], "schedule_refresh")
         self.assertEqual(status["sleep_reason_detail"], "next_refresh=2026-06-03T18:00:00+00:00")
+
+    def test_scheduler_sleep_plan_passes_scheduler_owned_horizon(self):
+        from modules import scheduler
+
+        now_utc = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def run():
+            with (
+                patch.object(scheduler, "_FOOTBALL_SLEEP_REFRESH_SEC", 21600),
+                patch.object(scheduler, "FOOTBALL_PREMATCH_WINDOW_HOURS", 2),
+                patch.object(
+                    scheduler.api_provider,
+                    "fetch_upcoming_football_schedule",
+                    AsyncMock(return_value=[]),
+                ) as schedule_fetch,
+            ):
+                await scheduler._plan_sleep_until_next_fixture(fake_bot, now_utc)
+                return schedule_fetch
+
+        schedule_fetch = asyncio.run(run())
+
+        self.assertEqual(schedule_fetch.await_args.kwargs["horizon_hours"], 8)
+
+    def test_scheduler_sleep_plan_ignores_tiny_display_window_for_due_prematch_wake(self):
+        from modules import api_provider, scheduler
+
+        future = espn_match(fixture_id="future-7h")
+        kickoff = datetime(2026, 6, 3, 19, 0, tzinfo=timezone.utc)
+        future["fixture"]["date"] = kickoff.isoformat().replace("+00:00", "Z")
+        now_utc = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
+        fake_bot = type("FakeBot", (), {"http_session": None})()
+
+        async def fake_fetch_football_window(_session, _start_utc, end_utc, now_utc=None):
+            return [future] if end_utc >= kickoff else []
+
+        async def run():
+            with (
+                patch.object(api_provider, "FOOTBALL_DISPLAY_LOOKUP_WINDOW_HOURS", 1),
+                patch.object(scheduler, "_FOOTBALL_SLEEP_REFRESH_SEC", 21600),
+                patch.object(scheduler, "FOOTBALL_PREMATCH_WINDOW_HOURS", 2),
+                patch.object(api_provider, "fetch_football_window", AsyncMock(side_effect=fake_fetch_football_window)),
+            ):
+                return await scheduler._plan_sleep_until_next_fixture(fake_bot, now_utc)
+
+        next_check = asyncio.run(run())
+
+        self.assertEqual(next_check, datetime(2026, 6, 3, 17, 0, tzinfo=timezone.utc))
+        status = scheduler.get_football_scheduler_status()
+        self.assertEqual(status["next_planned_kickoff_utc"], kickoff)
+        self.assertEqual(status["sleep_reason"], "next_fixture_wake")
 
     def test_scheduler_sleep_plan_wakes_at_prematch_window(self):
         from modules import scheduler

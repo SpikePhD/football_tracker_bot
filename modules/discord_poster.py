@@ -64,16 +64,6 @@ async def _find_recent_message(
     return None
 
 
-async def post_live_update(
-    bot: discord.Client,
-    channel_id: int,
-    content: str | None = None,
-    embed: discord.Embed | None = None,
-    attachments: Sequence[discord.File] | None = None
-) -> discord.Message | None:
-    """Post a live match update as a new message."""
-    return await post_new_general_message(bot, channel_id, content=content, embed=embed, attachments=attachments)
-
 async def upsert_live_message(
     bot: discord.Client,
     channel_id: int,
@@ -160,7 +150,7 @@ async def post_new_general_message(
     attachments: Sequence[discord.File] | None = None
 ) -> discord.Message | None:
     """
-    Sends a new message to the specified channel. (Unchanged, already sends new)
+    Sends a new message to the specified channel.
     Used for FT results or other announcements that should always be new.
     """
     if not content and not embed and (not attachments or len(attachments) == 0):
@@ -261,7 +251,7 @@ async def post_new_message_to_context(
     attachments: Sequence[discord.File] | None = None
 ) -> discord.Message | None:
     """
-    Sends a new message in response to a command context. (Unchanged, already sends new)
+    Sends a new message in response to a command context.
     Used by cogs.
     """
     if not content and not embed and (not attachments or len(attachments) == 0):

@@ -26,7 +26,6 @@ from modules.football_memory import (
     load_memory,
     check_memory_staleness,
     get_league_standings,
-    get_team_info,
 )
 
 logger = logging.getLogger(__name__)

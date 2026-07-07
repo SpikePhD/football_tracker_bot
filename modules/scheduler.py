@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
+from math import ceil
 
 from config import (
     CHANNEL_ID,
@@ -51,6 +52,10 @@ _tennis_scheduler_state = {
     "sleep_reason_detail": None,
 }
 _last_logged_tennis_state: tuple | None = None
+
+
+def _football_scheduler_lookup_horizon_hours() -> int:
+    return ceil(_FOOTBALL_SLEEP_REFRESH_SEC / 3600) + FOOTBALL_PREMATCH_WINDOW_HOURS
 
 
 def _set_football_scheduler_state(
@@ -223,7 +228,11 @@ def _football_sleep_reason_detail(
 
 async def _plan_sleep_until_next_fixture(bot, now_utc: datetime) -> datetime:
     schedule_refresh = now_utc + timedelta(seconds=_FOOTBALL_SLEEP_REFRESH_SEC)
-    matches = await api_provider.fetch_upcoming_football_schedule(bot.http_session, now_utc)
+    matches = await api_provider.fetch_upcoming_football_schedule(
+        bot.http_session,
+        now_utc,
+        horizon_hours=_football_scheduler_lookup_horizon_hours(),
+    )
     kickoff, wake = _next_scheduled_football_wake(matches, now_utc)
     next_ft_check = match_state.next_unresolved_expected_ft_utc(now_utc)
     next_check_candidates = [schedule_refresh]

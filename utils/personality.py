@@ -2,9 +2,6 @@
 
 import random
 
-# Bot identity
-BOT_NAME = "Marco Van Botten"
-
 # Ping greetings
 HELLO_MESSAGES = [
     "Did you know Internazionale is the third team of Milano, after Ac Milan and Milan Futuro?",

@@ -3,7 +3,7 @@ import logging
 from collections import defaultdict
 from datetime import timedelta
 from discord.ext import commands
-from config import LEAGUE_NAME_MAP, TENNIS_UPCOMING_DAYS
+from config import LEAGUE_NAME_MAP
 from modules import api_provider, football_memory, match_lifecycle
 from utils.time_utils import to_bot_tz, bot_now, utc_now
 from utils.event_formatter import (

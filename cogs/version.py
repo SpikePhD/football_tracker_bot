@@ -4,6 +4,7 @@ import logging
 import subprocess
 import pathlib
 from discord.ext import commands
+from config import BOT_NAME
 from modules.discord_poster import post_new_message_to_context
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ class VersionCommand(commands.Cog):
     async def version_cmd(self, ctx: commands.Context):
         info = get_version_info()
         msg = (
-            f"🤖 **Marco Van Botten**\n"
+            f"🤖 **{BOT_NAME}**\n"
             f"Commit: `{info['sha']}`\n"
             f"Last update: `{info['date']}`\n"
             f"Message: {info['message']}"

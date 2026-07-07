@@ -7,6 +7,7 @@ import discord
 from discord.ext import commands
 
 from config import (
+    BOT_NAME,
     LOG_EXPORT_DEFAULT_LINES,
     LOG_EXPORT_MAX_BYTES,
     LOG_EXPORT_MAX_LINES,
@@ -88,7 +89,7 @@ def _build_export(
     max_bytes: int,
 ) -> tuple[str, bool]:
     header = [
-        "Marco Van Botten Log Export",
+        f"{BOT_NAME} Log Export",
         f"generated_at={datetime.now().isoformat(timespec='seconds')}",
         f"mode={mode}",
         f"filter={value or '-'}",
@@ -97,7 +98,9 @@ def _build_export(
     output = "\n".join(header)
 
     truncated = False
-    for raw in lines:
+    max_lines = min(LOG_EXPORT_DEFAULT_LINES, LOG_EXPORT_MAX_LINES)
+    export_lines = lines[-max_lines:] if max_lines > 0 else []
+    for raw in export_lines:
         clean = _redact_line(raw.rstrip("\n"))
         candidate = f"{output}{clean}\n"
         if len(candidate.encode("utf-8")) > max_bytes:
