@@ -29,7 +29,9 @@ _DYNAMIC_OBJECT_PATHS = {
 _FIELD_DESCRIPTIONS = {
     "bot.name": "Display name used in bot messages and exports.",
     "discord.channel_id": "Only Discord channel in which bot commands and posts are accepted.",
-    "administration.owner_users": "Discord user IDs authorized for sensitive administration.",
+    "administration.owner_users": (
+        "Discord users authorized for sensitive administration. Add the numeric user ID and a descriptive label."
+    ),
     "operations.live_update_edit_window_messages": (
         "Number of recent channel messages searched before a fresh live update is posted."
     ),
@@ -396,6 +398,8 @@ def configuration_catalog(base_config: dict | None = None) -> list[dict]:
             editor = "tags"
         if path == "discord.channel_id":
             editor = "text"
+        elif path == "administration.owner_users":
+            editor = "owners"
         fields.append({
             "path": path,
             "category": category,

@@ -76,10 +76,35 @@ def _normalize_dashboard_config(config: dict) -> dict:
     value = deepcopy(config)
     try:
         value["discord"]["channel_id"] = int(value["discord"]["channel_id"])
-        for owner in value["administration"]["owner_users"]:
-            owner["id"] = int(owner["id"])
     except (KeyError, TypeError, ValueError) as exc:
-        raise ConfigurationError("Discord channel and owner IDs must be numeric IDs.") from exc
+        raise ConfigurationError("Discord channel ID must be a numeric ID.") from exc
+
+    try:
+        owners = value["administration"]["owner_users"]
+    except (KeyError, TypeError) as exc:
+        raise ConfigurationError("Discord owners must be a list.") from exc
+    if not isinstance(owners, list):
+        raise ConfigurationError("Discord owners must be a list.")
+
+    normalized_owners = []
+    for index, owner in enumerate(owners):
+        if isinstance(owner, dict):
+            raw_id = owner.get("id")
+            label = str(owner.get("label") or "").strip()
+        else:
+            raw_id = owner
+            label = ""
+        try:
+            owner_id = int(str(raw_id).strip())
+        except (TypeError, ValueError) as exc:
+            raise ConfigurationError(
+                f"Discord owner {index + 1} must have a numeric user ID."
+            ) from exc
+        normalized_owners.append({
+            "id": owner_id,
+            "label": label or f"Discord Owner {index + 1}",
+        })
+    value["administration"]["owner_users"] = normalized_owners
     return value
 
 

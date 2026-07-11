@@ -98,6 +98,17 @@ class DashboardConfigurationTests(unittest.TestCase):
         self.assertEqual(safe["administration"]["owner_users"][0]["id"], "987654321098765432")
         self.assertEqual(_normalize_dashboard_config(safe), value)
 
+    def test_dashboard_accepts_numeric_owner_shorthand(self):
+        from modules.dashboard_service import _normalize_dashboard_config
+
+        value = deepcopy(self.base)
+        value["administration"]["owner_users"] = [212898043475787776]
+        normalized = _normalize_dashboard_config(value)
+        self.assertEqual(normalized["administration"]["owner_users"], [{
+            "id": 212898043475787776,
+            "label": "Discord Owner 1",
+        }])
+
 
 class DashboardHealthPublicationTests(unittest.TestCase):
     def test_scheduler_health_snapshot_includes_runtime_mode(self):
