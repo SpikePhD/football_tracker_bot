@@ -90,8 +90,8 @@ The repository uses a layered configuration split:
 
 - `.env` - secrets only (`BOT_TOKEN`, `API_KEY`, `LLM_API_KEY`)
 - `config.json` - committed non-secret defaults
-- `config.local.json` - optional Git-ignored host overrides; future administration UI writes here
-- `.env.deploy` - deployment script variables (`SERVICE_NAME`, `GIT_BRANCH`)
+- `config.local.json` - optional Git-ignored host overrides written by the dashboard
+- `.env.deploy` - deployment and dashboard process settings
 
 Objects in `config.local.json` are deep-merged over defaults; arrays and scalar values replace their defaults. All settings are validated before startup or an atomic local save, and changes require a service restart. Existing deployments may temporarily keep `CHANNEL_ID` in `.env` until a local `discord.channel_id` override is saved.
 
@@ -117,6 +117,32 @@ Important `config.json` sections:
 - `memory` - football memory freshness and ESPN cache settings
 - `llm` - non-secret assistant endpoint, model, and persona prompt
 - `search` - trusted domains for football web search
+
+## Configuration Dashboard
+
+The dashboard is a separate `aiohttp` process, so a dashboard failure or restart does not stop match tracking. It provides guided configuration, advanced JSON editing, masked secret replacement, Discord-owner and dashboard-account administration, runtime mode and morning-schedule controls, service health, sanitized logs, restart/update actions, and a redacted audit history.
+
+For an existing Raspberry Pi installation, first update the bot normally, then run once over SSH:
+
+```bash
+cd ~/football_tracker_bot
+bash install_dashboard.sh
+```
+
+Open `http://192.168.8.150:8765` (using the Pi's actual address if different) and sign in with lowercase `admin` / `admin`. This requested bootstrap password remains usable until changed and therefore produces a persistent critical warning. New passwords must contain at least 10 characters.
+
+The default listener is `0.0.0.0:8765`. Plain HTTP is for a trusted LAN or VPN only. Do not expose the port directly to the public internet; place it behind an HTTPS reverse proxy first. Dashboard accounts are deliberately separate from Discord owner IDs.
+
+The relevant `.env.deploy` settings are:
+
+```text
+DASHBOARD_HOST=0.0.0.0
+DASHBOARD_PORT=8765
+DASHBOARD_SERVICE_NAME=marco_van_botten_dashboard
+UPDATE_SERVICE_NAME=marco_van_botten_update
+```
+
+On a non-systemd host, run `.venv/bin/python dashboard.py` (or the equivalent virtual-environment Python). Configuration, authentication, logs, and runtime-file controls work normally; restart and managed-update controls report that they are unavailable.
 
 Key `operations` timezone/display/lifecycle settings:
 

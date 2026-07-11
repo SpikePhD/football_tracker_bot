@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Marco Van Botten · Control Room</title>
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <main id="login-view" class="login-shell">
+    <section class="login-card">
+      <div class="crest">MVB</div>
+      <p class="eyebrow">Matchday control room</p>
+      <h1>Marco Van Botten</h1>
+      <p class="muted">Football and tennis administration</p>
+      <form id="login-form">
+        <label>Username<input name="username" value="admin" autocomplete="username" required></label>
+        <label>Password<input name="password" type="password" value="admin" autocomplete="current-password" required></label>
+        <button type="submit" class="primary">Enter dashboard</button>
+        <p id="login-error" class="form-error" role="alert"></p>
+      </form>
+    </section>
+  </main>
+
+  <div id="app-view" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="crest small">MVB</span><div><strong>Marco Van Botten</strong><span>Control room</span></div></div>
+      <nav id="nav">
+        <button data-page="overview" class="active">Overview</button>
+        <button data-page="bot">Bot & Discord</button>
+        <button data-page="administration">Discord Owners</button>
+        <button data-page="tracking">Football & Tennis</button>
+        <button data-page="operations">Notifications & Polling</button>
+        <button data-page="llm">Assistant & Search</button>
+        <button data-page="log">Logging & Memory</button>
+        <button data-page="secrets">Secrets</button>
+        <button data-page="admins">Dashboard Admins</button>
+        <button data-page="service">Operations & Logs</button>
+        <button data-page="advanced">Advanced JSON</button>
+        <button data-page="audit">Audit History</button>
+      </nav>
+      <button id="logout" class="ghost">Sign out</button>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button id="menu-toggle" class="menu-button" aria-label="Open navigation">☰</button>
+        <div><p class="eyebrow">Administration</p><h2 id="page-title">Overview</h2></div>
+        <div class="top-actions"><span id="dirty-badge" class="badge hidden">Unsaved</span><button id="save" class="secondary">Save</button><button id="save-restart" class="primary">Save & Restart</button></div>
+      </header>
+      <div id="warnings" class="warning-stack"></div>
+      <div id="toast" class="toast hidden" role="status"></div>
+
+      <section id="page-overview" class="page active">
+        <div class="hero"><div><p class="eyebrow">Matchday systems</p><h1 id="welcome">Good evening</h1><p>Everything the bot needs, in one place.</p></div><div id="overall-status" class="status-orb">…</div></div>
+        <div id="status-cards" class="card-grid"></div>
+        <div class="panel"><div class="panel-head"><div><p class="eyebrow">Runtime controls</p><h3>Broadcast and morning message</h3></div></div><div id="runtime-controls" class="runtime-grid"></div></div>
+      </section>
+
+      <section id="page-config" class="page">
+        <div class="page-intro"><h1 id="config-title"></h1><p>Changes are checked before they are written. Source badges show what this host overrides.</p></div>
+        <div id="config-fields" class="field-grid"></div>
+      </section>
+
+      <section id="page-secrets" class="page"><div class="page-intro"><h1>Secrets</h1><p>Stored values are never shown. Replacing a secret is a separate, confirmed action and requires a bot restart.</p></div><div id="secret-list" class="card-grid"></div></section>
+      <section id="page-admins" class="page"><div class="page-intro"><h1>Dashboard Administrators</h1><p>These accounts control this website. They are separate from Discord bot owners.</p></div><div class="panel"><form id="add-admin" class="inline-form"><input name="username" placeholder="New username" required><input name="password" type="password" placeholder="Password (10+ characters)" required><button class="primary">Add administrator</button></form><div id="admin-list"></div></div></section>
+      <section id="page-service" class="page"><div class="page-intro"><h1>Operations & Logs</h1><p>Inspect the bot without exposing raw secrets, restart it, or start a managed update.</p></div><div class="panel operations"><button id="restart-bot" class="danger">Restart bot</button><button id="update-bot" class="primary">Update bot and dashboard</button><select id="log-mode"><option value="recent">Recent</option><option value="errors">Errors only</option><option value="module">Module</option></select><input id="log-module" placeholder="modules.api_provider"><button id="refresh-logs" class="secondary">Refresh logs</button></div><pre id="log-output" class="log-output">Loading…</pre></section>
+      <section id="page-advanced" class="page"><div class="page-intro"><h1>Advanced JSON</h1><p>This is the same unsaved draft used by the guided forms. Invalid JSON cannot be saved.</p></div><textarea id="json-editor" class="json-editor" spellcheck="false"></textarea><p id="json-error" class="form-error"></p></section>
+      <section id="page-audit" class="page"><div class="page-intro"><h1>Audit History</h1><p>Administrative actions are recorded without passwords, tokens, or secret values.</p></div><div id="audit-list" class="audit-list"></div></section>
+    </div>
+  </div>
+
+  <dialog id="confirm-dialog"><form method="dialog"><p class="eyebrow">Confirm changes</p><h3 id="confirm-title">Save configuration?</h3><div id="change-list" class="change-list"></div><div class="dialog-actions"><button value="cancel" class="ghost">Cancel</button><button value="confirm" class="primary">Confirm</button></div></form></dialog>
+  <script src="/static/dashboard.js" defer></script>
+</body>
+</html>

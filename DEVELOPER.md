@@ -154,6 +154,15 @@ Configuration service:
 3. Use `write_local_overrides(...)` and secret helpers for future UI writes. They validate before atomic replacement and never return full secrets.
 4. `config.py` remains the import-compatible constants facade. Runtime hot reload is intentionally unsupported.
 
+Dashboard architecture:
+
+1. `dashboard.py` runs independently from the Discord bot and serves local assets from `dashboard_static/`.
+2. `modules/dashboard_service.py` owns authenticated HTTP routes; every mutation requires CSRF and is audited.
+3. Dashboard passwords and sessions live in `modules/dashboard_auth.py`; never merge dashboard accounts with Discord owners.
+4. Configuration writes must continue through `modules.configuration.save_complete_config(...)` with revision checking.
+5. Secrets use the existing masked status and individual atomic replacement helpers only.
+6. Process actions go through the exact systemd adapter in `modules/dashboard_process.py`; do not accept service or shell commands from requests.
+
 Add runtime state:
 
 1. Use `modules/storage.py`.

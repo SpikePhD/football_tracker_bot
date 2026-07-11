@@ -546,5 +546,19 @@ async def run_operations_loop(bot) -> None:
                     wake_reason_detail=str(e),
                 )
 
+        try:
+            from cogs.version import get_version_info
+            from modules.dashboard_health import write_bot_health
+
+            write_bot_health(
+                commit=get_version_info(),
+                provider=api_provider.get_status(),
+                football_scheduler=get_football_scheduler_status(),
+                tennis_scheduler=get_tennis_scheduler_status(),
+                mode=get_mode(),
+            )
+        except Exception as exc:
+            logger.warning("Could not update dashboard health snapshot: %s", exc)
+
         next_due = min(next_daily_check, next_football_check, next_tennis_check)
         await asyncio.sleep(max(1, (next_due - utc_now()).total_seconds()))

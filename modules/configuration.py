@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 from copy import deepcopy
@@ -32,6 +33,33 @@ _FIELD_DESCRIPTIONS = {
     "operations.live_update_edit_window_messages": (
         "Number of recent channel messages searched before a fresh live update is posted."
     ),
+}
+
+_SECTION_LABELS = {
+    "bot": "Bot and Discord",
+    "discord": "Bot and Discord",
+    "administration": "Discord Owners",
+    "tracking": "Football and Tennis Tracking",
+    "operations": "Provider and Polling",
+    "log": "Logging and Memory",
+    "memory": "Logging and Memory",
+    "llm": "Assistant and Search",
+    "search": "Assistant and Search",
+}
+
+_FIELD_BOUNDS = {
+    "discord.channel_id": {"minimum": 1},
+    "operations.football_prematch_window_hours": {"minimum": 0},
+    "operations.football_display_lookup_window_hours": {"minimum": 1},
+    "operations.football_finished_retention_hours": {"minimum": 1},
+    "operations.football_state_retention_hours": {"minimum": 1},
+    "operations.football_expected_ft_minutes": {"minimum": 1},
+    "operations.football_max_live_duration_hours": {"minimum": 1},
+    "operations.tennis_cache_ttl_sec": {"minimum": 1},
+    "operations.tennis_upcoming_days": {"minimum": 1},
+    "operations.tennis_pre_announce_hours": {"minimum": 0},
+    "operations.tennis_finished_retention_hours": {"minimum": 1},
+    "operations.live_update_edit_window_messages": {"minimum": 1},
 }
 
 
@@ -73,6 +101,35 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             merged[key] = deepcopy(value)
     return merged
+
+
+def _minimal_override(base: Any, value: Any) -> Any:
+    """Return only values that differ from defaults, or None when identical."""
+    if isinstance(base, dict) and isinstance(value, dict):
+        result = {}
+        for key in base:
+            child = _minimal_override(base[key], value[key])
+            if child is not None:
+                result[key] = child
+        return result or None
+    return None if base == value else deepcopy(value)
+
+
+def _field_sources(base: Any, local: Any, path: str = "") -> dict[str, str]:
+    result: dict[str, str] = {}
+    if isinstance(base, dict) and path not in _DYNAMIC_OBJECT_PATHS:
+        local_dict = local if isinstance(local, dict) else {}
+        for key, child in base.items():
+            scope = f"{path}.{key}" if path else key
+            result.update(_field_sources(child, local_dict.get(key), scope))
+        return result
+    result[path] = "local" if local is not None else "default"
+    return result
+
+
+def configuration_revision(config: dict | None = None) -> str:
+    payload = json.dumps(config or load_effective_config(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _required(cfg: dict, key: str, expected_type, path: str):
@@ -293,6 +350,29 @@ def write_local_overrides(
     save_json_path(local_path, overrides, ensure_ascii=False)
 
 
+def save_complete_config(
+    config: dict,
+    *,
+    expected_revision: str | None = None,
+    default_path: Path = DEFAULT_CONFIG_PATH,
+    local_path: Path = LOCAL_CONFIG_PATH,
+) -> dict:
+    """Validate and save a complete draft as the smallest local override."""
+    current = load_effective_config(default_path, local_path)
+    current_revision = configuration_revision(current)
+    if expected_revision is not None and expected_revision != current_revision:
+        raise ConfigurationError("Configuration changed since it was loaded.")
+    validated = validate_config(config)
+    base = _read_json_object(default_path, required=True)
+    overrides = _minimal_override(base, validated) or {}
+    write_local_overrides(overrides, default_path, local_path)
+    return {
+        "config": validated,
+        "overrides": overrides,
+        "revision": configuration_revision(validated),
+    }
+
+
 def configuration_catalog(base_config: dict | None = None) -> list[dict]:
     """Return non-secret field metadata for the future configuration interface."""
     cfg = base_config or _read_json_object(DEFAULT_CONFIG_PATH, required=True)
@@ -304,15 +384,30 @@ def configuration_catalog(base_config: dict | None = None) -> list[dict]:
                 walk(child, f"{path}.{key}" if path else key)
             return
         value_type = "array" if isinstance(value, list) else "object" if isinstance(value, dict) else type(value).__name__
+        category = path.split(".", 1)[0]
+        editor = "json"
+        if isinstance(value, bool):
+            editor = "toggle"
+        elif isinstance(value, int):
+            editor = "number"
+        elif isinstance(value, str):
+            editor = "textarea" if len(value) > 120 else "text"
+        elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+            editor = "tags"
+        if path == "discord.channel_id":
+            editor = "text"
         fields.append({
             "path": path,
-            "category": path.split(".", 1)[0],
+            "category": category,
+            "section": _SECTION_LABELS.get(category, category.title()),
             "label": path.rsplit(".", 1)[-1].replace("_", " ").title(),
             "description": _FIELD_DESCRIPTIONS.get(
                 path,
                 f"Restart-required configuration value for {path}.",
             ),
             "value_type": value_type,
+            "editor": editor,
+            **_FIELD_BOUNDS.get(path, {}),
             "secret": False,
             "restart_required": True,
         })
@@ -322,9 +417,11 @@ def configuration_catalog(base_config: dict | None = None) -> list[dict]:
         fields.append({
             "path": f"secrets.{name}",
             "category": "secrets",
+            "section": "Secrets",
             "label": name.replace("_", " ").title(),
             "description": "Secret environment value; the stored value is never returned.",
             "value_type": "secret",
+            "editor": "secret",
             "secret": True,
             "restart_required": True,
         })
@@ -366,9 +463,19 @@ def replace_secret(name: str, value: str, env_path: Path = ENV_PATH) -> None:
 
 def configuration_snapshot() -> dict:
     """Return the effective non-secret config plus masked secret status."""
+    defaults = _read_json_object(DEFAULT_CONFIG_PATH, required=True)
+    local = _read_json_object(LOCAL_CONFIG_PATH, required=False)
+    effective = load_effective_config()
+    sources = _field_sources(defaults, local)
+    if (local.get("discord") or {}).get("channel_id") is None and os.getenv("CHANNEL_ID", "").strip():
+        sources["discord.channel_id"] = "legacy_environment"
     return {
-        "config": load_effective_config(),
-        "fields": configuration_catalog(),
+        "config": effective,
+        "defaults": defaults,
+        "overrides": local,
+        "sources": sources,
+        "revision": configuration_revision(effective),
+        "fields": configuration_catalog(defaults),
         "secrets": secret_status(),
         "restart_required": True,
     }

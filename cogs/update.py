@@ -8,6 +8,7 @@ from discord.ext import commands
 from modules.discord_poster import post_new_message_to_context
 from modules.admin import owner_only
 from utils.redaction import redact_text
+from modules.dashboard_process import ProcessController
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,13 @@ class UpdateCog(commands.Cog):
         async with self._update_lock:
             process = None
             try:
+                managed = await ProcessController().start_update()
+                if managed.get("ok"):
+                    await post_new_message_to_context(
+                        ctx,
+                        content="Managed update started. The bot and dashboard will restart when it completes.",
+                    )
+                    return
                 process = await asyncio.create_subprocess_exec(
                     "bash",
                     "update.sh",

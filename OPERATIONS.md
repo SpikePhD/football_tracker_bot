@@ -128,6 +128,38 @@ Discord-triggered update:
 
 `!update` (alias `!pull`) runs `bash update.sh` from inside the bot process. It is owner-only and may restart the service immediately.
 
+When the dashboard integration is installed, `!update` and the dashboard use the separate managed update service. That service runs canonical `update.sh` outside both application services and then restarts the bot and dashboard. Direct in-process updating remains only as a migration fallback when the managed service is unavailable.
+
+## 4a. Dashboard Service
+
+Install once after pulling a dashboard-capable release:
+
+```bash
+cd ~/football_tracker_bot
+bash install_dashboard.sh
+```
+
+Default services and access:
+
+```text
+marco_van_botten_dashboard.service
+marco_van_botten_update.service
+http://<pi-address>:8765
+admin / admin
+```
+
+Useful checks:
+
+```bash
+sudo systemctl status marco_van_botten_dashboard --no-pager -l
+journalctl -u marco_van_botten_dashboard -n 100 --no-pager
+sudo systemctl restart marco_van_botten_dashboard
+```
+
+The default credentials intentionally remain active until manually changed, with a persistent warning. Dashboard administrators are stored as salted scrypt hashes in `bot_memory/dashboard_users.json`. Sessions are memory-only, so a dashboard restart signs users out. Administrative actions are written without secrets to the rotating `bot_memory/logs/dashboard_audit.jsonl`.
+
+Use dashboard HTTP only on a trusted LAN/VPN. Public internet access requires an HTTPS reverse proxy; do not forward port 8765 directly from the router.
+
 ## 5. Configuration And State
 
 - `.env` - secrets only

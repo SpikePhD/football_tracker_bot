@@ -14,7 +14,7 @@ from modules.discord_poster import post_new_general_message, post_new_message_to
 from modules.admin import is_operator
 from modules.ft_handler import seed_already_announced_ft
 from modules.live_loop import seed_already_posted
-from modules.storage import load, save
+from modules.runtime_settings import get_morning_schedule, set_morning_schedule
 from utils.personality import get_greeting
 from utils.time_utils import bot_now
 
@@ -30,11 +30,16 @@ _DEFAULTS = {
 
 
 def _load() -> dict:
-    return load(_STORAGE_FILE, _DEFAULTS)
+    return get_morning_schedule()
 
 
 def _save(cfg: dict) -> None:
-    save(_STORAGE_FILE, cfg)
+    set_morning_schedule(
+        enabled=cfg["enabled"],
+        hour=cfg["hour"],
+        minute=cfg["minute"],
+        timezone=cfg.get("timezone") or OPERATIONS_TIMEZONE,
+    )
 
 
 def _parse_time(time_str: str) -> tuple[int, int]:

@@ -74,7 +74,11 @@ fi
 
 echo ""
 echo "🔄 Restarting bot service ($SERVICE_NAME)..."
-sudo systemctl restart "$SERVICE_NAME"
+if [ "${SKIP_SERVICE_RESTART:-0}" = "1" ]; then
+    echo "Managed updater will restart application services."
+else
+    sudo systemctl restart "$SERVICE_NAME"
+fi
 
 echo ""
 echo "✅ Update complete."
