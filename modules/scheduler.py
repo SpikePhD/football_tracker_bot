@@ -18,6 +18,7 @@ from modules.match_state import expected_ft_due_fixture_ids, prune_match_trackin
 from modules import match_state, tennis_loop
 from modules.football_memory import update_standings_only, update_team_info_only
 from utils.time_utils import to_bot_tz, utc_now
+from utils.tennis_lifecycle import tennis_final_within_retention
 
 logger = logging.getLogger(__name__)
 
@@ -283,13 +284,6 @@ def _tennis_start_utc(match: dict) -> datetime | None:
         return None
 
 
-def _tennis_started_local_today(match: dict, now_utc: datetime) -> bool:
-    start = _tennis_start_utc(match)
-    if start is None:
-        return False
-    return to_bot_tz(start).date() == to_bot_tz(now_utc).date()
-
-
 def _next_scheduled_tennis_wake(matches: list[dict], now_utc: datetime) -> tuple[datetime, datetime] | tuple[None, None]:
     now_utc = now_utc.astimezone(timezone.utc)
     candidates = []
@@ -459,7 +453,10 @@ async def _tennis_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]
                 return True, "tennis_live", _tennis_poll_reason_detail(match)
             continue
         if status == "FT":
-            if track_id not in tennis_loop.final_announced_ids and _tennis_started_local_today(match, now_utc):
+            if (
+                track_id not in tennis_loop.final_announced_ids
+                and tennis_final_within_retention(match, now_utc)
+            ):
                 return True, "tennis_ft_due", _tennis_poll_reason_detail(match)
             continue
         if status == "NS":

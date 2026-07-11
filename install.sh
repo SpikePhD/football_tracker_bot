@@ -186,6 +186,13 @@ else
     ok "bot_memory/goodmorning.json created"
 fi
 
+if [ -f "$BOT_DIR/bot_memory/tennis_state.json" ]; then
+    ok "bot_memory/tennis_state.json already exists - keeping existing state"
+else
+    echo '{"version": 2, "matches": {}}' > "$BOT_DIR/bot_memory/tennis_state.json"
+    ok "bot_memory/tennis_state.json created"
+fi
+
 section "Step 5: Systemd service"
 
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"

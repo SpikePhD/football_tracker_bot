@@ -147,6 +147,12 @@ DOMESTIC_SLUG_GROUPS = _expect(tracking_cfg, "domestic_slug_groups", dict, "trac
 TENNIS_CACHE_TTL_SEC = int(_expect(ops_cfg, "tennis_cache_ttl_sec", int, "operations"))
 TENNIS_UPCOMING_DAYS = int(_expect(ops_cfg, "tennis_upcoming_days", int, "operations"))
 TENNIS_PRE_ANNOUNCE_HOURS = int(_expect(ops_cfg, "tennis_pre_announce_hours", int, "operations"))
+TENNIS_FINISHED_RETENTION_HOURS = _expect_int_range(
+    ops_cfg,
+    "tennis_finished_retention_hours",
+    1,
+    "operations",
+)
 LIVE_UPDATE_EDIT_WINDOW_MESSAGES = int(
     _expect(ops_cfg, "live_update_edit_window_messages", int, "operations")
 )

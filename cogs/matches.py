@@ -85,24 +85,19 @@ def _apply_persisted_ft_events(fixtures: list) -> list:
 
 
 def filter_football_for_local_matchday(fixtures: list, now_utc) -> list:
-    """Public daily football snapshot: local today plus active/recent carry-over."""
+    """Public daily snapshot: local-today fixtures plus active live carry-over."""
     local_today = to_bot_tz(now_utc).date()
     filtered = []
     for match in fixtures:
+        # A fixture that crossed local midnight still belongs in the public
+        # snapshot while the bot is actively tracking it. Once terminal, an
+        # earlier-local-day fixture remains lifecycle data, not daily display data.
         if match_lifecycle.is_live(match):
             filtered.append(match)
             continue
 
         local_date = _football_local_date(match)
         if local_date == local_today:
-            filtered.append(match)
-            continue
-
-        if (
-            local_date is not None
-            and local_date < local_today
-            and match_lifecycle.is_recently_finished(match, now_utc)
-        ):
             filtered.append(match)
 
     return sorted(filtered, key=_football_sort_key)

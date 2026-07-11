@@ -51,6 +51,29 @@ class MatchesDisplayTests(unittest.TestCase):
         self.assertIn("LIVE [74']", content)
         self.assertIn("Home late-live", content)
 
+    def test_yesterday_kickoff_recent_ft_is_excluded_from_daily_snapshot(self):
+        from cogs import matches
+
+        now_utc = datetime(2026, 6, 9, 22, 15, tzinfo=timezone.utc)  # 2026-06-10 00:15 Europe/Rome
+        finished = _fixture("late-ft", "2026-06-09T21:30:00Z", status="FT")
+
+        filtered = matches.filter_football_for_local_matchday([finished], now_utc)
+
+        self.assertEqual(filtered, [])
+
+    def test_today_kickoff_ft_remains_in_daily_snapshot(self):
+        from cogs import matches
+
+        now_utc = datetime(2026, 6, 10, 10, 0, tzinfo=timezone.utc)
+        finished = _fixture("today-ft", "2026-06-10T08:00:00Z", status="FT")
+        finished["goals"] = {"home": 0, "away": 0}
+
+        filtered = matches.filter_football_for_local_matchday([finished], now_utc)
+        content = matches.build_football_section(filtered)
+
+        self.assertEqual([m["fixture"]["id"] for m in filtered], ["today-ft"])
+        self.assertIn("FT: Home today-ft 0-0 Away today-ft", content)
+
     def test_empty_daily_football_message_says_today(self):
         from cogs import matches
 

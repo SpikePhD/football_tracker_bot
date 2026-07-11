@@ -160,6 +160,47 @@ class ClientsAndFormattersTests(unittest.TestCase):
         self.assertEqual(match["events"][1]["type"], "PenaltyShootout")
         self.assertEqual(match["events"][1]["detail"], "Scored")
 
+    def test_espn_tennis_normalization_preserves_retirement_status(self):
+        from utils import espn_tennis_client
+        from utils.tennis_lifecycle import tennis_final_data_ready, tennis_final_result_reason
+
+        match = espn_tennis_client._competition_to_match(
+            {"id": "event-1", "name": "Test Open"},
+            {
+                "id": "competition-1",
+                "date": "2026-06-12T08:00:00Z",
+                "status": {
+                    "type": {
+                        "state": "post",
+                        "name": "STATUS_RET",
+                        "detail": "Retired",
+                        "shortDetail": "Ret.",
+                        "completed": True,
+                    }
+                },
+                "competitors": [
+                    {
+                        "winner": True,
+                        "athlete": {"displayName": "Jannik Sinner"},
+                        "linescores": [{"value": 6}, {"value": 2}],
+                    },
+                    {
+                        "winner": False,
+                        "athlete": {"displayName": "Opponent"},
+                        "linescores": [{"value": 4}, {"value": 1}],
+                    },
+                ],
+            },
+            "atp",
+        )
+
+        self.assertEqual(match["status"]["short"], "FT")
+        self.assertEqual(match["status"]["name"], "STATUS_RET")
+        self.assertEqual(match["status"]["short_detail"], "Ret.")
+        self.assertTrue(match["status"]["completed"])
+        self.assertEqual(tennis_final_result_reason(match), "Retirement")
+        self.assertTrue(tennis_final_data_ready(match))
+
     def test_shootout_formatter_separates_match_goals_penalty_score_and_takers(self):
         from utils.event_formatter import (
             event_completeness_note,

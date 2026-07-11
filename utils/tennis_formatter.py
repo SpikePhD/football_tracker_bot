@@ -1,5 +1,6 @@
 ﻿# utils/tennis_formatter.py
 from utils.time_utils import to_bot_tz
+from utils.tennis_lifecycle import tennis_final_result_reason
 
 
 def _format_sets(sets: list[dict]) -> str:
@@ -56,11 +57,14 @@ def format_tennis_live_message(match: dict) -> str:
 def format_tennis_final_message(match: dict) -> str:
     sets_str = _format_sets(match.get("sets") or [])
     winner = match.get("winner") or "Winner not available"
+    result_reason = tennis_final_result_reason(match)
     msg = (
         f"Tennis FT: {match.get('player_a')} vs {match.get('player_b')} "
         f"({match.get('event_name')} - {match.get('tour')})\n"
         f"Winner: {winner}"
     )
+    if result_reason:
+        msg += f"\nResult: {result_reason}"
     if sets_str:
         msg += f"\nFinal sets: {sets_str}"
     return msg
@@ -84,6 +88,9 @@ def format_tennis_snapshot_line(match: dict) -> str:
     elif status_short == "FT":
         winner = match.get("winner") or "Winner not available"
         line = f"- FT: {player_a} vs {player_b} - Winner: {winner}"
+        result_reason = tennis_final_result_reason(match)
+        if result_reason:
+            line += f" - Result: {result_reason}"
         if sets_str:
             line += f" - Final sets: {sets_str}"
     else:

@@ -15,10 +15,16 @@ def tennis_match(
     match_id="tennis-1",
     canonical_id=None,
     status="NS",
-    start_time="2026-06-12T12:00:00+00:00",
+    start_time=None,
     sets=None,
     winner=None,
 ):
+    if start_time is None:
+        start_time = (
+            "2026-06-12T08:00:00+00:00"
+            if status == "FT"
+            else "2026-06-12T12:00:00+00:00"
+        )
     if sets is None:
         sets = [{"a": 6, "b": 4}] if status in ("LIVE", "FT") else []
     if winner is None and status == "FT":
@@ -48,8 +54,8 @@ class TennisLoopTests(unittest.TestCase):
         tennis_loop.final_announced_ids.clear()
         tennis_loop.live_message_ids.clear()
         tennis_loop.live_state_keys.clear()
+        tennis_loop.tennis_match_records.clear()
         tennis_loop._state_loaded = False
-        tennis_loop._last_reset_date = None
         self.now = to_bot_tz("2026-06-12T10:00:00+00:00")
 
     def test_ns_match_inside_start_watch_window_prepares_without_posting(self):
@@ -77,7 +83,10 @@ class TennisLoopTests(unittest.TestCase):
         self.assertIn("canonical-tennis-1", tennis_loop.start_watch_prepared_ids)
         self.assertTrue(save_state.called)
         saved_state = save_state.call_args.args[1]
-        self.assertIn("start_watch_prepared_ids", saved_state)
+        self.assertEqual(saved_state["version"], 2)
+        self.assertTrue(
+            saved_state["matches"]["canonical-tennis-1"]["start_watch_prepared"]
+        )
         self.assertNotIn("pre_announced_ids", saved_state)
 
     def test_ns_match_outside_start_watch_window_does_not_post(self):
@@ -206,7 +215,40 @@ class TennisLoopTests(unittest.TestCase):
 
         post_msg.assert_not_awaited()
         self.assertIn("legacy-1", tennis_loop.start_watch_prepared_ids)
-        self.assertFalse(save_state.called)
+        self.assertTrue(save_state.called)
+        migrated = save_state.call_args.args[1]
+        self.assertEqual(migrated["version"], 2)
+        self.assertTrue(migrated["matches"]["legacy-1"]["start_watch_prepared"])
+
+    def test_legacy_final_state_migrates_without_reposting(self):
+        from modules import api_provider, tennis_loop
+
+        ft = tennis_match(match_id="legacy-ft", status="FT")
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(
+                    tennis_loop,
+                    "load",
+                    Mock(return_value={
+                        "pre_announced_ids": [],
+                        "final_announced_ids": ["legacy-ft"],
+                        "last_reset_date": "2026-06-12",
+                    }),
+                ),
+                patch.object(tennis_loop, "save", Mock()) as save_state,
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg, save_state
+
+        post_msg, save_state = asyncio.run(run())
+        post_msg.assert_not_awaited()
+        self.assertIn("legacy-ft", tennis_loop.final_announced_ids)
+        self.assertTrue(save_state.call_args.args[1]["matches"]["legacy-ft"]["final_announced"])
 
     def test_live_and_ft_behavior_stays_unchanged(self):
         from modules import api_provider, tennis_loop
@@ -237,6 +279,91 @@ class TennisLoopTests(unittest.TestCase):
         self.assertIn("Tennis FT", post_msg.await_args.kwargs["content"])
         self.assertIn("ft-1", tennis_loop.final_announced_ids)
         self.assertTrue(save_state.called)
+
+    def test_live_message_id_survives_restart_and_is_reused(self):
+        from modules import api_provider, tennis_loop
+
+        live = tennis_match(match_id="live-restart", status="LIVE")
+        fake_bot = SimpleNamespace(http_session=None)
+        saved_states = []
+
+        async def first_run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(
+                    tennis_loop,
+                    "save",
+                    Mock(side_effect=lambda _name, state: saved_states.append(state)),
+                ),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[live])),
+                patch.object(
+                    tennis_loop,
+                    "upsert_live_message",
+                    AsyncMock(return_value=SimpleNamespace(id=700)),
+                ),
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+
+        asyncio.run(first_run())
+        persisted = saved_states[-1]
+        self.assertEqual(persisted["matches"]["live-restart"]["live_message_id"], 700)
+
+        tennis_loop.start_watch_prepared_ids.clear()
+        tennis_loop.final_announced_ids.clear()
+        tennis_loop.live_message_ids.clear()
+        tennis_loop.live_state_keys.clear()
+        tennis_loop.tennis_match_records.clear()
+        tennis_loop._state_loaded = False
+
+        async def restarted_run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=persisted)),
+                patch.object(tennis_loop, "save", Mock()),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[live])),
+                patch.object(
+                    tennis_loop,
+                    "upsert_live_message",
+                    AsyncMock(return_value=SimpleNamespace(id=700)),
+                ) as upsert_live,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return upsert_live
+
+        upsert_live = asyncio.run(restarted_run())
+        self.assertEqual(upsert_live.await_args.kwargs["message_id"], 700)
+
+    def test_final_dedup_survives_version_two_restart(self):
+        from modules import api_provider, tennis_loop
+
+        ft = tennis_match(match_id="ft-restart", status="FT")
+        state = {
+            "version": 2,
+            "matches": {
+                "ft-restart": {
+                    "start_watch_prepared": True,
+                    "final_announced": True,
+                    "live_message_id": None,
+                }
+            },
+        }
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=state)),
+                patch.object(tennis_loop, "save", Mock()),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg
+
+        post_msg = asyncio.run(run())
+        post_msg.assert_not_awaited()
+        self.assertIn("ft-restart", tennis_loop.final_announced_ids)
 
     def test_incomplete_ft_without_winner_does_not_post_or_mark_final(self):
         from modules import api_provider, tennis_loop
@@ -294,6 +421,162 @@ class TennisLoopTests(unittest.TestCase):
         self.assertIn("Winner: Player A", post_msg.await_args.kwargs["content"])
         self.assertIn("Final sets: 3-6 | 6-4 | 6-3", post_msg.await_args.kwargs["content"])
         self.assertIn("ft-complete", tennis_loop.final_announced_ids)
+
+    def test_failed_ft_send_remains_pending_and_retries(self):
+        from modules import api_provider, tennis_loop
+
+        ft = tennis_match(match_id="ft-send-retry", status="FT")
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(tennis_loop, "save", Mock()) as save_state,
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(
+                    tennis_loop,
+                    "post_new_general_message",
+                    AsyncMock(return_value=None),
+                ) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg, save_state
+
+        post_msg, save_state = asyncio.run(run())
+
+        self.assertEqual(post_msg.await_count, 2)
+        self.assertNotIn("ft-send-retry", tennis_loop.final_announced_ids)
+        self.assertFalse(save_state.called)
+
+    def test_cross_midnight_ft_inside_retention_posts(self):
+        from modules import api_provider, tennis_loop
+        from utils.time_utils import to_bot_tz
+
+        now = to_bot_tz("2026-06-12T23:30:00+00:00")  # 01:30 next local day
+        ft = tennis_match(
+            match_id="ft-cross-midnight",
+            status="FT",
+            start_time="2026-06-12T21:30:00+00:00",  # 23:30 previous local day
+        )
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(tennis_loop, "save", Mock()),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(
+                    tennis_loop,
+                    "post_new_general_message",
+                    AsyncMock(return_value=SimpleNamespace(id=503)),
+                ) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg
+
+        post_msg = asyncio.run(run())
+
+        post_msg.assert_awaited_once()
+        self.assertIn("ft-cross-midnight", tennis_loop.final_announced_ids)
+
+    def test_stale_ft_outside_retention_does_not_post(self):
+        from modules import api_provider, tennis_loop
+        from utils.time_utils import to_bot_tz
+
+        now = to_bot_tz("2026-06-13T12:01:00+00:00")
+        ft = tennis_match(
+            match_id="ft-stale",
+            status="FT",
+            start_time="2026-06-12T12:00:00+00:00",
+        )
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(tennis_loop, "save", Mock()) as save_state,
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(tennis_loop, "post_new_general_message", AsyncMock()) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg, save_state
+
+        post_msg, save_state = asyncio.run(run())
+
+        post_msg.assert_not_awaited()
+        self.assertNotIn("ft-stale", tennis_loop.final_announced_ids)
+        self.assertFalse(save_state.called)
+
+    def test_retirement_with_incomplete_last_set_posts_terminal_reason(self):
+        from modules import api_provider, tennis_loop
+
+        ft = tennis_match(
+            match_id="ft-retirement",
+            status="FT",
+            sets=[{"a": 6, "b": 4}, {"a": 2, "b": 1}],
+            winner="Player A",
+        )
+        ft["status"]["detail"] = "Retired"
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(tennis_loop, "save", Mock()),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(
+                    tennis_loop,
+                    "post_new_general_message",
+                    AsyncMock(return_value=SimpleNamespace(id=504)),
+                ) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg
+
+        post_msg = asyncio.run(run())
+
+        post_msg.assert_awaited_once()
+        self.assertIn("Result: Retirement", post_msg.await_args.kwargs["content"])
+        self.assertIn("ft-retirement", tennis_loop.final_announced_ids)
+
+    def test_walkover_without_sets_posts_terminal_reason(self):
+        from modules import api_provider, tennis_loop
+
+        ft = tennis_match(
+            match_id="ft-walkover",
+            status="FT",
+            sets=[],
+            winner="Player A",
+        )
+        ft["status"]["description"] = "Won by Walkover"
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "bot_now", return_value=self.now),
+                patch.object(tennis_loop, "load", Mock(return_value=tennis_loop._TENNIS_STATE_DEFAULT.copy())),
+                patch.object(tennis_loop, "save", Mock()),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+                patch.object(
+                    tennis_loop,
+                    "post_new_general_message",
+                    AsyncMock(return_value=SimpleNamespace(id=505)),
+                ) as post_msg,
+            ):
+                await tennis_loop.run_tennis_loop(fake_bot)
+                return post_msg
+
+        post_msg = asyncio.run(run())
+
+        post_msg.assert_awaited_once()
+        self.assertIn("Result: Walkover", post_msg.await_args.kwargs["content"])
+        self.assertNotIn("Final sets:", post_msg.await_args.kwargs["content"])
+        self.assertIn("ft-walkover", tennis_loop.final_announced_ids)
 
     def test_should_prepare_tennis_start_watch_accepts_injected_now(self):
         from modules import tennis_loop
@@ -521,6 +804,29 @@ class TennisLoopTests(unittest.TestCase):
                 )
 
         self.assertTrue(asyncio.run(run()))
+
+    def test_scheduler_tennis_poll_needed_for_cross_midnight_ft(self):
+        from modules import scheduler
+
+        match = tennis_match(
+            match_id="ft-cross-midnight",
+            status="FT",
+            start_time="2026-06-12T21:30:00+00:00",
+        )
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with patch.object(scheduler.api_provider, "fetch_tennis_day", AsyncMock(return_value=[match])):
+                return await scheduler._tennis_poll_decision(
+                    fake_bot,
+                    datetime(2026, 6, 12, 23, 30, tzinfo=timezone.utc),
+                )
+
+        needed, reason, detail = asyncio.run(run())
+
+        self.assertTrue(needed)
+        self.assertEqual(reason, "tennis_ft_due")
+        self.assertIn("fixture=ft-cross-midnight", detail)
 
     def test_tennis_scheduler_logs_only_meaningful_state_changes(self):
         from modules import scheduler

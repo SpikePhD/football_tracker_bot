@@ -13,7 +13,7 @@ from utils.tennis_formatter import (
     format_tennis_live_message,
     tennis_live_state_key,
 )
-from utils.tennis_lifecycle import tennis_final_data_ready
+from utils.tennis_lifecycle import tennis_final_data_ready, tennis_final_within_retention
 
 logger = logging.getLogger(__name__)
 
@@ -21,14 +21,13 @@ start_watch_prepared_ids: set[str] = set()
 final_announced_ids: set[str] = set()
 live_message_ids: dict[str, int] = {}
 live_state_keys: dict[str, str] = {}
+tennis_match_records: dict[str, dict] = {}
 _TENNIS_STATE_FILE = "tennis_state.json"
 _TENNIS_STATE_DEFAULT = {
-    "start_watch_prepared_ids": [],
-    "final_announced_ids": [],
-    "last_reset_date": None,
+    "version": 2,
+    "matches": {},
 }
 _state_loaded = False
-_last_reset_date: str | None = None
 
 
 def _is_tennis_local_today(start_time: str | None) -> bool:
@@ -82,45 +81,96 @@ def should_prepare_tennis_start_watch(match: dict, now=None) -> bool:
 
 
 def _load_state_once() -> None:
-    global _state_loaded, _last_reset_date
+    global _state_loaded
     if _state_loaded:
         return
     state = load(_TENNIS_STATE_FILE, _TENNIS_STATE_DEFAULT)
-    prepared_ids = set(str(mid) for mid in state.get("start_watch_prepared_ids", []))
-    # Legacy key from when this state incorrectly implied a Discord post happened.
-    prepared_ids.update(str(mid) for mid in state.get("pre_announced_ids", []))
-    start_watch_prepared_ids.update(prepared_ids)
-    final_announced_ids.update(str(mid) for mid in state.get("final_announced_ids", []))
-    _last_reset_date = state.get("last_reset_date")
+    if not isinstance(state, dict):
+        logger.error("Tennis state root is not an object; migrating it to an empty version 2 state.")
+        state = {}
+    matches = state.get("matches")
+    migrated = not (state.get("version") == 2 and isinstance(matches, dict))
+
+    if migrated:
+        matches = {}
+        prepared_ids = {
+            str(mid) for mid in state.get("start_watch_prepared_ids", [])
+        }
+        # Legacy key from when this state incorrectly implied a Discord post happened.
+        prepared_ids.update(str(mid) for mid in state.get("pre_announced_ids", []))
+        final_ids = {str(mid) for mid in state.get("final_announced_ids", [])}
+        for track_id in prepared_ids | final_ids:
+            matches[track_id] = {
+                "start_watch_prepared": track_id in prepared_ids,
+                "final_announced": track_id in final_ids,
+                "live_message_id": None,
+            }
+
+    for raw_track_id, raw_record in matches.items():
+        if not isinstance(raw_record, dict):
+            continue
+        track_id = str(raw_track_id)
+        record = dict(raw_record)
+        record["start_watch_prepared"] = bool(record.get("start_watch_prepared"))
+        record["final_announced"] = bool(record.get("final_announced"))
+        message_id = record.get("live_message_id")
+        try:
+            record["live_message_id"] = int(message_id) if message_id is not None else None
+        except (TypeError, ValueError):
+            record["live_message_id"] = None
+        tennis_match_records[track_id] = record
+        if record["start_watch_prepared"]:
+            start_watch_prepared_ids.add(track_id)
+        if record["final_announced"]:
+            final_announced_ids.add(track_id)
+        if record["live_message_id"] is not None and not record["final_announced"]:
+            live_message_ids[track_id] = record["live_message_id"]
+
+    if migrated:
+        _persist_state()
+        logger.info("Migrated tennis state to version 2 (%d match records).", len(matches))
     _state_loaded = True
 
 
+def _remember_match(track_id: str, match: dict, status_short: str | None) -> dict:
+    record = tennis_match_records.setdefault(track_id, {})
+    record["match_id"] = str(match.get("match_id") or track_id)
+    record["start_time"] = match.get("start_time")
+    record["last_status"] = status_short
+    record["last_seen_at"] = bot_now().isoformat()
+    return record
+
+
 def _persist_state() -> None:
-    prepared_ids = sorted(start_watch_prepared_ids)
+    all_ids = (
+        set(tennis_match_records)
+        | start_watch_prepared_ids
+        | final_announced_ids
+        | set(live_message_ids)
+    )
+    matches: dict[str, dict] = {}
+    for track_id in sorted(all_ids):
+        record = dict(tennis_match_records.get(track_id, {}))
+        record["start_watch_prepared"] = track_id in start_watch_prepared_ids
+        record["final_announced"] = track_id in final_announced_ids
+        record["live_message_id"] = live_message_ids.get(track_id)
+        matches[track_id] = record
+    tennis_match_records.clear()
+    tennis_match_records.update(matches)
     save(
         _TENNIS_STATE_FILE,
         {
-            "start_watch_prepared_ids": prepared_ids,
-            "final_announced_ids": sorted(final_announced_ids),
-            "last_reset_date": _last_reset_date,
+            "version": 2,
+            "matches": matches,
         },
     )
 
 
 def clear_tennis_state_today() -> None:
-    global _last_reset_date
+    """Legacy scheduler hook; durable tennis lifecycle state is rolling, not daily."""
     _load_state_once()
-    today_str = bot_now().date().isoformat()
-    if _last_reset_date == today_str:
-        logger.info("Tennis state already prepared for the local day; keeping dedup IDs.")
-        return
-    start_watch_prepared_ids.clear()
-    final_announced_ids.clear()
-    live_message_ids.clear()
     live_state_keys.clear()
-    _last_reset_date = today_str
-    _persist_state()
-    logger.info("Cleared tennis tracking state for the new day.")
+    logger.info("Kept rolling tennis lifecycle state across the local-day boundary.")
 
 
 async def run_tennis_loop(bot) -> None:
@@ -165,6 +215,7 @@ async def run_tennis_loop(bot) -> None:
         if status_short == "NS":
             if track_id in start_watch_prepared_ids or not should_prepare_tennis_start_watch(match):
                 continue
+            _remember_match(track_id, match, status_short)
             start_watch_prepared_ids.add(track_id)
             _persist_state()
             logger.info(f"Tennis start-watch prepared for {track_id}.")
@@ -187,8 +238,10 @@ async def run_tennis_loop(bot) -> None:
             )
             if msg is not None:
                 live_message_ids[track_id] = msg.id
+                _remember_match(track_id, match, status_short)
                 old_key = live_state_keys.get(track_id)
                 live_state_keys[track_id] = state_key
+                _persist_state()
                 if old_key:
                     logger.info(f"Tennis live state changed for {track_id}: {old_key} -> {state_key}")
                 else:
@@ -196,10 +249,8 @@ async def run_tennis_loop(bot) -> None:
             continue
 
         if status_short == "FT":
-            # Only post FT results for matches that started today or very recently
-            # This prevents re-posting old FT matches after restart
-            if not _is_tennis_local_today(start_time):
-                logger.debug(f"Skipping FT match {match_id} - not started today")
+            if not tennis_final_within_retention(match, bot_now()):
+                logger.debug(f"Skipping FT match {match_id} - outside finished retention window")
                 continue
             if not tennis_final_data_ready(match):
                 logger.info(
@@ -211,18 +262,25 @@ async def run_tennis_loop(bot) -> None:
                 )
                 continue
             if track_id not in final_announced_ids:
-                await post_new_general_message(
+                sent = await post_new_general_message(
                     bot,
                     CHANNEL_ID,
                     content=format_tennis_final_message(match),
                 )
+                if sent is None:
+                    logger.warning(
+                        "Tennis FT announcement failed for %s; leaving it pending for retry.",
+                        track_id,
+                    )
+                    continue
+                _remember_match(track_id, match, status_short)
                 final_announced_ids.add(track_id)
+                live_message_ids.pop(track_id, None)
+                live_state_keys.pop(track_id, None)
                 _persist_state()
 
-            live_message_ids.pop(track_id, None)
             live_state_keys.pop(track_id, None)
 
     stale_live = [mid for mid in live_state_keys if mid not in live_ids_seen]
     for mid in stale_live:
         live_state_keys.pop(mid, None)
-        live_message_ids.pop(mid, None)

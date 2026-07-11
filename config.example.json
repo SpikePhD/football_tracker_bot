@@ -108,6 +108,7 @@
     "tennis_cache_ttl_sec": 55,
     "tennis_upcoming_days": 7,
     "tennis_pre_announce_hours": 8,
+    "tennis_finished_retention_hours": 24,
     "live_update_edit_window_messages": 100,
     "api_provider": {
       "failure_threshold": 3,

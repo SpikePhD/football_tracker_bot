@@ -32,7 +32,7 @@ modules/match_state.py
   -> atomic persisted football fixture state in bot_memory/match_state.json
 
 modules/tennis_loop.py
-  -> tracked tennis live/start-watch and FT processing
+  -> tracked tennis live/start-watch and FT processing with versioned per-match state
 
 modules/api_provider.py
   -> ESPN primary provider plus API-Football fallback/enrichment policy
@@ -61,8 +61,9 @@ cogs/
 - Keep football lifecycle polling on `match_lifecycle.provider_window(...)`; `football_display_lookup_window_hours` is for public snapshots and upcoming displays only.
 - Keep football and tennis scheduler wake decisions in `modules/scheduler.py`; loops should process work, not decide long idle sleeps.
 - Keep public football display snapshots on the enrichment path before formatting, so `!matches` cannot downgrade learned event details.
+- Keep daily public football snapshots scoped to configured-local-day kickoffs plus earlier fixtures that are still live; do not display earlier terminal fixtures merely because lifecycle retention still includes them.
 - Key football live-state, FT-state, and memory-state by `match_lifecycle.fixture_identity(...)`, not raw provider `fixture.id`.
-- Keep runtime state in `bot_memory/` via `modules/storage.py`.
+- Keep runtime state in `bot_memory/` via `modules/storage.py`; its writes are atomic and failures propagate to callers.
 - Keep `inject_memory/` read-only from runtime code.
 - Keep secrets out of `config.json`.
 - Use module loggers with `logging.getLogger(__name__)`.
@@ -118,8 +119,10 @@ Football:
 
 Tennis:
 
-- `_tennis_poll_needed(...)` wakes for live matches, local-day FT posts, or `NS` matches inside the configured start-watch window.
+- `_tennis_poll_needed(...)` wakes for live matches, unannounced FT matches inside `tennis_finished_retention_hours`, or `NS` matches inside the configured start-watch window.
 - When awake, `tennis_loop.run_tennis_loop(...)` handles live/FT posts/upserts and dedupe. It does not send standalone upcoming tennis posts; upcoming matches are shown by snapshots and tennis commands.
+- Tennis lifecycle state is rolling across local midnight. `tennis_state.json` version 2 stores one record per canonical match, including the live Discord message ID, so a restart edits the existing live post and retains FT dedupe. Do not reintroduce daily ID clearing or loose top-level ID lists.
+- Tennis FT dedupe must only be persisted after Discord confirms the message send. Retirement and walkover finals may be complete without a conventionally complete set list when ESPN supplies a winner and terminal reason.
 - When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at most every 6 hours or wakes at `tennis_pre_announce_hours` before the next start. If that wake is already due but no work is needed, it schedules the next normal tennis poll instead of returning an immediate one-second loop.
 
 Do not reintroduce minute-by-minute provider polling while a sport is idle. The main loop may still wake for lightweight local daily routines.
@@ -146,6 +149,8 @@ Add runtime state:
 1. Use `modules/storage.py`.
 2. Store it under `bot_memory/`.
 3. Ensure `install.sh` and `update.sh` create safe defaults without overwriting existing state.
+
+Use `modules.storage.save(...)` or `save_json_path(...)` for JSON persistence. Both write a same-directory temporary file, flush it, and atomically replace the target; persistence errors must remain visible to the caller.
 
 Football fixture lifecycle state is centralized in `modules/match_state.py`. Do not add new daily football state files or local-midnight clears. Use canonical fixture IDs, provider aliases, UTC kickoff times, provider status, explicit retention windows, and `match_state.json` flags such as `ft_announced` and `memory_updated`.
 

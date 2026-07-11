@@ -32,6 +32,7 @@ Football data flows through `modules/api_provider.py`.
 - Enrichment is bounded by retry delays, per-tick caps, daily call budgets, mapping caches, incomplete-response cooldowns, and best-known event reuse.
 - Football fixture lookup uses rolling UTC-aware windows and dedupes by canonical fixture identity across provider dates.
 - ESPN fixture IDs are preferred as the canonical identity when known. API-Football fixture IDs are stored as provider aliases so fallback/live/FT data for the same real match does not create a second lifecycle.
+- Public football snapshots show fixtures whose kickoff is on the configured local day, plus any earlier fixture that is still live. Earlier terminal fixtures remain available to lifecycle recovery but are excluded from startup, good-morning, and `!matches` snapshots.
 - Public football snapshots reuse the same enrichment/best-known event layer used by live and FT paths, so `!matches` should not regress to a stale ESPN event list after richer event data has already been learned.
 - Missing-goal warnings are hidden while enrichment is still pending. Live posts, FT posts, startup snapshots, and `!matches` show the best known score/events first; `⚠️ ... missing from event data` appears only after enrichment is exhausted for that fixture/score state.
 
@@ -56,7 +57,7 @@ Football and tennis use a sleep/awake scheduler model to reduce idle API calls. 
 
 | Command | Aliases | Description |
 |---|---|---|
-| `!matches` | - | Current tracked football and local-day tennis events |
+| `!matches` | - | Local-day football and tennis events, plus live football carry-over |
 | `!upcoming` | - | Upcoming tracked football fixtures grouped by local date |
 | `!tennis` | - | Tracked tennis: live now, upcoming, and today's finished matches |
 | `!competitions` | - | List tracked football competitions |
@@ -113,6 +114,7 @@ Key `operations` timezone/display/lifecycle settings:
 - `football_expected_ft_minutes` - expected FT check offset from UTC kickoff
 - `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
 - `tennis_pre_announce_hours` - rolling tennis scheduler wake lead; it does not send standalone upcoming posts, but keeps matches awake around start time so delayed ESPN live transitions are caught
+- `tennis_finished_retention_hours` - rolling window in which an unannounced tennis final remains eligible for retry, including matches that finish after local midnight
 - `operations.api_provider.espn_poll_interval_sec` - active ESPN polling interval while football is awake
 - `operations.api_provider.fallback_poll_interval_sec` - active fallback polling interval while football is awake
 
@@ -176,7 +178,7 @@ See `OPERATIONS.md` for the canonical runbook.
 
 ## Runtime State
 
-Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. It includes mode state, logs, football memory, tennis announcement state, generated exports, and `match_state.json` for persisted football fixture lifecycle state. `match_state.json` stores provider aliases under `provider_ids`, for example an ESPN canonical fixture plus its API-Football fallback fixture ID. It also stores FT/live message IDs and event-completeness state so missing-event warnings and later edits survive restart.
+Runtime state lives in `bot_memory/`, which is gitignored and survives deployments. JSON state writes are atomic, and write failures are surfaced instead of being treated as successful. The directory includes mode state, logs, football memory, generated exports, and persisted football and tennis lifecycle state. `match_state.json` stores provider aliases under `provider_ids`, for example an ESPN canonical fixture plus its API-Football fallback fixture ID. It also stores FT/live message IDs and event-completeness state so missing-event warnings and later edits survive restart. `tennis_state.json` uses versioned per-match records and persists start-watch, final-announcement, and live-message IDs; legacy list-based state migrates automatically without losing deduplication.
 
 Daily operational log archives can be collected with `scripts/collect_daily_logs.sh`. On the Pi, the recommended cron job runs at 06:00 and keeps the newest 30 daily archives under `bot_memory/log_exports/daily/`. Each summary splits app-log warning/error counts from systemd journal counts so the app log remains the primary bot-health signal.
 

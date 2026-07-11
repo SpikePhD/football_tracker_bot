@@ -17,6 +17,7 @@ from config import (
     ESPN_CACHE_TTL_SEC,
 )
 from modules import match_lifecycle
+from modules.storage import save_json_path
 from utils.event_formatter import is_counted_goal_event, is_shootout_event, prune_goal_events_to_score
 from utils.time_utils import bot_now
 
@@ -136,14 +137,9 @@ def load_memory() -> Dict[str, Any]:
 
 
 def save_memory(memory: Dict[str, Any]) -> None:
-    """Save memory to disk. Creates directory if needed."""
-    MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with open(MEMORY_PATH, "w", encoding="utf-8") as f:
-            json.dump(memory, f, indent=2, ensure_ascii=False)
-        logger.info("Football memory saved successfully.")
-    except Exception as e:
-        logger.error(f"Failed to save football memory: {e}")
+    """Atomically save memory to disk, raising when persistence fails."""
+    save_json_path(MEMORY_PATH, memory, ensure_ascii=False)
+    logger.info("Football memory saved successfully.")
 
 
 # --- ESPN Cache Helpers ---

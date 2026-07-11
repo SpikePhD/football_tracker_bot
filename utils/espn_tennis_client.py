@@ -123,8 +123,11 @@ def _competition_to_match(event: dict, competition: dict, tour: str) -> dict | N
         "status": {
             "short": status_short,
             "state": state,
+            "name": status_type.get("name") or "",
             "detail": status_type.get("detail") or "",
             "description": status_type.get("description") or "",
+            "short_detail": status_type.get("shortDetail") or "",
+            "completed": bool(status_type.get("completed")),
         },
         "event_name": event.get("shortName") or event.get("name") or "Tennis Event",
         "round": round_name,

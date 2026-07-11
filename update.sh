@@ -58,7 +58,7 @@ else
 fi
 
 if [ ! -f bot_memory/tennis_state.json ]; then
-    echo '{"pre_announced_ids": [], "final_announced_ids": [], "last_reset_date": null}' > bot_memory/tennis_state.json
+    echo '{"version": 2, "matches": {}}' > bot_memory/tennis_state.json
     echo "  Created bot_memory/tennis_state.json"
 else
     echo "  bot_memory/tennis_state.json already exists - keeping state"
