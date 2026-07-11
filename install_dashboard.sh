@@ -46,7 +46,6 @@ WorkingDirectory=$BOT_DIR
 ExecStart=$BOT_DIR/.venv/bin/python $BOT_DIR/dashboard.py
 Restart=on-failure
 RestartSec=5
-NoNewPrivileges=true
 PrivateTmp=true
 
 [Install]
