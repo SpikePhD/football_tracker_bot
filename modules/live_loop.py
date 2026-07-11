@@ -163,7 +163,7 @@ def seed_already_posted(fixtures: list) -> None:
         logger.info(f"Seeded {count} in-progress match snapshot(s) into live_state_keys.")
 
 
-async def run_live_loop(bot):
+async def run_live_loop(bot, *, matches=None, now_utc=None):
     """
     Polls live fixtures, enriches event data before dedup checks, and then
     upserts one live message per match. Also registers matches for FT checking.
@@ -173,10 +173,13 @@ async def run_live_loop(bot):
             return
 
         now = bot_now()
-        now_utc = utc_now()
+        now_utc = now_utc or utc_now()
         logger.debug(f"[{now.strftime('%H:%M')}] Querying live endpoint...")
 
-        matches = await api_provider.fetch_live(bot.http_session)
+        if matches is None:
+            matches = await api_provider.fetch_live(bot.http_session, now_utc=now_utc)
+        else:
+            matches = list(matches)
         if not matches:
             _log_empty_live_result(now, now_utc)
             _cleanup_missing_live_state(set(), now)

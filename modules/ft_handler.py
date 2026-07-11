@@ -404,15 +404,23 @@ def _normalize_api_football_match(match_details_raw: dict) -> dict:
     }
 
 
-async def fetch_and_post_ft(bot: discord.Client) -> None:
+async def fetch_and_post_ft(
+    bot: discord.Client,
+    *,
+    matches=None,
+    now_utc: datetime | None = None,
+) -> None:
     if is_silent():
         return
 
     from modules import api_provider
 
     match_state.migrate_ft_state_if_needed()
-    now = utc_now()
-    matches = await api_provider.fetch_relevant_football(bot.http_session, now)
+    now = now_utc or utc_now()
+    if matches is None:
+        matches = await api_provider.fetch_relevant_football(bot.http_session, now)
+    else:
+        matches = list(matches)
     matches_by_id = {
         match_lifecycle.fixture_identity(match): match
         for match in matches

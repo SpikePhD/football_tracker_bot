@@ -19,6 +19,9 @@ football_tracker_bot.py
 modules/scheduler.py
   -> sleep/awake orchestration plus local daily routines
 
+modules/football_cycle.py
+  -> one rolling provider snapshot shared by scheduler, live, and FT consumers
+
 modules/live_loop.py
   -> live football polling, enrichment, dedup, and upserts
 
@@ -60,6 +63,7 @@ cogs/
 - Use the configured timezone only for display, logs, grouping, and scheduled human-facing routines.
 - Keep football lifecycle polling on `match_lifecycle.provider_window(...)`; `football_display_lookup_window_hours` is for public snapshots and upcoming displays only.
 - Keep football and tennis scheduler wake decisions in `modules/scheduler.py`; loops should process work, not decide long idle sleeps.
+- Build one `FootballCycleSnapshot` per football scheduler check and pass it through decision, live, and FT paths; do not refetch the rolling window inside an awake cycle.
 - Keep public football display snapshots on the enrichment path before formatting, so `!matches` cannot downgrade learned event details.
 - Keep daily public football snapshots scoped to configured-local-day kickoffs plus earlier fixtures that are still live; do not display earlier terminal fixtures merely because lifecycle retention still includes them.
 - Key football live-state, FT-state, and memory-state by `match_lifecycle.fixture_identity(...)`, not raw provider `fixture.id`.
@@ -116,7 +120,8 @@ FT posts are exactly-once by fixture ID, but their stored Discord message can be
 Football:
 
 - `_football_poll_needed(...)` wakes for FT-due IDs, lifecycle-window fixtures, or fallback live endpoint visibility.
-- When awake, `run_football_cycle(...)` runs live updates, FT handling, and live-state pruning.
+- Each scheduler check builds one `modules.football_cycle.FootballCycleSnapshot`. Its relevant fixtures and derived live fixtures are reused for the wake decision and, when awake, by live updates and FT handling.
+- When awake, `run_football_cycle(...)` consumes that snapshot, runs live updates, FT handling, and live-state pruning without repeating the rolling-window fetch.
 - When asleep, `_plan_sleep_until_next_fixture(...)` refreshes future schedule at most every 6 hours or wakes at `football_prematch_window_hours` before the next kickoff.
 
 Tennis:

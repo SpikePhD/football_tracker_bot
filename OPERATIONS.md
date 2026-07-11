@@ -227,6 +227,8 @@ Football and tennis both use a sleep/awake scheduler model:
 - sleeping: no live, near-start, FT-due, or pending announcement work; future schedule refresh runs every 6 hours
 - awake: active work exists; football polls at the configured provider interval and tennis polls every 60 seconds while work remains
 
+One awake football check uses one rolling provider snapshot for scheduler decisions, live updates, and FT processing. Direct single-fixture FT recovery remains separate only for persisted due fixtures missing from that shared window.
+
 Unannounced tennis finals remain eligible for retry for `operations.tennis_finished_retention_hours`, including matches that cross local midnight. A failed Discord send is not recorded as announced. Tennis live-message IDs and final deduplication survive service restarts; old list-based tennis state is migrated automatically on first load.
 
 The scheduler loads tennis deduplication before its first decision. Expired terminal tennis records are pruned after the same finished-retention window; live and future records are retained.

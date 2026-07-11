@@ -13,6 +13,7 @@ from modules import api_provider, match_lifecycle
 from modules.bot_mode import get_mode, is_verbose
 from modules.discord_poster import post_new_general_message
 from modules.ft_handler import fetch_and_post_ft
+from modules.football_cycle import FootballCycleSnapshot, build_football_cycle_snapshot
 from modules.live_loop import prune_live_state, run_live_loop
 from modules.match_state import expected_ft_due_fixture_ids, prune_match_tracking_state
 from modules import match_state, tennis_loop
@@ -403,20 +404,32 @@ async def _football_poll_needed(bot, now_utc: datetime) -> bool:
     return needed
 
 
-async def _football_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]:
+async def _football_poll_decision(
+    bot,
+    now_utc: datetime,
+    snapshot: FootballCycleSnapshot | None = None,
+) -> tuple[bool, str, str]:
     due_ids = expected_ft_due_fixture_ids(now_utc)
     if due_ids:
         return True, "ft_due", f"fixtures={_short_fixture_list(due_ids)}"
 
-    matches = await api_provider.fetch_relevant_football(bot.http_session, now_utc)
+    matches = (
+        list(snapshot.relevant_matches)
+        if snapshot is not None
+        else await api_provider.fetch_relevant_football(bot.http_session, now_utc)
+    )
     for match in matches:
         if _fixture_requires_football_poll(match, now_utc):
             return True, "lifecycle_fixture", _fixture_poll_reason_detail(match)
 
-    has_fallback_live = await api_provider.has_live_football(
-        bot.http_session,
-        now_utc=now_utc,
-        relevant_matches=matches,
+    has_fallback_live = (
+        bool(snapshot.live_matches)
+        if snapshot is not None
+        else await api_provider.has_live_football(
+            bot.http_session,
+            now_utc=now_utc,
+            relevant_matches=matches,
+        )
     )
     if has_fallback_live:
         return True, "fallback_live", "provider_live_endpoint=true"
@@ -443,10 +456,15 @@ def _fixture_requires_football_poll(match: dict, now_utc: datetime) -> bool:
     return match_lifecycle.should_track_fixture(match, now_utc)
 
 
-async def run_football_cycle(bot, now_utc: datetime | None = None) -> None:
+async def run_football_cycle(
+    bot,
+    now_utc: datetime | None = None,
+    snapshot: FootballCycleSnapshot | None = None,
+) -> None:
     now_utc = now_utc or utc_now()
-    await run_live_loop(bot)
-    await fetch_and_post_ft(bot)
+    snapshot = snapshot or await build_football_cycle_snapshot(bot.http_session, now_utc)
+    await run_live_loop(bot, matches=snapshot.live_matches, now_utc=snapshot.now_utc)
+    await fetch_and_post_ft(bot, matches=snapshot.relevant_matches, now_utc=snapshot.now_utc)
     prune_live_state(now_utc)
 
 
@@ -514,9 +532,14 @@ async def run_operations_loop(bot) -> None:
 
         if now >= next_football_check:
             try:
-                football_needed, wake_reason, wake_reason_detail = await _football_poll_decision(bot, now)
+                football_snapshot = await build_football_cycle_snapshot(bot.http_session, now)
+                football_needed, wake_reason, wake_reason_detail = await _football_poll_decision(
+                    bot,
+                    now,
+                    snapshot=football_snapshot,
+                )
                 if football_needed:
-                    await run_football_cycle(bot, now)
+                    await run_football_cycle(bot, now, snapshot=football_snapshot)
                     next_football_check = utc_now() + timedelta(seconds=api_provider.get_poll_interval())
                     _set_football_scheduler_state(
                         mode="awake",
