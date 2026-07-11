@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -8,6 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from aiohttp.test_utils import TestClient, TestServer
+
+os.environ.setdefault("BOT_TOKEN", "test-token")
+os.environ.setdefault("API_KEY", "test-api-key")
 
 
 class FakeController:
@@ -93,6 +97,20 @@ class DashboardConfigurationTests(unittest.TestCase):
         self.assertEqual(safe["discord"]["channel_id"], "123456789012345678")
         self.assertEqual(safe["administration"]["owner_users"][0]["id"], "987654321098765432")
         self.assertEqual(_normalize_dashboard_config(safe), value)
+
+
+class DashboardHealthPublicationTests(unittest.TestCase):
+    def test_scheduler_health_snapshot_includes_runtime_mode(self):
+        from modules import scheduler
+
+        with patch.object(scheduler, "get_mode", return_value="normal"), \
+             patch.object(scheduler.api_provider, "get_status", return_value={"active_provider": "espn"}), \
+             patch("cogs.version.get_version_info", return_value={"sha": "abc123"}), \
+             patch("modules.dashboard_health.write_bot_health") as write:
+            scheduler.write_dashboard_health_snapshot()
+
+        self.assertEqual(write.call_args.kwargs["mode"], "normal")
+        self.assertEqual(write.call_args.kwargs["commit"]["sha"], "abc123")
 
 
 class DashboardApiTests(unittest.IsolatedAsyncioTestCase):

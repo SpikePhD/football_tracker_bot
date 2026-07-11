@@ -10,7 +10,7 @@ from config import (
     TENNIS_PRE_ANNOUNCE_HOURS,
 )
 from modules import api_provider, match_lifecycle
-from modules.bot_mode import is_verbose
+from modules.bot_mode import get_mode, is_verbose
 from modules.discord_poster import post_new_general_message
 from modules.ft_handler import fetch_and_post_ft
 from modules.live_loop import prune_live_state, run_live_loop
@@ -168,6 +168,20 @@ def _set_tennis_scheduler_state(
 
 def get_tennis_scheduler_status() -> dict:
     return dict(_tennis_scheduler_state)
+
+
+def write_dashboard_health_snapshot() -> None:
+    """Publish a safe cross-process snapshot for the dashboard."""
+    from cogs.version import get_version_info
+    from modules.dashboard_health import write_bot_health
+
+    write_bot_health(
+        commit=get_version_info(),
+        provider=api_provider.get_status(),
+        football_scheduler=get_football_scheduler_status(),
+        tennis_scheduler=get_tennis_scheduler_status(),
+        mode=get_mode(),
+    )
 
 
 def _next_scheduled_football_wake(matches: list[dict], now_utc: datetime) -> tuple[datetime, datetime] | tuple[None, None]:
@@ -547,16 +561,7 @@ async def run_operations_loop(bot) -> None:
                 )
 
         try:
-            from cogs.version import get_version_info
-            from modules.dashboard_health import write_bot_health
-
-            write_bot_health(
-                commit=get_version_info(),
-                provider=api_provider.get_status(),
-                football_scheduler=get_football_scheduler_status(),
-                tennis_scheduler=get_tennis_scheduler_status(),
-                mode=get_mode(),
-            )
+            write_dashboard_health_snapshot()
         except Exception as exc:
             logger.warning("Could not update dashboard health snapshot: %s", exc)
 
