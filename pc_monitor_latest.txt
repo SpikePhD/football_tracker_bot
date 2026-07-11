@@ -1,1 +1,0 @@
-log=C:\Users\lucac\Documents\MyProjects\football_tracker_bot-main\pc_monitor_20260531_170422.csv

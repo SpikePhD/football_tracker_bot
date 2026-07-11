@@ -241,6 +241,14 @@ def _mark_espn_failure() -> None:
 
 # ── Scoreboard cache ──────────────────────────────────────────────────────────
 
+def _match_league_id(match: dict) -> int | None:
+    """Return a normalized league ID from provider or persisted match data."""
+    try:
+        return int(match.get("league", {}).get("id"))
+    except (TypeError, ValueError):
+        return None
+
+
 async def _get_cached_scoreboard_for_date(
     session: aiohttp.ClientSession,
     provider_date: str,
@@ -298,7 +306,7 @@ async def _get_cached_scoreboard_for_date(
         if failure_count > 0 and cached:
             stale_matches = [
                 m for m in cached["matches"]
-                if m.get("league", {}).get("id") in failed_league_ids
+                if _match_league_id(m) in failed_league_ids
             ]
             matches = [*results, *stale_matches]
             _log_espn_partial_refresh_warning(
@@ -314,7 +322,7 @@ async def _get_cached_scoreboard_for_date(
     elif failure_count > 0 and cached:
         matches = [
             m for m in cached["matches"]
-            if m.get("league", {}).get("id") in failed_league_ids
+            if _match_league_id(m) in failed_league_ids
         ]
         _log_espn_partial_refresh_warning(
             provider_date,
@@ -382,10 +390,7 @@ def _active_espn_league_ids(cached: dict, now_utc: datetime) -> set[int]:
     for match in cached.get("matches", []):
         if not _fixture_needs_active_espn_refresh(match, now_utc):
             continue
-        try:
-            league_id = int(match.get("league", {}).get("id"))
-        except (TypeError, ValueError):
-            continue
+        league_id = _match_league_id(match)
         if league_id in LEAGUE_SLUG_MAP:
             league_ids.add(league_id)
     return league_ids
@@ -457,9 +462,10 @@ async def _refresh_active_espn_leagues(
     preserved_matches = [
         match
         for match in cached.get("matches", [])
-        if match.get("league", {}).get("id") not in succeeded_league_ids
+        if _match_league_id(match) not in succeeded_league_ids
     ]
-    matches = _dedupe_by_fixture_id([*fresh_matches, *preserved_matches])
+    # Put fresh matches last so they win if legacy cache data contains a duplicate.
+    matches = _dedupe_by_fixture_id([*preserved_matches, *fresh_matches])
     for league_id in succeeded_league_ids:
         league_fetched_at[str(league_id)] = now
     full_fetched_at = cached.get("full_fetched_at") or cached.get("fetched_at")

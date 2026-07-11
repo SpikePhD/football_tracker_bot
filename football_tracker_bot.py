@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 def _configure_logging() -> None:
     """Configure root logger to stdout + rotating file."""
+    # Windows consoles can default to a legacy code page. Keep Unicode log
+    # messages from raising handler errors when the bot is run there.
+    if os.name == "nt" and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="backslashreplace")
+
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     root.handlers.clear()

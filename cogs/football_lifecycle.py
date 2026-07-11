@@ -176,7 +176,7 @@ def build_lifecycle_summary(state: dict, now_utc: datetime) -> str:
         f"Provider: {provider}",
         f"Poll interval: {status.get('poll_interval')}s",
         (
-            "ESPN league requests today: "
+            "ESPN league requests this run (resets daily): "
             f"{espn_requests.get('total', 0)} "
             f"(active {espn_requests.get('active_refresh', 0)}, "
             f"discovery {espn_requests.get('full_discovery', 0)})"

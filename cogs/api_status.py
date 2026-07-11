@@ -79,7 +79,7 @@ class ApiStatus(commands.Cog):
 
         if request_counts:
             lines.append(
-                "ESPN league requests today: "
+                "ESPN league requests this run (resets daily): "
                 f"{request_counts.get('total', 0)} total "
                 f"({request_counts.get('active_refresh', 0)} active, "
                 f"{request_counts.get('full_discovery', 0)} discovery)"

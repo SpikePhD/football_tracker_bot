@@ -1,4 +1,4 @@
-﻿# utils/tennis_formatter.py
+# utils/tennis_formatter.py
 from utils.time_utils import to_bot_tz
 from utils.tennis_lifecycle import tennis_final_result_reason
 

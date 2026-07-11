@@ -20,15 +20,6 @@ from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
 
-_STORAGE_FILE = "goodmorning.json"
-_DEFAULTS = {
-    "enabled": True,
-    "hour": 6,
-    "minute": 30,
-    "timezone": OPERATIONS_TIMEZONE,
-}
-
-
 def _load() -> dict:
     return get_morning_schedule()
 

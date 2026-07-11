@@ -32,7 +32,12 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
                 # A tracked file may be intentionally deleted in the working tree.
                 continue
             try:
-                text = path.read_text(encoding="utf-8")
+                raw = path.read_bytes()
+                self.assertFalse(
+                    raw.startswith(b"\xef\xbb\xbf"),
+                    f"UTF-8 BOM found in {relative_path}",
+                )
+                text = raw.decode("utf-8")
             except UnicodeDecodeError:
                 continue
             for line_number, line in enumerate(text.splitlines(), start=1):

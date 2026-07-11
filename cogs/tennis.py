@@ -1,4 +1,4 @@
-﻿# cogs/tennis.py
+# cogs/tennis.py
 import logging
 from datetime import datetime
 

@@ -44,10 +44,15 @@ class EspnRequestReductionTests(unittest.TestCase):
         live = espn_match(fixture_id="live-135", league_id=135)
         live["fixture"]["date"] = "2026-07-11T17:30:00Z"
         live["fixture"]["status"] = {"short": "1H", "elapsed": 30}
+        # Legacy persisted records can contain provider IDs as strings.
+        live["league"]["id"] = "135"
         future = espn_match(fixture_id="future-39", league_id=39)
         future["fixture"]["date"] = "2026-07-11T23:00:00Z"
         future["fixture"]["status"] = {"short": "NS", "elapsed": None}
-        fresh_live = {**live, "goals": {"home": 1, "away": 0}}
+        fresh_live = espn_match(fixture_id="live-135", league_id=135)
+        fresh_live["fixture"]["date"] = "2026-07-11T17:30:00Z"
+        fresh_live["fixture"]["status"] = {"short": "1H", "elapsed": 31}
+        fresh_live["goals"] = {"home": 1, "away": 0}
         cached = {
             "matches": [live, future],
             "fetched_at": now - timedelta(minutes=2),

@@ -1,4 +1,4 @@
-﻿# cogs/ask.py
+# cogs/ask.py
 import json
 import logging
 import re

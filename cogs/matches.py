@@ -1,4 +1,4 @@
-﻿# cogs/matches.py
+# cogs/matches.py
 import logging
 from collections import defaultdict
 from datetime import timedelta
