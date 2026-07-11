@@ -60,6 +60,14 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertIn("TENNIS_PRE_ANNOUNCE_HOURS", text)
         self.assertIn("timedelta(hours=TENNIS_PRE_ANNOUNCE_HOURS)", text)
 
+    def test_deployment_scripts_restrict_secret_file_permissions(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
+        update_script = (repo_root / "update.sh").read_text(encoding="utf-8")
+
+        self.assertIn('chmod 600 "$BOT_DIR/.env"', install_script)
+        self.assertIn("chmod 600 .env", update_script)
+
     def test_old_football_lookup_config_constant_is_not_imported_by_production_modules(self):
         repo_root = Path(__file__).resolve().parents[1]
         production_paths = [

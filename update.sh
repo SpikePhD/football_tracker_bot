@@ -25,6 +25,12 @@ load_env_file_safely() {
 }
 load_env_file_safely .env.deploy
 
+# Secrets must never remain readable by other local users. This also repairs
+# permissions on installations created before restrictive modes were enforced.
+if [ -f .env ]; then
+    chmod 600 .env
+fi
+
 if [ ! -f config.json ]; then
     echo "⚠️  config.json not found — creating from config.example.json"
     cp config.example.json config.json

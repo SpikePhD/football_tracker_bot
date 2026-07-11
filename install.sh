@@ -149,6 +149,10 @@ API_KEY=$API_KEY
 EOF
     ok ".env created"
 fi
+if [ -f "$BOT_DIR/.env" ]; then
+    chmod 600 "$BOT_DIR/.env"
+    ok ".env permissions restricted to the bot user"
+fi
 
 # .env.deploy
 if [ -f "$BOT_DIR/.env.deploy" ]; then
@@ -317,4 +321,3 @@ if [ ! -f "$BOT_DIR/.env" ]; then
     warn "  cp $BOT_DIR/.env.example $BOT_DIR/.env && nano $BOT_DIR/.env"
     warn "  Then restart: sudo systemctl restart $SERVICE_NAME"
 fi
-
