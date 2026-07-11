@@ -14,6 +14,8 @@ from config import (
     LOG_FILE_PATH,
 )
 from modules.discord_poster import post_new_message_to_context
+from modules.admin import owner_only
+from utils.redaction import redact_text
 from utils.time_utils import bot_now
 
 logger = logging.getLogger(__name__)
@@ -21,14 +23,6 @@ logger = logging.getLogger(__name__)
 _LEVEL_PATTERN = re.compile(r"\[(WARNING|ERROR|CRITICAL)\s*\]")
 _MODULE_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{2,80}$")
 _LINE_TS_PATTERN = re.compile(r"^\[(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}:\d{2}\]")
-_SECRET_PATTERN = re.compile(
-    r"(?i)\b("
-    r"api[_-]?key|token|secret|password|authorization|bearer"
-    r")\b\s*[:=]\s*([^\s,;]+)"
-)
-_LONG_TOKEN_PATTERN = re.compile(r"\b[A-Za-z0-9_\-]{24,}\b")
-
-
 def _iter_log_paths(base_path: Path) -> list[Path]:
     """
     Return log files in chronological order:
@@ -70,16 +64,7 @@ def _read_today_lines(base_path: Path, today_str: str) -> list[str]:
 
 
 def _redact_line(line: str) -> str:
-    line = _SECRET_PATTERN.sub(lambda m: f"{m.group(1)}=***REDACTED***", line)
-
-    # Redact suspicious long tokens but avoid timestamps/known numeric IDs.
-    def _mask_if_token(match: re.Match) -> str:
-        value = match.group(0)
-        if value.isdigit():
-            return value
-        return "***REDACTED_TOKEN***"
-
-    return _LONG_TOKEN_PATTERN.sub(_mask_if_token, line)
+    return redact_text(line)
 
 
 def _build_export(
@@ -124,6 +109,7 @@ class LogCog(commands.Cog):
         name="log",
         help="Export runtime logs: !log | !log errors | !log module <module_name>",
     )
+    @owner_only()
     async def log_export(
         self,
         ctx: commands.Context,

@@ -6,12 +6,15 @@ import subprocess
 from discord.ext import commands
 
 from modules.discord_poster import post_new_message_to_context
+from modules.admin import owner_only
+from utils.redaction import redact_text
 
 logger = logging.getLogger(__name__)
 
 REPO_DIR = pathlib.Path(__file__).resolve().parent.parent
 UPDATE_TIMEOUT_SEC = 300
 OUTPUT_TAIL_LINES = 30
+OUTPUT_MAX_CHARS = 6000
 
 
 def _git_short_sha() -> str:
@@ -30,7 +33,10 @@ def _tail_lines(text: str, max_lines: int = OUTPUT_TAIL_LINES) -> str:
     if not lines:
         return "(no output)"
     tail = lines[-max_lines:]
-    return "\n".join(tail)
+    result = "\n".join(tail)
+    if len(result) > OUTPUT_MAX_CHARS:
+        return "[truncated to final output characters]\n" + result[-OUTPUT_MAX_CHARS:]
+    return result
 
 
 class UpdateCog(commands.Cog):
@@ -43,6 +49,7 @@ class UpdateCog(commands.Cog):
         aliases=["pull"],
         help="Run update.sh now to pull latest code and restart service.",
     )
+    @owner_only()
     async def update_cmd(self, ctx: commands.Context) -> None:
         if self._update_lock.locked():
             await post_new_message_to_context(
@@ -84,7 +91,8 @@ class UpdateCog(commands.Cog):
                 exit_code = process.returncode if process.returncode is not None else -1
 
                 status = "SUCCESS" if exit_code == 0 else "FAILED"
-                summary = _tail_lines(combined, OUTPUT_TAIL_LINES)
+                summary = _tail_lines(redact_text(combined), OUTPUT_TAIL_LINES)
+                summary = summary.replace("```", "` ` `")
                 msg = (
                     f"Update {status}\n"
                     f"Exit code: `{exit_code}`\n"
@@ -117,4 +125,3 @@ class UpdateCog(commands.Cog):
 async def setup(bot: commands.Bot):
     await bot.add_cog(UpdateCog(bot))
     logger.info("cogs.update loaded")
-

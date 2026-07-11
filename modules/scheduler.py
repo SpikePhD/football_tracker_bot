@@ -442,6 +442,8 @@ async def _tennis_poll_needed(bot, now_utc: datetime) -> bool:
 
 
 async def _tennis_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]:
+    tennis_loop.ensure_tennis_state_loaded()
+    tennis_loop.prune_tennis_state(now_utc)
     matches = await api_provider.fetch_tennis_day(bot.http_session)
     for match in matches:
         track_id = _tennis_track_id(match)

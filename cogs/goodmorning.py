@@ -11,6 +11,7 @@ from cogs.matches import fetch_combined_matches_snapshot
 from config import CHANNEL_ID, OPERATIONS_TIMEZONE
 from modules.bot_mode import get_mode, is_verbose
 from modules.discord_poster import post_new_general_message, post_new_message_to_context
+from modules.admin import is_operator
 from modules.ft_handler import seed_already_announced_ft
 from modules.live_loop import seed_already_posted
 from modules.storage import load, save
@@ -48,11 +49,6 @@ def _parse_time(time_str: str) -> tuple[int, int]:
     if not (0 <= hour <= 23 and 0 <= minute <= 59):
         raise ValueError("Hour must be 0-23 and minute 0-59.")
     return hour, minute
-
-
-def _can_manage(ctx: commands.Context) -> bool:
-    perms = getattr(getattr(ctx, "author", None), "guild_permissions", None)
-    return bool(getattr(perms, "manage_guild", False))
 
 
 class GoodMorning(commands.Cog):
@@ -133,10 +129,10 @@ class GoodMorning(commands.Cog):
                 await post_new_message_to_context(ctx, content="Morning message is **OFF**.")
             return
 
-        if not _can_manage(ctx):
+        if not await is_operator(ctx):
             await post_new_message_to_context(
                 ctx,
-                content="You need the `Manage Server` permission to change the morning schedule.",
+                content="You need bot-owner or `Manage Server` access to change the morning schedule.",
             )
             return
 

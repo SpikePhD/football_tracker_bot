@@ -2,6 +2,7 @@
 
 import logging
 import sys
+import traceback
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 
@@ -14,6 +15,7 @@ from discord.ext import commands, tasks
 import aiohttp
 
 from config import (
+    BOT_OWNER_IDS,
     BOT_TOKEN,
     CHANNEL_ID,
     LOG_FILE_BACKUP_COUNT,
@@ -21,7 +23,13 @@ from config import (
     LOG_FILE_PATH,
 )
 from utils.personality import greet_message
-from modules.power_manager import setup_power_management
+from utils.redaction import redact_text
+from modules.admin import (
+    OperatorRequired,
+    OwnerRequired,
+    WrongCommandChannel,
+    command_channel_check,
+)
 from modules.scheduler import run_local_daily_routines, run_operations_loop
 from modules.bot_mode import is_verbose, get_mode
 from modules.discord_poster import post_new_general_message, post_new_message_to_context
@@ -68,6 +76,7 @@ _configure_logging()
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+bot.add_check(command_channel_check)
 operations_task: asyncio.Task | None = None
 _startup_completed = False
 
@@ -124,7 +133,7 @@ def _format_command_error_context(ctx: commands.Context) -> str:
             f"guild_name={getattr(guild, 'name', None)}",
             f"message_id={getattr(message, 'id', None)}",
             f"attachments={len(attachments or [])}",
-            f"content={content!r}",
+            f"content_length={len(content)}",
         ]
     )
 
@@ -163,6 +172,30 @@ def _command_error_action(error: commands.CommandError | Exception) -> dict:
             "log_level": "warning",
             "log_traceback": False,
             "user_message": "Only the bot owner can use that command.",
+        }
+
+    if isinstance(original, OwnerRequired):
+        return {
+            "ignore": False,
+            "log_level": "warning",
+            "log_traceback": False,
+            "user_message": "Only a configured bot owner can use that command.",
+        }
+
+    if isinstance(original, OperatorRequired):
+        return {
+            "ignore": False,
+            "log_level": "warning",
+            "log_traceback": False,
+            "user_message": "You need bot-owner or `Manage Server` access for that command.",
+        }
+
+    if isinstance(original, WrongCommandChannel):
+        return {
+            "ignore": True,
+            "log_level": "debug",
+            "log_traceback": False,
+            "user_message": None,
         }
 
     if isinstance(original, commands.MissingRequiredArgument):
@@ -244,7 +277,11 @@ async def on_ready():
     logger.info(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     logger.info(f"🚀 Running bot from commit: {get_version_info()['sha']}")
     await ensure_http_session(bot)
-    setup_power_management()
+    if not BOT_OWNER_IDS:
+        logger.warning(
+            "No administration.owner_users configured; administrative access is "
+            "temporarily limited to the Discord application owner."
+        )
 
     channel = bot.get_channel(CHANNEL_ID)
     if channel:
@@ -317,13 +354,18 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 
     log_message = (
         f"Command error: {context} "
-        f"error_type={type(original).__name__} error={original!r}"
+        f"error_type={type(original).__name__} error={redact_text(repr(original))}"
     )
+    if action["log_traceback"] and original.__traceback__ is not None:
+        frames = " | ".join(
+            line.strip()
+            for line in traceback.format_list(traceback.extract_tb(original.__traceback__))
+        )
+        log_message = f"{log_message} traceback={redact_text(frames)}"
     if action["log_level"] == "warning":
         logger.warning(log_message)
     else:
-        exc_info = (type(original), original, original.__traceback__) if action["log_traceback"] else None
-        logger.error(log_message, exc_info=exc_info)
+        logger.error(log_message)
 
     if action["user_message"]:
         await post_new_message_to_context(ctx, content=action["user_message"])

@@ -28,6 +28,9 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
 
         for relative_path in tracked_files:
             path = repo_root / relative_path
+            if not path.exists():
+                # A tracked file may be intentionally deleted in the working tree.
+                continue
             try:
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
@@ -301,7 +304,7 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
             self.assertIn("app_error_count=1", summary_text)
             self.assertIn("app_warning_count=1", summary_text)
 
-    def test_command_error_context_includes_full_content_and_discord_ids(self):
+    def test_command_error_context_omits_content_and_includes_discord_ids(self):
         import football_tracker_bot
 
         ctx = SimpleNamespace(
@@ -333,7 +336,9 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertIn("guild_name=Guild Name", context)
         self.assertIn("message_id=444", context)
         self.assertIn("attachments=2", context)
-        self.assertIn("content='!ask full command text with token=abc123'", context)
+        self.assertIn("content_length=40", context)
+        self.assertNotIn("token=abc123", context)
+        self.assertNotIn("full command text", context)
 
     def test_command_error_unwraps_command_invoke_error(self):
         from discord.ext import commands

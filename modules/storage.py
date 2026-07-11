@@ -35,23 +35,33 @@ def load(filename: str, default: dict) -> dict:
             return deepcopy(default)
 
 
-def save_json_path(path: pathlib.Path, data: dict, *, ensure_ascii: bool = True) -> None:
-    """Atomically replace a JSON file and raise if durable persistence fails."""
+def save_text_path(path: pathlib.Path, text: str, *, mode: int | None = None) -> None:
+    """Atomically replace a UTF-8 text file and raise if durable persistence fails."""
     with _storage_lock:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.parent / f"{path.name}.{uuid.uuid4().hex}.tmp"
         try:
             with tmp.open("w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=ensure_ascii)
+                f.write(text)
                 f.flush()
                 os.fsync(f.fileno())
+            if mode is not None:
+                os.chmod(tmp, mode)
             os.replace(tmp, path)
+            if mode is not None:
+                os.chmod(path, mode)
         except Exception:
             try:
                 tmp.unlink(missing_ok=True)
             finally:
                 logger.exception("storage: Failed to write %s", path)
                 raise
+
+
+def save_json_path(path: pathlib.Path, data: dict, *, ensure_ascii: bool = True) -> None:
+    """Atomically replace a JSON file and raise if durable persistence fails."""
+    payload = json.dumps(data, indent=2, ensure_ascii=ensure_ascii)
+    save_text_path(path, payload)
 
 
 def save(filename: str, data: dict) -> None:

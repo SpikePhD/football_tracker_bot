@@ -9,6 +9,7 @@ bot_memory/
 .bot_config
 .env.local
 .env.*.local
+config.local.json
 
 # Python cache and compiled files
 __pycache__/

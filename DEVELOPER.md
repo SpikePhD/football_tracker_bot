@@ -65,7 +65,9 @@ cogs/
 - Key football live-state, FT-state, and memory-state by `match_lifecycle.fixture_identity(...)`, not raw provider `fixture.id`.
 - Keep runtime state in `bot_memory/` via `modules/storage.py`; its writes are atomic and failures propagate to callers.
 - Keep `inject_memory/` read-only from runtime code.
-- Keep secrets out of `config.json`.
+- Keep secrets in `.env` only. Committed `config.json` is defaults; host/UI overrides belong in Git-ignored `config.local.json`.
+- Apply command authorization through `modules/admin.py`; do not add one-off owner or permission checks.
+- Never log raw Discord command content or full secret values.
 - Use module loggers with `logging.getLogger(__name__)`.
 - Avoid `print()` in production code.
 - Do not duplicate update logic in Python; `update.sh` is the canonical updater.
@@ -123,6 +125,7 @@ Tennis:
 - When awake, `tennis_loop.run_tennis_loop(...)` handles live/FT posts/upserts and dedupe. It does not send standalone upcoming tennis posts; upcoming matches are shown by snapshots and tennis commands.
 - Tennis lifecycle state is rolling across local midnight. `tennis_state.json` version 2 stores one record per canonical match, including the live Discord message ID, so a restart edits the existing live post and retains FT dedupe. Do not reintroduce daily ID clearing or loose top-level ID lists.
 - Tennis FT dedupe must only be persisted after Discord confirms the message send. Retirement and walkover finals may be complete without a conventionally complete set list when ESPN supplies a winner and terminal reason.
+- Load tennis state before scheduler decisions and prune only expired terminal records; never prune live or future records.
 - When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at most every 6 hours or wakes at `tennis_pre_announce_hours` before the next start. If that wake is already due but no work is needed, it schedules the next normal tennis poll instead of returning an immediate one-second loop.
 
 Do not reintroduce minute-by-minute provider polling while a sport is idle. The main loop may still wake for lightweight local daily routines.
@@ -141,8 +144,15 @@ Add a command:
 Add a competition:
 
 1. Update tracked IDs/slugs in `config.json` and `config.example.json`.
-2. Update loader validation in `config.py` only if the schema changes.
+2. Update validation and field metadata in `modules/configuration.py` if the schema changes.
 3. Keep naming centralized; avoid per-cog constants.
+
+Configuration service:
+
+1. `modules.configuration.load_effective_config()` is the validated source of truth.
+2. Local dictionaries deep-merge; arrays/scalars replace defaults; unknown fields are rejected.
+3. Use `write_local_overrides(...)` and secret helpers for future UI writes. They validate before atomic replacement and never return full secrets.
+4. `config.py` remains the import-compatible constants facade. Runtime hot reload is intentionally unsupported.
 
 Add runtime state:
 

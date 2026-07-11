@@ -7,7 +7,7 @@
 #   1. Checks prerequisites (python3 == 3.12, git, pip3)
 #   2. Prompts for configuration (service name, Discord token, API key, channel ID)
 #   3. Creates .venv and installs Python dependencies
-#   4. Creates .env, .env.deploy, config.json, and bot_memory/state.json (skips if already exist)
+#   4. Creates .env, .env.deploy, config files, and bot_memory/state.json (skips if already exist)
 #   5. Creates and enables a systemd service so the bot starts on boot
 #   6. Adds a passwordless sudo rule for the service restart (needed by auto_update.sh)
 #   7. Sets up a cron job to run auto_update.sh every 15 minutes
@@ -137,13 +137,12 @@ section "Step 4: Config files"
 # .env
 if [ -f "$BOT_DIR/.env" ]; then
     ok ".env already exists — not overwritten"
-elif [ -z "$BOT_TOKEN" ] || [ -z "$API_KEY" ] || [ -z "$CHANNEL_ID" ]; then
+elif [ -z "$BOT_TOKEN" ] || [ -z "$API_KEY" ]; then
     warn ".env not created (tokens were not entered). Copy .env.example and fill it in manually."
 else
     cat > "$BOT_DIR/.env" <<EOF
 BOT_TOKEN=$BOT_TOKEN
 API_KEY=$API_KEY
-CHANNEL_ID=$CHANNEL_ID
 EOF
     ok ".env created"
 fi
@@ -166,6 +165,22 @@ if [ -f "$BOT_DIR/config.json" ]; then
 else
     cp "$BOT_DIR/config.example.json" "$BOT_DIR/config.json"
     ok "config.json created from config.example.json"
+fi
+
+# config.local.json (host-owned non-secret overrides)
+if [ -f "$BOT_DIR/config.local.json" ]; then
+    ok "config.local.json already exists — not overwritten"
+elif [[ "$CHANNEL_ID" =~ ^[0-9]+$ ]] && [ "$CHANNEL_ID" -gt 0 ]; then
+    cat > "$BOT_DIR/config.local.json" <<EOF
+{
+  "discord": {
+    "channel_id": $CHANNEL_ID
+  }
+}
+EOF
+    ok "config.local.json created with Discord channel ID"
+else
+    warn "config.local.json not created; set discord.channel_id before starting a new installation."
 fi
 
 # bot_memory/state.json

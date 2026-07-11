@@ -19,10 +19,15 @@ class CommandsList(commands.Cog):
         help="List all available bot commands."
     )
     async def commands_list(self, ctx: commands.Context):
-        visible = sorted(
-            (c for c in self.bot.commands if not c.hidden),
-            key=lambda c: c.name
-        )
+        visible = []
+        for command in sorted(self.bot.commands, key=lambda item: item.name):
+            if command.hidden:
+                continue
+            try:
+                if await command.can_run(ctx):
+                    visible.append(command)
+            except commands.CheckFailure:
+                continue
 
         lines = ["**Available commands:**\n"]
         for cmd in visible:

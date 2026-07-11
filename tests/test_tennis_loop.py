@@ -365,6 +365,87 @@ class TennisLoopTests(unittest.TestCase):
         post_msg.assert_not_awaited()
         self.assertIn("ft-restart", tennis_loop.final_announced_ids)
 
+    def test_scheduler_loads_persisted_final_dedup_before_decision(self):
+        from modules import api_provider, scheduler, tennis_loop
+
+        ft = tennis_match(match_id="persisted-final", status="FT")
+        state = {
+            "version": 2,
+            "matches": {
+                "persisted-final": {
+                    "start_watch_prepared": True,
+                    "final_announced": True,
+                    "live_message_id": None,
+                }
+            },
+        }
+        fake_bot = SimpleNamespace(http_session=None)
+
+        async def run():
+            with (
+                patch.object(tennis_loop, "load", Mock(return_value=state)) as load_state,
+                patch.object(tennis_loop, "save", Mock()),
+                patch.object(api_provider, "fetch_tennis_day", AsyncMock(return_value=[ft])),
+            ):
+                decision = await scheduler._tennis_poll_decision(fake_bot, self.now)
+                return decision, load_state
+
+        (needed, reason, _detail), load_state = asyncio.run(run())
+        self.assertFalse(needed)
+        self.assertEqual(reason, "no_relevant_tennis")
+        load_state.assert_called_once()
+        self.assertIn("migrated_at", tennis_loop.tennis_match_records["persisted-final"])
+
+    def test_prune_removes_only_expired_terminal_records(self):
+        from modules import tennis_loop
+        from utils.time_utils import to_bot_tz
+
+        now = to_bot_tz("2026-06-13T12:00:00+00:00")
+        tennis_loop._state_loaded = True
+        tennis_loop.tennis_match_records.update({
+            "expired": {
+                "start_time": "2026-06-11T08:00:00+00:00",
+                "final_announced": True,
+            },
+            "recent": {
+                "start_time": "2026-06-13T08:00:00+00:00",
+                "final_announced": True,
+            },
+            "live": {
+                "start_time": "2026-06-11T08:00:00+00:00",
+                "final_announced": False,
+                "last_status": "LIVE",
+            },
+        })
+        tennis_loop.final_announced_ids.update({"expired", "recent"})
+
+        with patch.object(tennis_loop, "save", Mock()) as save_state:
+            removed = tennis_loop.prune_tennis_state(now)
+
+        self.assertEqual(removed, 1)
+        self.assertNotIn("expired", tennis_loop.tennis_match_records)
+        self.assertIn("recent", tennis_loop.tennis_match_records)
+        self.assertIn("live", tennis_loop.tennis_match_records)
+        self.assertTrue(save_state.called)
+
+    def test_prune_uses_migration_time_when_start_time_is_missing(self):
+        from modules import tennis_loop
+        from utils.time_utils import to_bot_tz
+
+        now = to_bot_tz("2026-06-13T12:00:00+00:00")
+        tennis_loop._state_loaded = True
+        tennis_loop.tennis_match_records["legacy"] = {
+            "migrated_at": "2026-06-11T08:00:00+00:00",
+            "final_announced": True,
+        }
+        tennis_loop.final_announced_ids.add("legacy")
+
+        with patch.object(tennis_loop, "save", Mock()):
+            removed = tennis_loop.prune_tennis_state(now)
+
+        self.assertEqual(removed, 1)
+        self.assertNotIn("legacy", tennis_loop.final_announced_ids)
+
     def test_incomplete_ft_without_winner_does_not_post_or_mark_final(self):
         from modules import api_provider, tennis_loop
 

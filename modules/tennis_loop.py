@@ -2,7 +2,7 @@
 import logging
 from datetime import timedelta
 
-from config import CHANNEL_ID, TENNIS_PRE_ANNOUNCE_HOURS
+from config import CHANNEL_ID, TENNIS_FINISHED_RETENTION_HOURS, TENNIS_PRE_ANNOUNCE_HOURS
 from modules import api_provider
 from modules.bot_mode import is_silent
 from modules.discord_poster import post_new_general_message, upsert_live_message
@@ -90,6 +90,8 @@ def _load_state_once() -> None:
         state = {}
     matches = state.get("matches")
     migrated = not (state.get("version") == 2 and isinstance(matches, dict))
+    normalized_dirty = False
+    loaded_at = bot_now().isoformat()
 
     if migrated:
         matches = {}
@@ -104,6 +106,7 @@ def _load_state_once() -> None:
                 "start_watch_prepared": track_id in prepared_ids,
                 "final_announced": track_id in final_ids,
                 "live_message_id": None,
+                "migrated_at": loaded_at,
             }
 
     for raw_track_id, raw_record in matches.items():
@@ -118,6 +121,14 @@ def _load_state_once() -> None:
             record["live_message_id"] = int(message_id) if message_id is not None else None
         except (TypeError, ValueError):
             record["live_message_id"] = None
+        if (
+            record["final_announced"]
+            and not record.get("start_time")
+            and not record.get("last_seen_at")
+            and not record.get("migrated_at")
+        ):
+            record["migrated_at"] = loaded_at
+            normalized_dirty = True
         tennis_match_records[track_id] = record
         if record["start_watch_prepared"]:
             start_watch_prepared_ids.add(track_id)
@@ -126,10 +137,18 @@ def _load_state_once() -> None:
         if record["live_message_id"] is not None and not record["final_announced"]:
             live_message_ids[track_id] = record["live_message_id"]
 
-    if migrated:
+    if migrated or normalized_dirty:
         _persist_state()
+    if migrated:
         logger.info("Migrated tennis state to version 2 (%d match records).", len(matches))
+    elif normalized_dirty:
+        logger.info("Added retention metadata to existing tennis state records.")
     _state_loaded = True
+
+
+def ensure_tennis_state_loaded() -> None:
+    """Load persisted tennis dedupe/message state before scheduler decisions."""
+    _load_state_once()
 
 
 def _remember_match(track_id: str, match: dict, status_short: str | None) -> dict:
@@ -164,6 +183,42 @@ def _persist_state() -> None:
             "matches": matches,
         },
     )
+
+
+def prune_tennis_state(now=None) -> int:
+    """Remove terminal records once they can no longer produce a retry announcement."""
+    _load_state_once()
+    current = now or bot_now()
+    stale_ids: list[str] = []
+    for track_id, record in tennis_match_records.items():
+        if not record.get("final_announced"):
+            continue
+        start_time = record.get("start_time")
+        if start_time:
+            terminal = {"start_time": start_time, "status": {"short": "FT"}}
+            if not tennis_final_within_retention(terminal, current):
+                stale_ids.append(track_id)
+            continue
+        reference = record.get("last_seen_at") or record.get("migrated_at")
+        if not reference:
+            continue
+        try:
+            reference_dt = to_bot_tz(reference)
+        except Exception:
+            continue
+        if current - reference_dt > timedelta(hours=TENNIS_FINISHED_RETENTION_HOURS):
+            stale_ids.append(track_id)
+
+    for track_id in stale_ids:
+        tennis_match_records.pop(track_id, None)
+        start_watch_prepared_ids.discard(track_id)
+        final_announced_ids.discard(track_id)
+        live_message_ids.pop(track_id, None)
+        live_state_keys.pop(track_id, None)
+    if stale_ids:
+        _persist_state()
+        logger.info("Pruned %d expired tennis lifecycle record(s).", len(stale_ids))
+    return len(stale_ids)
 
 
 def clear_tennis_state_today() -> None:
@@ -279,8 +334,15 @@ async def run_tennis_loop(bot) -> None:
                 live_state_keys.pop(track_id, None)
                 _persist_state()
 
+            else:
+                before = dict(tennis_match_records.get(track_id, {}))
+                _remember_match(track_id, match, status_short)
+                if tennis_match_records.get(track_id) != before:
+                    _persist_state()
+
             live_state_keys.pop(track_id, None)
 
     stale_live = [mid for mid in live_state_keys if mid not in live_ids_seen]
     for mid in stale_live:
         live_state_keys.pop(mid, None)
+    prune_tennis_state(bot_now())

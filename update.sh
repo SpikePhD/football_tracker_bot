@@ -34,6 +34,14 @@ fi
 echo "⬇️  Pulling latest code from $GIT_BRANCH..."
 git pull origin "$GIT_BRANCH"
 
+# Re-check committed defaults after pulling. Host-owned config.local.json is
+# gitignored and intentionally never overwritten by updates.
+if [ ! -f config.json ]; then
+    echo "⚠️  config.json missing after pull — creating from config.example.json"
+    cp config.example.json config.json
+    echo "  ✔ Created config.json"
+fi
+
 echo ""
 echo "🧠 Checking bot_memory/..."
 mkdir -p bot_memory

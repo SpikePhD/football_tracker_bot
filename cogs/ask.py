@@ -22,6 +22,7 @@ from config import (
 from utils.time_utils import bot_now, to_bot_tz
 from modules import api_provider
 from modules.discord_poster import post_new_message_to_context
+from modules.admin import owner_only
 from modules.football_memory import (
     load_memory,
     check_memory_staleness,
@@ -127,7 +128,7 @@ class Ask(commands.Cog):
         name="refresh_memory",
         help="Admin: Force update all football memory (standings, teams, players).",
     )
-    @commands.is_owner()
+    @owner_only()
     async def refresh_memory(self, ctx: commands.Context):
         from modules.football_memory import update_all_memory
         async with ctx.typing():
@@ -138,7 +139,7 @@ class Ask(commands.Cog):
         name="dump_memory",
         help="Admin: Export football memory to a file and post it.",
     )
-    @commands.is_owner()
+    @owner_only()
     async def dump_memory(self, ctx: commands.Context):
         import discord
         from pathlib import Path

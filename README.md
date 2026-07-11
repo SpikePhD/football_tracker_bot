@@ -74,29 +74,43 @@ Football and tennis use a sleep/awake scheduler model to reduce idle API calls. 
 | `!ask <question>` | - | Ask the football assistant |
 | `!refresh_memory` | - | Owner-only memory refresh |
 | `!dump_memory` | - | Owner-only memory export |
-| `!log` | - | Export recent runtime logs |
-| `!log errors` | - | Export warning/error/critical logs |
-| `!log module <name>` | - | Export logs filtered by module |
+| `!log` | - | Owner: export recent runtime logs |
+| `!log errors` | - | Owner: export warning/error/critical logs |
+| `!log module <name>` | - | Owner: export logs filtered by module |
 | `!match_state [fixture_id]` | `!matchstate` | Admin: inspect persisted football lifecycle state |
 | `!football_lifecycle` | `!footballlife`, `!lifecycle` | Admin: summarize provider, scheduler, and lifecycle health |
-| `!update` | `!pull` | Run `update.sh` and restart the service |
-| `!commands` | `!cmds`, `!help` | List available commands |
+| `!update` | `!pull` | Owner: run `update.sh` and restart the service |
+| `!commands` | `!cmds`, `!help` | List commands available to the requester |
 
-Mode and lifecycle diagnostic commands require Discord `manage_guild` permission. Memory commands require bot owner permission. `!update` is intentionally available to channel users and may restart the bot.
+Commands are accepted only in the configured Discord channel. Mode/schedule changes and lifecycle diagnostics require a configured owner or Discord `Manage Server`; updates, logs, and memory administration are owner-only. When no owner IDs are configured, Discord's application owner is the migration-safe fallback.
 
 ## Configuration
 
-The repository uses a 3-file split:
+The repository uses a layered configuration split:
 
-- `.env` - secrets only (`BOT_TOKEN`, `API_KEY`, `CHANNEL_ID`, `LLM_API_KEY`)
-- `config.json` - committed non-secret behavior knobs
+- `.env` - secrets only (`BOT_TOKEN`, `API_KEY`, `LLM_API_KEY`)
+- `config.json` - committed non-secret defaults
+- `config.local.json` - optional Git-ignored host overrides; future administration UI writes here
 - `.env.deploy` - deployment script variables (`SERVICE_NAME`, `GIT_BRANCH`)
 
-Do not put secrets in `config.json`. Start from `.env.example`, `.env.deploy.example`, and `config.example.json`.
+Objects in `config.local.json` are deep-merged over defaults; arrays and scalar values replace their defaults. All settings are validated before startup or an atomic local save, and changes require a service restart. Existing deployments may temporarily keep `CHANNEL_ID` in `.env` until a local `discord.channel_id` override is saved.
+
+Example host override:
+
+```json
+{
+  "discord": {"channel_id": 123456789012345678},
+  "administration": {
+    "owner_users": [{"id": 123456789012345678, "label": "Luca"}]
+  }
+}
+```
 
 Important `config.json` sections:
 
 - `bot` - bot name/profile
+- `discord` - the single command and announcement channel
+- `administration` - stable Discord owner IDs and human-readable labels
 - `tracking` - football league IDs, ESPN slugs, provider team-name aliases, tennis players
 - `operations` - polling, caching, live edit window, provider/enrichment behavior
 - `log` - file logging and Discord log export limits
@@ -115,6 +129,7 @@ Key `operations` timezone/display/lifecycle settings:
 - `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
 - `tennis_pre_announce_hours` - rolling tennis scheduler wake lead; it does not send standalone upcoming posts, but keeps matches awake around start time so delayed ESPN live transitions are caught
 - `tennis_finished_retention_hours` - rolling window in which an unannounced tennis final remains eligible for retry, including matches that finish after local midnight
+- `live_update_edit_window_messages` - number of recent channel messages searched before a buried live post is replaced with a fresh update
 - `operations.api_provider.espn_poll_interval_sec` - active ESPN polling interval while football is awake
 - `operations.api_provider.fallback_poll_interval_sec` - active fallback polling interval while football is awake
 
@@ -137,6 +152,7 @@ pip install -r requirements.txt
 cp .env.example .env
 cp .env.deploy.example .env.deploy
 cp config.example.json config.json
+# Set discord.channel_id in config.local.json, or temporarily export CHANNEL_ID.
 python football_tracker_bot.py
 ```
 
@@ -149,6 +165,7 @@ pip install -r requirements.txt
 copy .env.example .env
 copy .env.deploy.example .env.deploy
 copy config.example.json config.json
+# Set discord.channel_id in config.local.json, or temporarily set CHANNEL_ID.
 python football_tracker_bot.py
 ```
 
@@ -190,6 +207,7 @@ Daily operational log archives can be collected with `scripts/collect_daily_logs
 football_tracker_bot.py
 config.py
 config.json
+config.local.json  optional host overrides (gitignored)
 cogs/
 modules/
 utils/

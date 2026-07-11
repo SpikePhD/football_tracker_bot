@@ -2,6 +2,12 @@
   "bot": {
     "name": "Marco Van Botten"
   },
+  "discord": {
+    "channel_id": 123456789012345678
+  },
+  "administration": {
+    "owner_users": []
+  },
   "tracking": {
     "tennis_players": [
       "jannik sinner",

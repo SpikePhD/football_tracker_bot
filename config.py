@@ -2,10 +2,10 @@
 import os
 import re
 import unicodedata
-from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
+from modules.configuration import load_effective_config
 
 load_dotenv()
 
@@ -19,31 +19,11 @@ def _require_env(name: str) -> str:
 
 BOT_TOKEN = _require_env("BOT_TOKEN")
 API_KEY = _require_env("API_KEY")
-try:
-    CHANNEL_ID = int(_require_env("CHANNEL_ID"))
-except ValueError as e:
-    raise RuntimeError("CHANNEL_ID must be a numeric Discord channel ID.") from e
-
 LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
 
 
 def _load_public_config() -> dict:
-    path = Path("config.json")
-    if not path.exists():
-        raise RuntimeError(
-            "config.json is missing. Create it from config.example.json and restart the bot."
-        )
-
-    try:
-        # Accept UTF-8 with or without BOM to avoid Windows editor compatibility issues.
-        raw = json.loads(path.read_text(encoding="utf-8-sig"))
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"config.json is not valid JSON: {e}") from e
-
-    if not isinstance(raw, dict):
-        raise RuntimeError("config.json root must be a JSON object.")
-
-    return raw
+    return load_effective_config()
 
 
 def _expect(cfg: dict, key: str, expected_type, parent: str = ""):
@@ -119,6 +99,8 @@ def _load_provider_team_aliases(raw: dict) -> dict[str, str]:
 _PUBLIC = _load_public_config()
 
 bot_cfg = _expect(_PUBLIC, "bot", dict)
+discord_cfg = _expect(_PUBLIC, "discord", dict)
+administration_cfg = _expect(_PUBLIC, "administration", dict)
 tracking_cfg = _expect(_PUBLIC, "tracking", dict)
 ops_cfg = _expect(_PUBLIC, "operations", dict)
 log_cfg = _expect(_PUBLIC, "log", dict)
@@ -127,6 +109,9 @@ llm_cfg = _expect(_PUBLIC, "llm", dict)
 search_cfg = _expect(_PUBLIC, "search", dict)
 
 BOT_NAME = _expect(bot_cfg, "name", str, "bot")
+CHANNEL_ID = int(_expect(discord_cfg, "channel_id", int, "discord"))
+BOT_OWNER_USERS = _expect(administration_cfg, "owner_users", list, "administration")
+BOT_OWNER_IDS = frozenset(int(owner["id"]) for owner in BOT_OWNER_USERS)
 
 TRACKED_TENNIS_PLAYERS = _expect(tracking_cfg, "tennis_players", list, "tracking")
 TRACKED_LEAGUE_IDS = _expect(tracking_cfg, "tracked_league_ids", list, "tracking")

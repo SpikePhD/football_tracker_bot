@@ -126,15 +126,31 @@ Discord-triggered update:
 !update
 ```
 
-`!update` (alias `!pull`) runs `bash update.sh` from inside the bot process. It is intentionally open to channel users and may restart the service immediately.
+`!update` (alias `!pull`) runs `bash update.sh` from inside the bot process. It is owner-only and may restart the service immediately.
 
 ## 5. Configuration And State
 
 - `.env` - secrets only
-- `config.json` - committed non-secret behavior
+- `config.json` - committed non-secret defaults
+- `config.local.json` - Git-ignored host overrides, never overwritten by updates
 - `.env.deploy` - host-specific deployment variables
 - `bot_memory/` - runtime state, gitignored, never overwritten by updates
 - `inject_memory/` - repo-controlled reference data, read-only at runtime
+
+Local objects are deep-merged over committed defaults; arrays and scalar values replace defaults. Configuration is fully validated at startup and changes require a restart. During migration, a local `discord.channel_id` wins over legacy `CHANNEL_ID` in `.env`. Owner entries use `{ "id": <Discord user ID>, "label": <human label> }`; authorization uses only the numeric ID. If the list is empty, the Discord application owner is the temporary fallback.
+
+Keep host identity settings in `config.local.json`, for example:
+
+```json
+{
+  "discord": {"channel_id": 123456789012345678},
+  "administration": {
+    "owner_users": [{"id": 123456789012345678, "label": "Luca"}]
+  }
+}
+```
+
+Commands are accepted only in the configured channel. Updates, logs, memory refreshes/exports, and future configuration controls are owner-only. Owners or members with `Manage Server` may change broadcast/morning settings and inspect lifecycle diagnostics.
 
 Important API-Football enrichment knobs live under `operations.api_provider` in `config.json`:
 
@@ -181,6 +197,8 @@ Football and tennis both use a sleep/awake scheduler model:
 
 Unannounced tennis finals remain eligible for retry for `operations.tennis_finished_retention_hours`, including matches that cross local midnight. A failed Discord send is not recorded as announced. Tennis live-message IDs and final deduplication survive service restarts; old list-based tennis state is migrated automatically on first load.
 
+The scheduler loads tennis deduplication before its first decision. Expired terminal tennis records are pruned after the same finished-retention window; live and future records are retained.
+
 Inspect scheduler mode with:
 
 ```text
@@ -194,6 +212,7 @@ The command reports football and tennis scheduler modes, next check times, plann
 ```bash
 python3 -c "import json, pathlib; json.loads(pathlib.Path('config.json').read_text(encoding='utf-8-sig'))" && echo "config.json OK"
 python3 -c "import json, pathlib; json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig'))" && echo "config.example.json OK"
+python3 -c "from modules.configuration import load_effective_config; load_effective_config()" && echo "effective config OK"
 sudo systemctl restart marco_van_botten
 sudo systemctl status marco_van_botten --no-pager -l
 sudo journalctl -u marco_van_botten -n 80 --no-pager
@@ -205,6 +224,8 @@ sudo journalctl -u marco_van_botten -n 80 --no-pager
 - `!normal` - live + FT only
 - `!silent` - commands only
 - `!mode` - current mode
+
+Mode changes require a configured owner or Discord `Manage Server`. Read-only mode status remains public in the configured channel.
 
 ## 8. Troubleshooting
 

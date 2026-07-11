@@ -3,6 +3,7 @@ import logging
 from discord.ext import commands
 from modules.bot_mode import get_mode, set_mode
 from modules.discord_poster import post_new_message_to_context
+from modules.admin import operator_only
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class Mode(commands.Cog):
         aliases=["Verbose", "VERBOSE"],
         help="Enable verbose mode: startup message, morning broadcast, live updates, FT results."
     )
-    @commands.has_permissions(manage_guild=True)
+    @operator_only()
     async def verbose(self, ctx: commands.Context):
         set_mode("verbose")
         logger.info("🔔 Verbose mode enabled.")
@@ -32,7 +33,7 @@ class Mode(commands.Cog):
         aliases=["Normal", "NORMAL"],
         help="Enable normal mode: live match updates and FT results only. No startup or morning broadcasts."
     )
-    @commands.has_permissions(manage_guild=True)
+    @operator_only()
     async def normal(self, ctx: commands.Context):
         set_mode("normal")
         logger.info("⚽ Normal mode enabled.")
@@ -46,7 +47,7 @@ class Mode(commands.Cog):
         aliases=["Silent", "SILENT"],
         help="Enable silent mode: bot never posts automatically. Commands still work."
     )
-    @commands.has_permissions(manage_guild=True)
+    @operator_only()
     async def silent(self, ctx: commands.Context):
         set_mode("silent")
         logger.info("🔇 Silent mode enabled.")

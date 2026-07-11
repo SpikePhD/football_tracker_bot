@@ -15,6 +15,7 @@ from config import (
 )
 from modules import api_provider, match_lifecycle, match_state, scheduler
 from modules.discord_poster import post_new_message_to_context
+from modules.admin import operator_only
 from utils.time_utils import parse_provider_utc, to_bot_tz, utc_now
 
 logger = logging.getLogger(__name__)
@@ -217,7 +218,7 @@ class FootballLifecycle(commands.Cog):
         aliases=["matchstate"],
         help="Admin: inspect persisted football fixture lifecycle state.",
     )
-    @commands.has_permissions(manage_guild=True)
+    @operator_only()
     async def match_state_command(self, ctx: commands.Context, fixture_id: str | None = None):
         state = match_state.load_match_state()
         now = utc_now()
@@ -236,7 +237,7 @@ class FootballLifecycle(commands.Cog):
         aliases=["footballlife", "lifecycle"],
         help="Admin: summarize UTC-first football lifecycle health.",
     )
-    @commands.has_permissions(manage_guild=True)
+    @operator_only()
     async def football_lifecycle_command(self, ctx: commands.Context):
         content = build_lifecycle_summary(match_state.load_match_state(), utc_now())
         await post_new_message_to_context(ctx, content=content)
