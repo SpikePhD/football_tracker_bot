@@ -66,6 +66,9 @@ FALLBACK_POLL_INTERVAL = API_FALLBACK_POLL_INTERVAL_SEC
 _espn_healthy: bool = True
 _consecutive_failures: int = 0
 _retry_after: datetime | None = None
+_espn_request_stats_date: str | None = None
+_espn_full_league_requests: int = 0
+_espn_active_league_requests: int = 0
 
 # ── Scoreboard cache ──────────────────────────────────────────────────────────
 
@@ -76,6 +79,8 @@ _cache: list[dict] = []
 _cache_date: str | None = None
 _cache_ts: datetime | None = None
 CACHE_TTL_SEC = API_SCOREBOARD_CACHE_TTL_SEC
+ESPN_FULL_DISCOVERY_INTERVAL_SEC = 30 * 60
+ESPN_PAST_DATE_DISCOVERY_INTERVAL_SEC = 6 * 60 * 60
 
 # Tennis cache
 _tennis_cache: list[dict] = []
@@ -143,14 +148,34 @@ def get_poll_interval() -> int:
 
 def get_status() -> dict:
     """Return a snapshot of the current provider state for !api command."""
+    _record_espn_league_requests("status", 0)
     healthy = is_espn_healthy()
     retry_local = _retry_after.astimezone(bot_now().tzinfo) if _retry_after else None
     return {
+        "active_provider": "ESPN" if healthy else "API-Football",
         "espn_healthy": healthy,
         "consecutive_failures": _consecutive_failures,
         "retry_after": retry_local,
         "poll_interval": get_poll_interval(),
+        "espn_league_requests_today": {
+            "full_discovery": _espn_full_league_requests,
+            "active_refresh": _espn_active_league_requests,
+            "total": _espn_full_league_requests + _espn_active_league_requests,
+        },
     }
+
+
+def _record_espn_league_requests(refresh_type: str, count: int) -> None:
+    global _espn_request_stats_date, _espn_full_league_requests, _espn_active_league_requests
+    today = get_bot_local_date_string()
+    if _espn_request_stats_date != today:
+        _espn_request_stats_date = today
+        _espn_full_league_requests = 0
+        _espn_active_league_requests = 0
+    if refresh_type == "active":
+        _espn_active_league_requests += int(count)
+    else:
+        _espn_full_league_requests += int(count)
 
 
 def _log_espn_partial_refresh_warning(
@@ -216,7 +241,12 @@ def _mark_espn_failure() -> None:
 
 # ── Scoreboard cache ──────────────────────────────────────────────────────────
 
-async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provider_date: str) -> list[dict]:
+async def _get_cached_scoreboard_for_date(
+    session: aiohttp.ClientSession,
+    provider_date: str,
+    *,
+    force_refresh: bool = False,
+) -> list[dict]:
     """Return one ESPN provider-date scoreboard with TTL caching."""
     global _cache, _cache_date, _cache_ts
 
@@ -224,7 +254,11 @@ async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provid
     cached = _football_scoreboard_cache.get(provider_date)
     if cached is None and _cache_date == provider_date and _cache_ts is not None:
         cached = {"matches": _cache, "fetched_at": _cache_ts}
-    if cached and (now - cached["fetched_at"]).total_seconds() < CACHE_TTL_SEC:
+    if (
+        not force_refresh
+        and cached
+        and (now - cached["fetched_at"]).total_seconds() < CACHE_TTL_SEC
+    ):
         return cached["matches"]
 
     logger.info(
@@ -234,6 +268,7 @@ async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provid
     date_str = provider_date.replace("-", "")
 
     try:
+        _record_espn_league_requests("full", len(LEAGUE_SLUG_MAP))
         summary = await espn_client.fetch_all_leagues_with_summary(session, LEAGUE_SLUG_MAP, date_str)
         results = summary["matches"]
         success_count = summary["success_count"]
@@ -291,7 +326,15 @@ async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provid
     else:
         matches = []
 
-    _football_scoreboard_cache[provider_date] = {"matches": matches, "fetched_at": now}
+    league_fetched_at = dict(cached.get("league_fetched_at", {})) if cached else {}
+    for league_id in succeeded_league_ids:
+        league_fetched_at[str(league_id)] = now
+    _football_scoreboard_cache[provider_date] = {
+        "matches": matches,
+        "fetched_at": now,
+        "full_fetched_at": now,
+        "league_fetched_at": league_fetched_at,
+    }
     _cache = matches
     _cache_date = provider_date
     _cache_ts = now
@@ -300,6 +343,227 @@ async def _get_cached_scoreboard_for_date(session: aiohttp.ClientSession, provid
         f"({success_count} league responses ok, {failure_count} failed)."
     )
     return matches
+
+
+def _espn_discovery_interval_sec(provider_date: str, now_utc: datetime) -> int:
+    try:
+        provider_day = datetime.strptime(provider_date, "%Y-%m-%d").date()
+    except ValueError:
+        return ESPN_FULL_DISCOVERY_INTERVAL_SEC
+    local_today = to_bot_tz(now_utc).date()
+    if provider_day < local_today:
+        return ESPN_PAST_DATE_DISCOVERY_INTERVAL_SEC
+    return ESPN_FULL_DISCOVERY_INTERVAL_SEC
+
+
+def _fixture_needs_active_espn_refresh(match: dict, now_utc: datetime) -> bool:
+    if match_lifecycle.is_live(match):
+        return True
+
+    if match_lifecycle.is_terminal(match):
+        if not match_lifecycle.is_ft(match):
+            return False
+        fixture_id = match_lifecycle.fixture_identity(match)
+        state = match_state.get_fixture_state(fixture_id) if fixture_id else None
+        if not state:
+            return True
+        if not (state.get("ft_announced") and state.get("memory_updated")):
+            return True
+        return (
+            state.get("event_completeness_status") == EVENTS_EXHAUSTED_MISSING
+            and state.get("ft_message_id") is not None
+        )
+
+    return match_lifecycle.should_track_fixture(match, now_utc)
+
+
+def _active_espn_league_ids(cached: dict, now_utc: datetime) -> set[int]:
+    league_ids: set[int] = set()
+    for match in cached.get("matches", []):
+        if not _fixture_needs_active_espn_refresh(match, now_utc):
+            continue
+        try:
+            league_id = int(match.get("league", {}).get("id"))
+        except (TypeError, ValueError):
+            continue
+        if league_id in LEAGUE_SLUG_MAP:
+            league_ids.add(league_id)
+    return league_ids
+
+
+async def _refresh_active_espn_leagues(
+    session: aiohttp.ClientSession,
+    provider_date: str,
+    cached: dict,
+    league_ids: set[int],
+    *,
+    force_refresh: bool = False,
+) -> list[dict]:
+    global _cache, _cache_date, _cache_ts
+
+    now = bot_now()
+    league_fetched_at = dict(cached.get("league_fetched_at", {}))
+    due_league_ids = set()
+    for league_id in league_ids:
+        last_refresh = league_fetched_at.get(str(league_id)) or cached.get("fetched_at")
+        if (
+            force_refresh
+            or last_refresh is None
+            or (now - last_refresh).total_seconds() >= CACHE_TTL_SEC
+        ):
+            due_league_ids.add(league_id)
+    if not due_league_ids:
+        return cached.get("matches", [])
+
+    slug_map = {
+        league_id: LEAGUE_SLUG_MAP[league_id]
+        for league_id in LEAGUE_SLUG_MAP
+        if league_id in due_league_ids
+    }
+    logger.info(
+        "[APIProvider] Refreshing ESPN active scoreboards for %s (%d/%d tracked leagues).",
+        provider_date,
+        len(slug_map),
+        len(LEAGUE_SLUG_MAP),
+    )
+    date_str = provider_date.replace("-", "")
+    try:
+        _record_espn_league_requests("active", len(slug_map))
+        summary = await espn_client.fetch_all_leagues_with_summary(session, slug_map, date_str)
+    except Exception as exc:
+        logger.error("[APIProvider] Unexpected active ESPN refresh error: %s", exc, exc_info=True)
+        summary = {
+            "matches": [],
+            "success_count": 0,
+            "failure_count": len(slug_map),
+            "succeeded_league_ids": [],
+            "failed_league_ids": list(slug_map),
+        }
+
+    success_count = int(summary.get("success_count", 0))
+    failure_count = int(summary.get("failure_count", 0))
+    succeeded_league_ids = {int(value) for value in summary.get("succeeded_league_ids", [])}
+    failed_league_ids = {int(value) for value in summary.get("failed_league_ids", [])}
+    if success_count == 0:
+        logger.warning(
+            "[APIProvider] Active ESPN refresh had no successful league responses (%d failed).",
+            failure_count,
+        )
+        _mark_espn_failure()
+        return cached.get("matches", [])
+
+    _mark_espn_success()
+    fresh_matches = list(summary.get("matches", []))
+    preserved_matches = [
+        match
+        for match in cached.get("matches", [])
+        if match.get("league", {}).get("id") not in succeeded_league_ids
+    ]
+    matches = _dedupe_by_fixture_id([*fresh_matches, *preserved_matches])
+    for league_id in succeeded_league_ids:
+        league_fetched_at[str(league_id)] = now
+    full_fetched_at = cached.get("full_fetched_at") or cached.get("fetched_at")
+    _football_scoreboard_cache[provider_date] = {
+        **cached,
+        "matches": matches,
+        "fetched_at": now,
+        "full_fetched_at": full_fetched_at,
+        "league_fetched_at": league_fetched_at,
+    }
+    _cache = matches
+    _cache_date = provider_date
+    _cache_ts = now
+    if failed_league_ids:
+        _log_espn_partial_refresh_warning(
+            provider_date,
+            "active-targeted",
+            failed_league_ids,
+            f"[APIProvider] ESPN active refresh preserved stale data for "
+            f"{len(failed_league_ids)} failed league(s) on {provider_date}.",
+        )
+    logger.info(
+        "[APIProvider] ESPN active refresh for %s: %d match(es), %d league response(s) ok, %d failed.",
+        provider_date,
+        len(matches),
+        success_count,
+        failure_count,
+    )
+    return matches
+
+
+async def _probe_espn_recovery(
+    session: aiohttp.ClientSession,
+    provider_dates: list[str],
+    now_utc: datetime,
+) -> bool:
+    if not provider_dates:
+        return False
+    local_today = to_bot_tz(now_utc).date().isoformat()
+    provider_date = local_today if local_today in provider_dates else provider_dates[0]
+    cached = _football_scoreboard_cache.get(provider_date)
+    if cached is None:
+        stale = bot_now() - timedelta(seconds=ESPN_FULL_DISCOVERY_INTERVAL_SEC + 1)
+        cached = {
+            "matches": [],
+            "fetched_at": stale,
+            "full_fetched_at": stale,
+            "league_fetched_at": {},
+        }
+    active_ids = _active_espn_league_ids(cached, now_utc)
+    probe_id = next(iter(active_ids), next(iter(LEAGUE_SLUG_MAP)))
+    logger.info(
+        "[APIProvider] Probing ESPN recovery with league %s on %s.",
+        probe_id,
+        provider_date,
+    )
+    await _refresh_active_espn_leagues(
+        session,
+        provider_date,
+        cached,
+        {probe_id},
+        force_refresh=True,
+    )
+    return _espn_healthy
+
+
+async def _get_discovery_scoreboard_for_date(
+    session: aiohttp.ClientSession,
+    provider_date: str,
+    now_utc: datetime,
+) -> list[dict]:
+    cached = _football_scoreboard_cache.get(provider_date)
+    if cached is None:
+        return await _get_cached_scoreboard_for_date(session, provider_date)
+    full_fetched_at = cached.get("full_fetched_at") or cached.get("fetched_at")
+    interval = _espn_discovery_interval_sec(provider_date, now_utc)
+    if full_fetched_at and (bot_now() - full_fetched_at).total_seconds() < interval:
+        return cached.get("matches", [])
+    return await _get_cached_scoreboard_for_date(session, provider_date, force_refresh=True)
+
+
+async def _get_active_scoreboard_for_date(
+    session: aiohttp.ClientSession,
+    provider_date: str,
+    now_utc: datetime,
+) -> list[dict]:
+    cached = _football_scoreboard_cache.get(provider_date)
+    if cached is None:
+        return await _get_cached_scoreboard_for_date(session, provider_date)
+
+    full_fetched_at = cached.get("full_fetched_at") or cached.get("fetched_at")
+    interval = _espn_discovery_interval_sec(provider_date, now_utc)
+    if full_fetched_at is None or (bot_now() - full_fetched_at).total_seconds() >= interval:
+        return await _get_cached_scoreboard_for_date(session, provider_date, force_refresh=True)
+
+    active_league_ids = _active_espn_league_ids(cached, now_utc)
+    if not active_league_ids:
+        return cached.get("matches", [])
+    return await _refresh_active_espn_leagues(
+        session,
+        provider_date,
+        cached,
+        active_league_ids,
+    )
 
 
 async def _get_cached_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
@@ -459,12 +723,23 @@ async def fetch_football_window(
     start_utc: datetime,
     end_utc: datetime,
     now_utc: datetime | None = None,
+    *,
+    refresh_mode: str = "discovery",
 ) -> list[dict]:
     now_utc = now_utc or utc_now()
     provider_dates = _provider_dates_for_window(start_utc, end_utc)
     if _should_try_espn_now():
+        if not _espn_healthy and not await _probe_espn_recovery(session, provider_dates, now_utc):
+            return []
+        if refresh_mode not in {"active", "discovery"}:
+            raise ValueError(f"Unsupported ESPN refresh mode: {refresh_mode}")
+        scoreboard_getter = (
+            _get_active_scoreboard_for_date
+            if refresh_mode == "active"
+            else _get_discovery_scoreboard_for_date
+        )
         date_results = await asyncio.gather(
-            *(_get_cached_scoreboard_for_date(session, provider_date) for provider_date in provider_dates)
+            *(scoreboard_getter(session, provider_date, now_utc) for provider_date in provider_dates)
         )
         matches = _dedupe_by_fixture_id([m for result in date_results for m in result])
         if not _espn_healthy:
@@ -496,7 +771,13 @@ async def fetch_football_window(
 async def fetch_relevant_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
     now_utc = now_utc or utc_now()
     start_utc, end_utc = match_lifecycle.provider_window(now_utc)
-    return await fetch_football_window(session, start_utc, end_utc, now_utc=now_utc)
+    return await fetch_football_window(
+        session,
+        start_utc,
+        end_utc,
+        now_utc=now_utc,
+        refresh_mode="active",
+    )
 
 
 async def fetch_display_football(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:

@@ -164,6 +164,7 @@ def build_lifecycle_summary(state: dict, now_utc: datetime) -> str:
     lookback = match_lifecycle.FOOTBALL_MATCH_LOOKBACK_HOURS()
     scheduler_status = scheduler.get_football_scheduler_status()
     tennis_scheduler_status = scheduler.get_tennis_scheduler_status()
+    espn_requests = status.get("espn_league_requests_today", {})
 
     lines = [
         "**Football Lifecycle Health**",
@@ -174,6 +175,12 @@ def build_lifecycle_summary(state: dict, now_utc: datetime) -> str:
         f"Prunable/stale: {prunable}",
         f"Provider: {provider}",
         f"Poll interval: {status.get('poll_interval')}s",
+        (
+            "ESPN league requests today: "
+            f"{espn_requests.get('total', 0)} "
+            f"(active {espn_requests.get('active_refresh', 0)}, "
+            f"discovery {espn_requests.get('full_discovery', 0)})"
+        ),
         f"Scheduler: {scheduler_status.get('mode', 'unknown')}",
         f"Next football check: {_fmt_utc_value(scheduler_status.get('next_football_check_utc'))}",
         f"Next schedule refresh: {_fmt_utc_value(scheduler_status.get('next_schedule_refresh_utc'))}",

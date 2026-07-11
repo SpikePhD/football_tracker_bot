@@ -28,6 +28,7 @@ class ApiStatus(commands.Cog):
         failures = status["consecutive_failures"]
         retry_after = status["retry_after"]   # bot-localized datetime or None
         interval = status["poll_interval"]
+        request_counts = status.get("espn_league_requests_today", {})
 
         if espn_healthy and failures == 0:
             # All good, ESPN primary
@@ -76,6 +77,13 @@ class ApiStatus(commands.Cog):
                     f"Failures:  {failures}",
                 ]
 
+        if request_counts:
+            lines.append(
+                "ESPN league requests today: "
+                f"{request_counts.get('total', 0)} total "
+                f"({request_counts.get('active_refresh', 0)} active, "
+                f"{request_counts.get('full_discovery', 0)} discovery)"
+            )
         await post_new_message_to_context(ctx, content="\n".join(lines))
 
 

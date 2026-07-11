@@ -107,6 +107,14 @@ Enrichment protections:
 - incomplete API-Football event cooldown
 - best-known event snapshots to prevent ESPN event-data downgrades
 
+ESPN request-volume protections:
+
+- cold cache and schedule/display discovery refresh every tracked league
+- current and future provider dates receive full discovery at most every 30 minutes
+- past provider dates receive full discovery at most every 6 hours
+- between discovery refreshes, only leagues containing live, near-kickoff, unresolved FT, or repairable exhausted-event fixtures are refreshed at the normal scoreboard TTL
+- provider health exposes daily full-discovery and active-refresh league-request counters
+
 The live loop, FT handler, and public `!matches` snapshot should all reuse `api_provider.enrich_fixture_events(...)` or `api_provider.enrich_fixtures(...)` before formatting football events. This keeps scorer details consistent across proactive live posts, final posts, startup snapshots, and command output.
 
 Event completeness is an explicit persisted lifecycle separate from fixture lifecycle. `complete` means goal events cover the score; `pending_enrichment` means a missing-event gap exists but retry/fallback work may still improve it; `exhausted_missing` means the warning is allowed to be shown for that fixture/score key. Formatters should show `⚠️ ... missing from event data` only when callers explicitly pass the exhausted state through.
