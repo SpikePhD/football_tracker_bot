@@ -2380,7 +2380,7 @@ async def _get_cached_tennis_scoreboard(
                     "fetched_at": now,
                 }
         if discovery_due:
-            _tennis_last_discovery_ts = now
+            _tennis_last_discovery_ts = now.astimezone(timezone.utc)
 
     _tennis_cache = _merge_tennis_source_cache(now)
     _tennis_cache_date = today

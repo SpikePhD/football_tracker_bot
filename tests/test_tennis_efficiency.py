@@ -187,6 +187,7 @@ class TennisProviderRequestTests(unittest.TestCase):
         self.assertEqual(status["requests"]["discovery"], 16)
         self.assertEqual(status["requests"]["targeted"], 1)
         self.assertEqual(status["requests"]["total"], 17)
+        self.assertTrue(status["last_discovery_utc"].endswith("+00:00"))
 
     def test_failed_source_preserves_last_success_until_stale_expiry(self):
         from modules import api_provider
