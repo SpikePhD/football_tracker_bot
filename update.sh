@@ -78,6 +78,13 @@ else
     echo "  bot_memory/tennis_state.json already exists - keeping state"
 fi
 
+if [ ! -f bot_memory/roster_lookup_state.json ]; then
+    echo '{"version": 1, "unsupported": {}}' > bot_memory/roster_lookup_state.json
+    echo "  Created bot_memory/roster_lookup_state.json"
+else
+    echo "  bot_memory/roster_lookup_state.json already exists - keeping state"
+fi
+
 echo ""
 echo "🔄 Restarting bot service ($SERVICE_NAME)..."
 if [ "${SKIP_SERVICE_RESTART:-0}" = "1" ]; then

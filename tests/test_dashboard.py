@@ -114,12 +114,14 @@ class DashboardHealthPublicationTests(unittest.TestCase):
 
         with patch.object(scheduler, "get_mode", return_value="normal"), \
              patch.object(scheduler.api_provider, "get_status", return_value={"active_provider": "espn"}), \
+             patch.object(scheduler.api_provider, "get_tennis_status", return_value={"requests": {"total": 4}}), \
              patch("cogs.version.get_version_info", return_value={"sha": "abc123"}), \
              patch("modules.dashboard_health.write_bot_health") as write:
             scheduler.write_dashboard_health_snapshot()
 
         self.assertEqual(write.call_args.kwargs["mode"], "normal")
         self.assertEqual(write.call_args.kwargs["commit"]["sha"], "abc123")
+        self.assertEqual(write.call_args.kwargs["tennis_provider"]["requests"]["total"], 4)
 
 
 class DashboardApiTests(unittest.IsolatedAsyncioTestCase):

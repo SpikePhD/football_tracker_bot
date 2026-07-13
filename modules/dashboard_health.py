@@ -23,11 +23,20 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
-def write_bot_health(*, commit: dict, provider: dict, football_scheduler: dict, tennis_scheduler: dict, mode: str) -> None:
+def write_bot_health(
+    *,
+    commit: dict,
+    provider: dict,
+    tennis_provider: dict,
+    football_scheduler: dict,
+    tennis_scheduler: dict,
+    mode: str,
+) -> None:
     save_json_path(HEALTH_PATH, _json_safe({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "commit": commit,
         "provider": provider,
+        "tennis_provider": tennis_provider,
         "football_scheduler": football_scheduler,
         "tennis_scheduler": tennis_scheduler,
         "mode": mode,

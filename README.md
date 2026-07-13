@@ -153,9 +153,16 @@ Key `operations` timezone/display/lifecycle settings:
 - `football_state_retention_hours` - stale state retention for non-terminal records
 - `football_expected_ft_minutes` - expected FT check offset from UTC kickoff
 - `football_max_live_duration_hours` - maximum live tracking duration before stale pruning
-- `tennis_pre_announce_hours` - rolling tennis scheduler wake lead; it does not send standalone upcoming posts, but keeps matches awake around start time so delayed ESPN live transitions are caught
+- `tennis_pre_announce_hours` - early start-watch lead time; it does not send standalone upcoming posts
+- `tennis_early_watch_poll_interval_sec` - polling cadence from the early watch boundary until the imminent window
+- `tennis_imminent_window_minutes` / `tennis_imminent_poll_interval_sec` - faster scheduled/delayed-start watch near kickoff
+- `tennis_live_poll_interval_sec` - cadence for live matches and unannounced finals
+- `tennis_full_discovery_interval_sec` - cadence for the full ATP/WTA default/yesterday/today/tomorrow discovery sweep while awake
+- `tennis_idle_discovery_interval_sec` - maximum discovery interval when no tennis work is active
+- `tennis_post_start_watch_hours` - delayed-start watch duration after scheduled start
 - `tennis_finished_retention_hours` - rolling window in which an unannounced tennis final remains eligible for retry, including matches that finish after local midnight
 - `live_update_edit_window_messages` - number of recent channel messages searched before a buried live post is replaced with a fresh update
+- `memory.roster_unsupported_retry_days` - retry delay for ESPN team roster endpoints confirmed unsupported by 400/404 responses
 - `operations.api_provider.espn_poll_interval_sec` - active ESPN polling interval while football is awake
 - `operations.api_provider.fallback_poll_interval_sec` - active fallback polling interval while football is awake
 

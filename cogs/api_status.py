@@ -29,6 +29,8 @@ class ApiStatus(commands.Cog):
         retry_after = status["retry_after"]   # bot-localized datetime or None
         interval = status["poll_interval"]
         request_counts = status.get("espn_league_requests_today", {})
+        tennis_status = api_provider.get_tennis_status()
+        tennis_counts = tennis_status.get("requests", {})
 
         if espn_healthy and failures == 0:
             # All good, ESPN primary
@@ -84,6 +86,17 @@ class ApiStatus(commands.Cog):
                 f"({request_counts.get('active_refresh', 0)} active, "
                 f"{request_counts.get('full_discovery', 0)} discovery)"
             )
+        lines.append(
+            "ESPN tennis endpoints today/process: "
+            f"{tennis_counts.get('total', 0)} total "
+            f"({tennis_counts.get('targeted', 0)} targeted, "
+            f"{tennis_counts.get('discovery', 0)} discovery; "
+            f"{tennis_counts.get('timeout', 0)} timeout, "
+            f"{tennis_counts.get('http_error', 0)} HTTP error, "
+            f"{tennis_counts.get('other_error', 0)} other error)."
+        )
+        if tennis_status.get("last_success_utc"):
+            lines.append(f"Tennis last success: {tennis_status['last_success_utc']}")
         await post_new_message_to_context(ctx, content="\n".join(lines))
 
 

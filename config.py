@@ -131,6 +131,13 @@ DOMESTIC_SLUG_GROUPS = _expect(tracking_cfg, "domestic_slug_groups", dict, "trac
 TENNIS_CACHE_TTL_SEC = int(_expect(ops_cfg, "tennis_cache_ttl_sec", int, "operations"))
 TENNIS_UPCOMING_DAYS = int(_expect(ops_cfg, "tennis_upcoming_days", int, "operations"))
 TENNIS_PRE_ANNOUNCE_HOURS = int(_expect(ops_cfg, "tennis_pre_announce_hours", int, "operations"))
+TENNIS_EARLY_WATCH_POLL_INTERVAL_SEC = int(_expect(ops_cfg, "tennis_early_watch_poll_interval_sec", int, "operations"))
+TENNIS_IMMINENT_WINDOW_MINUTES = int(_expect(ops_cfg, "tennis_imminent_window_minutes", int, "operations"))
+TENNIS_IMMINENT_POLL_INTERVAL_SEC = int(_expect(ops_cfg, "tennis_imminent_poll_interval_sec", int, "operations"))
+TENNIS_LIVE_POLL_INTERVAL_SEC = int(_expect(ops_cfg, "tennis_live_poll_interval_sec", int, "operations"))
+TENNIS_FULL_DISCOVERY_INTERVAL_SEC = int(_expect(ops_cfg, "tennis_full_discovery_interval_sec", int, "operations"))
+TENNIS_IDLE_DISCOVERY_INTERVAL_SEC = int(_expect(ops_cfg, "tennis_idle_discovery_interval_sec", int, "operations"))
+TENNIS_POST_START_WATCH_HOURS = int(_expect(ops_cfg, "tennis_post_start_watch_hours", int, "operations"))
 TENNIS_FINISHED_RETENTION_HOURS = _expect_int_range(
     ops_cfg,
     "tennis_finished_retention_hours",
@@ -179,6 +186,7 @@ LOG_EXPORT_MAX_BYTES = int(_expect(log_cfg, "export_max_bytes", int, "log"))
 
 MEMORY_STALE_THRESHOLD_DAYS = int(_expect(memory_cfg, "stale_threshold_days", int, "memory"))
 ESPN_CACHE_TTL_SEC = int(_expect(memory_cfg, "espn_cache_ttl_sec", int, "memory"))
+ROSTER_UNSUPPORTED_RETRY_DAYS = int(_expect(memory_cfg, "roster_unsupported_retry_days", int, "memory"))
 
 LLM_BASE_URL = _expect(llm_cfg, "base_url", str, "llm")
 LLM_MODEL = _expect(llm_cfg, "model", str, "llm")

@@ -15,9 +15,10 @@ from config import (
     LEAGUE_NAME_MAP,
     MEMORY_STALE_THRESHOLD_DAYS,
     ESPN_CACHE_TTL_SEC,
+    ROSTER_UNSUPPORTED_RETRY_DAYS,
 )
 from modules import match_lifecycle
-from modules.storage import save_json_path
+from modules.storage import load, save, save_json_path
 from utils.event_formatter import is_counted_goal_event, is_shootout_event, prune_goal_events_to_score
 from utils.time_utils import bot_now
 
@@ -32,6 +33,8 @@ PLAYER_STATS_KEYS = ("goals", "assists", "yellow_cards", "red_cards")
 # --- ESPN Cache (12h TTL) ---
 _espn_cache: Dict[str, Any] = {}
 _espn_cache_ts: Dict[str, datetime] = {}
+_ROSTER_LOOKUP_STATE_FILE = "roster_lookup_state.json"
+_ROSTER_LOOKUP_STATE_DEFAULT = {"version": 1, "unsupported": {}}
 
 
 def _default_memory() -> Dict[str, Any]:
@@ -211,24 +214,66 @@ async def update_league_standings(
 
 
 async def update_team_info(
-    session: Any, team_id: str, slug: str
+    session: Any, team_id: str, slug: str | list[str] | tuple[str, ...]
 ) -> Optional[Dict[str, Any]]:
     """
     Fetch team roster (players + coach) from ESPN and return normalized dict.
     Uses cache (12h TTL). On failure, returns None.
     """
-    cache_key = f"team_info_{team_id}"
+    slug_candidates = [slug] if isinstance(slug, str) else list(slug)
+    slug_candidates = [str(value) for value in dict.fromkeys(slug_candidates) if value]
+    cache_key = f"team_info_{team_id}_{'|'.join(slug_candidates)}"
     cached = _get_espn_cache(cache_key)
     if cached is not None:
-        logger.info(f"Using cached team info for {team_id}.")
+        logger.info("Roster refresh result team=%s status=cached candidates=%s", team_id, slug_candidates)
         return cached
+
+    lookup_state = load(_ROSTER_LOOKUP_STATE_FILE, _ROSTER_LOOKUP_STATE_DEFAULT)
+    unsupported = (lookup_state.get("unsupported") or {}).get(str(team_id))
+    if isinstance(unsupported, dict) and unsupported.get("slug_candidates") == slug_candidates:
+        try:
+            checked_at = datetime.fromisoformat(str(unsupported["checked_at"]).replace("Z", "+00:00"))
+            if bot_now() - checked_at < timedelta(days=ROSTER_UNSUPPORTED_RETRY_DAYS):
+                logger.info(
+                    "Roster refresh result team=%s status=unsupported_cached candidates=%s retry_days=%d",
+                    team_id,
+                    slug_candidates,
+                    ROSTER_UNSUPPORTED_RETRY_DAYS,
+                )
+                return None
+        except (KeyError, TypeError, ValueError):
+            pass
 
     try:
         from utils.espn_client import fetch_team_roster_espn
-        roster = await fetch_team_roster_espn(session, team_id, slug)
-        if roster is None:
-            logger.warning(f"No roster data returned for team {team_id}.")
+        fetch_result = await fetch_team_roster_espn(session, team_id, slug_candidates)
+        status = fetch_result.get("status")
+        if status == "unsupported":
+            lookup_state.setdefault("unsupported", {})[str(team_id)] = {
+                "checked_at": bot_now().isoformat(),
+                "slug_candidates": slug_candidates,
+                "attempts": fetch_result.get("attempts", []),
+            }
+            save(_ROSTER_LOOKUP_STATE_FILE, lookup_state)
+            logger.info(
+                "Roster refresh result team=%s status=unsupported candidates=%s attempts=%s",
+                team_id,
+                slug_candidates,
+                fetch_result.get("attempts", []),
+            )
             return None
+        if status != "ok" or not isinstance(fetch_result.get("roster"), dict):
+            logger.warning(
+                "Roster refresh result team=%s status=transient_error candidates=%s attempts=%s",
+                team_id,
+                slug_candidates,
+                fetch_result.get("attempts", []),
+            )
+            return None
+        roster = fetch_result["roster"]
+        if str(team_id) in (lookup_state.get("unsupported") or {}):
+            lookup_state["unsupported"].pop(str(team_id), None)
+            save(_ROSTER_LOOKUP_STATE_FILE, lookup_state)
         result = {
             "name": roster.get("name", f"Team {team_id}"),
             "coach": roster.get("coach", "Unknown"),
@@ -236,10 +281,48 @@ async def update_team_info(
             "last_updated": bot_now().isoformat(),
         }
         _set_espn_cache(cache_key, result)
+        logger.info(
+            "Roster refresh result team=%s status=ok candidates=%s scope=%s players=%d",
+            team_id,
+            slug_candidates,
+            fetch_result.get("scope"),
+            len(result["players"]),
+        )
         return result
     except Exception as e:
-        logger.error(f"Failed to update team info for {team_id}: {e}")
+        logger.error(
+            "Roster refresh result team=%s status=error candidates=%s error=%s",
+            team_id,
+            slug_candidates,
+            type(e).__name__,
+            exc_info=True,
+        )
         return None
+
+
+def _team_slug_candidates(memory: Dict[str, Any]) -> Dict[str, list[str]]:
+    """Derive stable league-scoped roster candidates from standings and matches."""
+    candidates: Dict[str, list[str]] = {}
+
+    def add(team_id: Any, league_id: Any) -> None:
+        try:
+            slug_value = LEAGUE_SLUG_MAP.get(int(league_id))
+        except (TypeError, ValueError):
+            return
+        if not slug_value or team_id in (None, ""):
+            return
+        values = candidates.setdefault(str(team_id), [])
+        if slug_value not in values:
+            values.append(slug_value)
+
+    for league_id, league_data in memory.get("leagues", {}).items():
+        for team in league_data.get("standings", []):
+            add(team.get("team_id"), league_id)
+    for match_data in memory.get("matches", {}).values():
+        league_id = match_data.get("league_id")
+        add((match_data.get("home") or {}).get("id"), league_id)
+        add((match_data.get("away") or {}).get("id"), league_id)
+    return candidates
 
 
 async def update_match_data(
@@ -368,24 +451,22 @@ async def update_all_memory(session: Any) -> None:
 
     # Update team info for all teams in tracked leagues
     # First, collect all unique team IDs from existing matches and leagues
-    team_ids_to_update = set()
+    team_slug_candidates = _team_slug_candidates(memory)
     for league_data in memory.get("leagues", {}).values():
         for team in league_data.get("standings", []):
             team_id = team.get("team_id")
             if team_id:
-                team_ids_to_update.add(str(team_id))
+                team_slug_candidates.setdefault(str(team_id), [])
 
     # Also include teams from existing matches
     for match_data in memory.get("matches", {}).values():
-        team_ids_to_update.add(str(match_data["home"]["id"]))
-        team_ids_to_update.add(str(match_data["away"]["id"]))
+        team_slug_candidates.setdefault(str(match_data["home"]["id"]), [])
+        team_slug_candidates.setdefault(str(match_data["away"]["id"]), [])
 
     # Update team info (roster + coach)
     team_jobs: list[tuple[str, Any]] = []
-    for team_id in team_ids_to_update:
-        # Use Serie A slug as default (most teams will be in Serie A)
-        slug = LEAGUE_SLUG_MAP.get(135, "ita.1")
-        team_jobs.append((team_id, update_team_info(session, team_id, slug)))
+    for team_id, slug_candidates in team_slug_candidates.items():
+        team_jobs.append((team_id, update_team_info(session, team_id, slug_candidates)))
 
     team_ids = [team_id for team_id, _ in team_jobs]
     team_results = await asyncio.gather(*(job for _, job in team_jobs), return_exceptions=True)
@@ -447,24 +528,23 @@ async def update_standings_only(session: Any) -> None:
 async def update_team_info_only(session: Any) -> None:
     """Update only team info (called weekly on Sunday)."""
     memory = load_memory()
-    team_ids_to_update = set()
+    team_slug_candidates = _team_slug_candidates(memory)
 
     # Collect team IDs from leagues and matches
     for league_data in memory.get("leagues", {}).values():
         for team in league_data.get("standings", []):
             team_id = team.get("team_id")
             if team_id:
-                team_ids_to_update.add(str(team_id))
+                team_slug_candidates.setdefault(str(team_id), [])
 
     for match_data in memory.get("matches", {}).values():
-        team_ids_to_update.add(str(match_data["home"]["id"]))
-        team_ids_to_update.add(str(match_data["away"]["id"]))
+        team_slug_candidates.setdefault(str(match_data["home"]["id"]), [])
+        team_slug_candidates.setdefault(str(match_data["away"]["id"]), [])
 
     # Update team info
     team_jobs: list[tuple[str, Any]] = []
-    for team_id in team_ids_to_update:
-        slug = LEAGUE_SLUG_MAP.get(135, "ita.1")  # Default to Serie A
-        team_jobs.append((team_id, update_team_info(session, team_id, slug)))
+    for team_id, slug_candidates in team_slug_candidates.items():
+        team_jobs.append((team_id, update_team_info(session, team_id, slug_candidates)))
 
     team_ids = [team_id for team_id, _ in team_jobs]
     results = await asyncio.gather(*(job for _, job in team_jobs), return_exceptions=True)

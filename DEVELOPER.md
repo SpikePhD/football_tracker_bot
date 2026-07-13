@@ -134,12 +134,14 @@ Football:
 
 Tennis:
 
-- `_tennis_poll_needed(...)` wakes for live matches, unannounced FT matches inside `tennis_finished_retention_hours`, or `NS` matches inside the configured start-watch window.
+- `_tennis_poll_decision(...)` returns one `TennisPollDecision` carrying the phase, interval, reason, timestamp, and fetched match snapshot. Reuse that snapshot for processing.
+- Tennis uses idle, early-watch, imminent/delayed-start, and live/unannounced-FT polling phases. Full ATP/WTA discovery runs periodically; intermediate cycles target only known tour/date pairs.
+- Per-source successful responses replace that source. Failed sources retain their last successful data for at most twice the full-discovery interval.
 - When awake, `tennis_loop.run_tennis_loop(...)` handles live/FT posts/upserts and dedupe. It does not send standalone upcoming tennis posts; upcoming matches are shown by snapshots and tennis commands.
 - Tennis lifecycle state is rolling across local midnight. `tennis_state.json` version 2 stores one record per canonical match, including the live Discord message ID, so a restart edits the existing live post and retains FT dedupe. Do not reintroduce daily ID clearing or loose top-level ID lists.
 - Tennis FT dedupe must only be persisted after Discord confirms the message send. Retirement and walkover finals may be complete without a conventionally complete set list when ESPN supplies a winner and terminal reason.
 - Load tennis state before scheduler decisions and prune only expired terminal records; never prune live or future records.
-- When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at most every 6 hours or wakes at `tennis_pre_announce_hours` before the next start. If that wake is already due but no work is needed, it schedules the next normal tennis poll instead of returning an immediate one-second loop.
+- When asleep, `_plan_tennis_sleep_until_next_match(...)` refreshes future schedule at the configured idle interval or wakes at `tennis_pre_announce_hours` before the next start. If that wake is already due but no work is needed, it schedules the next live-cadence poll instead of returning an immediate one-second loop.
 
 Do not reintroduce minute-by-minute provider polling while a sport is idle. The main loop may still wake for lightweight local daily routines.
 

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from math import ceil
 
@@ -7,6 +8,12 @@ from config import (
     CHANNEL_ID,
     FOOTBALL_MAX_LIVE_DURATION_HOURS,
     FOOTBALL_PREMATCH_WINDOW_HOURS,
+    TENNIS_EARLY_WATCH_POLL_INTERVAL_SEC,
+    TENNIS_IDLE_DISCOVERY_INTERVAL_SEC,
+    TENNIS_IMMINENT_POLL_INTERVAL_SEC,
+    TENNIS_IMMINENT_WINDOW_MINUTES,
+    TENNIS_LIVE_POLL_INTERVAL_SEC,
+    TENNIS_POST_START_WATCH_HOURS,
     TENNIS_PRE_ANNOUNCE_HOURS,
 )
 from modules import api_provider, match_lifecycle
@@ -27,9 +34,9 @@ _last_standings_update_date: date | None = None
 _last_team_info_update_date: date | None = None
 _last_provider_was_espn: bool | None = None
 _FOOTBALL_SLEEP_REFRESH_SEC = 21600
-_TENNIS_INTERVAL_SEC = 60
-_TENNIS_SLEEP_REFRESH_SEC = 21600
-_TENNIS_POST_START_WATCH_HOURS = 4
+_TENNIS_INTERVAL_SEC = TENNIS_LIVE_POLL_INTERVAL_SEC  # compatibility alias
+_TENNIS_SLEEP_REFRESH_SEC = TENNIS_IDLE_DISCOVERY_INTERVAL_SEC
+_TENNIS_POST_START_WATCH_HOURS = TENNIS_POST_START_WATCH_HOURS
 _football_scheduler_state = {
     "mode": "sleeping",
     "next_football_check_utc": None,
@@ -54,6 +61,23 @@ _tennis_scheduler_state = {
     "sleep_reason_detail": None,
 }
 _last_logged_tennis_state: tuple | None = None
+
+
+@dataclass(frozen=True)
+class TennisPollDecision:
+    needed: bool
+    phase: str
+    interval_sec: int
+    reason: str
+    reason_detail: str
+    matches: tuple[dict, ...]
+    timestamp: datetime
+
+    def __iter__(self):
+        """Retain tuple-unpacking compatibility for internal callers and tests."""
+        yield self.needed
+        yield self.reason
+        yield self.reason_detail
 
 
 def _football_scheduler_lookup_horizon_hours() -> int:
@@ -179,6 +203,7 @@ def write_dashboard_health_snapshot() -> None:
     write_bot_health(
         commit=get_version_info(),
         provider=api_provider.get_status(),
+        tennis_provider=api_provider.get_tennis_status(),
         football_scheduler=get_football_scheduler_status(),
         tennis_scheduler=get_tennis_scheduler_status(),
         mode=get_mode(),
@@ -353,10 +378,20 @@ def _tennis_sleep_reason_detail(
     return f"next_refresh={schedule_refresh.astimezone(timezone.utc).isoformat()}"
 
 
-async def _plan_tennis_sleep_until_next_match(bot, now_utc: datetime) -> datetime:
+async def _plan_tennis_sleep_until_next_match(
+    bot,
+    now_utc: datetime,
+    matches: list[dict] | tuple[dict, ...] | None = None,
+) -> datetime:
     schedule_refresh = now_utc + timedelta(seconds=_TENNIS_SLEEP_REFRESH_SEC)
-    matches = await api_provider.fetch_upcoming_tennis_schedule(bot.http_session, now_utc)
-    start, wake = _next_scheduled_tennis_wake(matches, now_utc)
+    if matches is None:
+        matches = await api_provider.fetch_upcoming_tennis_schedule(bot.http_session, now_utc)
+    else:
+        matches = [
+            match for match in matches
+            if (_tennis_start_utc(match) or now_utc) >= now_utc
+        ]
+    start, wake = _next_scheduled_tennis_wake(list(matches), now_utc)
     next_check = min(schedule_refresh, wake) if wake else schedule_refresh
     sleep_reason = "next_tennis_wake" if wake else "schedule_refresh"
     if next_check <= now_utc:
@@ -469,14 +504,15 @@ async def run_football_cycle(
 
 
 async def _tennis_poll_needed(bot, now_utc: datetime) -> bool:
-    needed, _reason, _detail = await _tennis_poll_decision(bot, now_utc)
-    return needed
+    decision = await _tennis_poll_decision(bot, now_utc)
+    return decision.needed
 
 
-async def _tennis_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]:
+async def _tennis_poll_decision(bot, now_utc: datetime) -> TennisPollDecision:
     tennis_loop.ensure_tennis_state_loaded()
     tennis_loop.prune_tennis_state(now_utc)
     matches = await api_provider.fetch_tennis_day(bot.http_session)
+    selected: tuple[int, str, str, str] | None = None
     for match in matches:
         track_id = _tennis_track_id(match)
         if not track_id:
@@ -484,19 +520,68 @@ async def _tennis_poll_decision(bot, now_utc: datetime) -> tuple[bool, str, str]
         status = match.get("status", {}).get("short")
         if status == "LIVE":
             if track_id not in tennis_loop.final_announced_ids:
-                return True, "tennis_live", _tennis_poll_reason_detail(match)
+                selected = (
+                    TENNIS_LIVE_POLL_INTERVAL_SEC,
+                    "live",
+                    "tennis_live",
+                    _tennis_poll_reason_detail(match),
+                )
+                break
             continue
         if status == "FT":
             if (
                 track_id not in tennis_loop.final_announced_ids
                 and tennis_final_within_retention(match, now_utc)
             ):
-                return True, "tennis_ft_due", _tennis_poll_reason_detail(match)
+                selected = (
+                    TENNIS_LIVE_POLL_INTERVAL_SEC,
+                    "live",
+                    "tennis_ft_due",
+                    _tennis_poll_reason_detail(match),
+                )
+                break
             continue
         if status == "NS":
             if _tennis_in_start_watch_window(match, now_utc):
-                return True, "tennis_start_watch", _tennis_poll_reason_detail(match)
-    return False, "no_relevant_tennis", f"matches={len(matches)}"
+                start = _tennis_start_utc(match)
+                imminent_at = start - timedelta(minutes=TENNIS_IMMINENT_WINDOW_MINUTES) if start else now_utc
+                if now_utc >= imminent_at:
+                    candidate = (
+                        TENNIS_IMMINENT_POLL_INTERVAL_SEC,
+                        "imminent",
+                        "tennis_start_watch",
+                        _tennis_poll_reason_detail(match),
+                    )
+                else:
+                    candidate = (
+                        TENNIS_EARLY_WATCH_POLL_INTERVAL_SEC,
+                        "early",
+                        "tennis_start_watch",
+                        _tennis_poll_reason_detail(match),
+                    )
+                if selected is None or candidate[0] < selected[0]:
+                    selected = candidate
+
+    if selected is None:
+        return TennisPollDecision(
+            needed=False,
+            phase="idle",
+            interval_sec=TENNIS_IDLE_DISCOVERY_INTERVAL_SEC,
+            reason="no_relevant_tennis",
+            reason_detail=f"matches={len(matches)}",
+            matches=tuple(matches),
+            timestamp=now_utc,
+        )
+    interval, phase, reason, detail = selected
+    return TennisPollDecision(
+        needed=True,
+        phase=phase,
+        interval_sec=interval,
+        reason=reason,
+        reason_detail=detail,
+        matches=tuple(matches),
+        timestamp=now_utc,
+    )
 
 
 async def run_operations_loop(bot) -> None:
@@ -561,21 +646,29 @@ async def run_operations_loop(bot) -> None:
 
         if now >= next_tennis_check:
             try:
-                tennis_needed, wake_reason, wake_reason_detail = await _tennis_poll_decision(bot, now)
-                if tennis_needed:
-                    await tennis_loop.run_tennis_loop(bot)
-                    next_tennis_check = utc_now() + timedelta(seconds=_TENNIS_INTERVAL_SEC)
+                tennis_decision = await _tennis_poll_decision(bot, now)
+                if tennis_decision.needed:
+                    await tennis_loop.run_tennis_loop(
+                        bot,
+                        matches=tennis_decision.matches,
+                        now_utc=tennis_decision.timestamp,
+                    )
+                    next_tennis_check = utc_now() + timedelta(seconds=tennis_decision.interval_sec)
                     _set_tennis_scheduler_state(
                         mode="awake",
                         next_tennis_check_utc=next_tennis_check,
-                        wake_reason=wake_reason,
-                        wake_reason_detail=wake_reason_detail,
+                        wake_reason=tennis_decision.reason,
+                        wake_reason_detail=tennis_decision.reason_detail,
                     )
                 else:
-                    next_tennis_check = await _plan_tennis_sleep_until_next_match(bot, utc_now())
+                    next_tennis_check = await _plan_tennis_sleep_until_next_match(
+                        bot,
+                        utc_now(),
+                        matches=tennis_decision.matches,
+                    )
             except Exception as e:
                 logger.error("[Scheduler] Tennis cycle failed: %s", e, exc_info=True)
-                next_tennis_check = utc_now() + timedelta(seconds=_TENNIS_INTERVAL_SEC)
+                next_tennis_check = utc_now() + timedelta(seconds=TENNIS_LIVE_POLL_INTERVAL_SEC)
                 _set_tennis_scheduler_state(
                     mode="awake",
                     next_tennis_check_utc=next_tennis_check,

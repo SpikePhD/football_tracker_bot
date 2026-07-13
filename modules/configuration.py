@@ -35,6 +35,18 @@ _FIELD_DESCRIPTIONS = {
     "operations.live_update_edit_window_messages": (
         "Number of recent channel messages searched before a fresh live update is posted."
     ),
+    "operations.tennis_pre_announce_hours": "Lead time in hours for the early tennis start-watch phase.",
+    "operations.tennis_early_watch_poll_interval_sec": "Polling interval while a scheduled match is in early start watch.",
+    "operations.tennis_imminent_window_minutes": "Minutes before scheduled start when faster imminent polling begins.",
+    "operations.tennis_imminent_poll_interval_sec": "Polling interval near scheduled start while the match is still scheduled.",
+    "operations.tennis_live_poll_interval_sec": "Polling interval while tennis is live or a final result is pending.",
+    "operations.tennis_full_discovery_interval_sec": "Interval between full ATP/WTA discovery refreshes while tennis polling is awake.",
+    "operations.tennis_idle_discovery_interval_sec": "Maximum interval between tennis discovery refreshes while idle.",
+    "operations.tennis_post_start_watch_hours": "Hours after scheduled start to keep watching a delayed match.",
+    "memory.roster_unsupported_retry_days": "Days before retrying an ESPN roster endpoint known to be unsupported.",
+}
+_FIELD_LABELS = {
+    "operations.tennis_pre_announce_hours": "Early Start-Watch Lead Time (Hours)",
 }
 
 _SECTION_LABELS = {
@@ -60,6 +72,13 @@ _FIELD_BOUNDS = {
     "operations.tennis_cache_ttl_sec": {"minimum": 1},
     "operations.tennis_upcoming_days": {"minimum": 1},
     "operations.tennis_pre_announce_hours": {"minimum": 0},
+    "operations.tennis_early_watch_poll_interval_sec": {"minimum": 60},
+    "operations.tennis_imminent_window_minutes": {"minimum": 1},
+    "operations.tennis_imminent_poll_interval_sec": {"minimum": 30},
+    "operations.tennis_live_poll_interval_sec": {"minimum": 15},
+    "operations.tennis_full_discovery_interval_sec": {"minimum": 60},
+    "operations.tennis_idle_discovery_interval_sec": {"minimum": 300},
+    "operations.tennis_post_start_watch_hours": {"minimum": 1},
     "operations.tennis_finished_retention_hours": {"minimum": 1},
     "operations.live_update_edit_window_messages": {"minimum": 1},
 }
@@ -243,6 +262,10 @@ def validate_config(cfg: dict) -> dict:
         "football_state_retention_hours", "football_expected_ft_minutes",
         "football_max_live_duration_hours", "tennis_cache_ttl_sec",
         "tennis_upcoming_days", "tennis_pre_announce_hours",
+        "tennis_early_watch_poll_interval_sec", "tennis_imminent_window_minutes",
+        "tennis_imminent_poll_interval_sec", "tennis_live_poll_interval_sec",
+        "tennis_full_discovery_interval_sec", "tennis_idle_discovery_interval_sec",
+        "tennis_post_start_watch_hours",
         "tennis_finished_retention_hours", "live_update_edit_window_messages",
         "api_provider",
     }, "operations")
@@ -261,10 +284,29 @@ def validate_config(cfg: dict) -> dict:
         "tennis_cache_ttl_sec": 1,
         "tennis_upcoming_days": 1,
         "tennis_pre_announce_hours": 0,
+        "tennis_early_watch_poll_interval_sec": 60,
+        "tennis_imminent_window_minutes": 1,
+        "tennis_imminent_poll_interval_sec": 30,
+        "tennis_live_poll_interval_sec": 15,
+        "tennis_full_discovery_interval_sec": 60,
+        "tennis_idle_discovery_interval_sec": 300,
+        "tennis_post_start_watch_hours": 1,
         "tennis_finished_retention_hours": 1,
         "live_update_edit_window_messages": 1,
     }.items():
         _positive_int(operations, key, "operations", minimum)
+    if not (
+        operations["tennis_early_watch_poll_interval_sec"]
+        >= operations["tennis_imminent_poll_interval_sec"]
+        >= operations["tennis_live_poll_interval_sec"]
+    ):
+        raise ConfigurationError(
+            "Tennis polling intervals must satisfy early watch >= imminent >= live."
+        )
+    if operations["tennis_cache_ttl_sec"] >= operations["tennis_live_poll_interval_sec"]:
+        raise ConfigurationError("operations.tennis_cache_ttl_sec must be shorter than the live polling interval.")
+    if operations["tennis_pre_announce_hours"] * 60 < operations["tennis_imminent_window_minutes"]:
+        raise ConfigurationError("Tennis start-watch lead time must cover the imminent window.")
     provider = _required(operations, "api_provider", dict, "operations")
     _exact_keys(provider, {
         "failure_threshold", "retry_interval_sec", "espn_poll_interval_sec",
@@ -297,9 +339,10 @@ def validate_config(cfg: dict) -> dict:
         raise ConfigurationError("log.export_default_lines cannot exceed log.export_max_lines.")
 
     memory = _required(cfg, "memory", dict, "")
-    _exact_keys(memory, {"stale_threshold_days", "espn_cache_ttl_sec"}, "memory")
+    _exact_keys(memory, {"stale_threshold_days", "espn_cache_ttl_sec", "roster_unsupported_retry_days"}, "memory")
     _positive_int(memory, "stale_threshold_days", "memory")
     _positive_int(memory, "espn_cache_ttl_sec", "memory")
+    _positive_int(memory, "roster_unsupported_retry_days", "memory")
 
     llm = _required(cfg, "llm", dict, "")
     _exact_keys(llm, {"base_url", "model", "system_prompt"}, "llm")
@@ -404,7 +447,10 @@ def configuration_catalog(base_config: dict | None = None) -> list[dict]:
             "path": path,
             "category": category,
             "section": _SECTION_LABELS.get(category, category.title()),
-            "label": path.rsplit(".", 1)[-1].replace("_", " ").title(),
+            "label": _FIELD_LABELS.get(
+                path,
+                path.rsplit(".", 1)[-1].replace("_", " ").title(),
+            ),
             "description": _FIELD_DESCRIPTIONS.get(
                 path,
                 f"Restart-required configuration value for {path}.",

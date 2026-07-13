@@ -30,6 +30,7 @@ from config import (
     LEAGUE_SLUG_MAP,
     PROVIDER_TEAM_ALIASES,
     TENNIS_CACHE_TTL_SEC,
+    TENNIS_FULL_DISCOVERY_INTERVAL_SEC,
     TENNIS_UPCOMING_DAYS,
     build_league_slugs,
 )
@@ -50,7 +51,7 @@ from utils.event_formatter import (
     normalize_api_football_events,
     prune_goal_events_to_score,
 )
-from utils.tennis_lifecycle import tennis_final_data_ready
+from utils.tennis_lifecycle import tennis_final_data_ready, tennis_record_preference
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,19 @@ ESPN_PAST_DATE_DISCOVERY_INTERVAL_SEC = 6 * 60 * 60
 _tennis_cache: list[dict] = []
 _tennis_cache_date: str | None = None
 _tennis_cache_ts: datetime | None = None
+_tennis_source_cache: dict[tuple[str, str | None], dict] = {}
+_tennis_last_discovery_ts: datetime | None = None
+_tennis_stats_date: str | None = None
+_tennis_stats = {
+    "discovery": 0,
+    "targeted": 0,
+    "successful": 0,
+    "timeout": 0,
+    "http_error": 0,
+    "other_error": 0,
+    "total": 0,
+}
+_tennis_last_success_ts: datetime | None = None
 _TRACKED_SLUGS: set[str] = set(LEAGUE_SLUG_MAP.values())
 _enrich_attempted_date: str | None = None
 _enrich_tick_key: str | None = None
@@ -2228,78 +2242,165 @@ async def enrich_fixtures(session: aiohttp.ClientSession, fixtures: list) -> lis
     ))
 
 
-async def _get_cached_tennis_scoreboard(session: aiohttp.ClientSession) -> list[dict]:
-    """
-    Returns tracked tennis matches from a rolling window around today.
-    Cached for TENNIS_CACHE_TTL_SEC seconds; invalidated at configured local midnight.
-    """
-    global _tennis_cache, _tennis_cache_date, _tennis_cache_ts
-
+def _reset_tennis_stats_if_needed() -> None:
+    global _tennis_stats_date
     today = get_bot_local_date_string()
-    now = bot_now()
+    if _tennis_stats_date == today:
+        return
+    _tennis_stats_date = today
+    for key in _tennis_stats:
+        _tennis_stats[key] = 0
 
-    if (
-        _tennis_cache_date == today
-        and _tennis_cache_ts is not None
-        and (now - _tennis_cache_ts).total_seconds() < TENNIS_CACHE_TTL_SEC
-    ):
-        return _tennis_cache
 
-    base_day = bot_now().date()
+def _record_tennis_source_results(
+    refresh_type: str,
+    results: list[espn_tennis_client.TennisSourceResult],
+) -> None:
+    global _tennis_last_success_ts
+    _reset_tennis_stats_if_needed()
+    _tennis_stats[refresh_type] += len(results)
+    _tennis_stats["total"] += len(results)
+    for result in results:
+        if result.ok:
+            _tennis_stats["successful"] += 1
+            _tennis_last_success_ts = utc_now()
+        elif result.error_kind == "timeout":
+            _tennis_stats["timeout"] += 1
+        elif result.error_kind == "http":
+            _tennis_stats["http_error"] += 1
+        else:
+            _tennis_stats["other_error"] += 1
+
+
+def get_tennis_status() -> dict:
+    """Return process-local, daily-reset ESPN tennis endpoint metrics."""
+    _reset_tennis_stats_if_needed()
+    return {
+        "counter_period": "local_day_or_process_restart",
+        "counter_date": _tennis_stats_date,
+        "requests": dict(_tennis_stats),
+        "last_success_utc": _tennis_last_success_ts.isoformat() if _tennis_last_success_ts else None,
+        "last_discovery_utc": _tennis_last_discovery_ts.isoformat() if _tennis_last_discovery_ts else None,
+        "cached_sources": len(_tennis_source_cache),
+    }
+
+
+def _tennis_full_sources(now: datetime) -> list[tuple[str, str | None]]:
+    base_day = now.date()
     date_params: list[str | None] = [
         None,
         (base_day - timedelta(days=1)).strftime("%Y%m%d"),
         base_day.strftime("%Y%m%d"),
         (base_day + timedelta(days=1)).strftime("%Y%m%d"),
     ]
+    return [
+        (tour, date_str)
+        for tour in espn_tennis_client.ESPN_TENNIS_TOURS
+        for date_str in date_params
+    ]
 
-    try:
-        day_batches = await asyncio.gather(
-            *(espn_tennis_client.fetch_tracked_tennis_matches(session, ds) for ds in date_params),
-            return_exceptions=True,
-        )
-    except Exception as e:
-        logger.warning(f"[APIProvider] Tennis fetch error: {e}", exc_info=True)
-        day_batches = []
+
+def _tennis_target_sources(matches: list[dict]) -> list[tuple[str, str | None]]:
+    sources: list[tuple[str, str | None]] = []
+    for match in matches:
+        tour = str(match.get("tour") or "").lower()
+        if tour not in espn_tennis_client.ESPN_TENNIS_TOURS:
+            continue
+        start = _match_dt_bot_tz(match.get("start_time"))
+        if start is None:
+            continue
+        sources.append((tour, start.strftime("%Y%m%d")))
+    return list(dict.fromkeys(sources))
+
+
+def _merge_tennis_source_cache(now: datetime) -> list[dict]:
+    stale_after = timedelta(seconds=2 * TENNIS_FULL_DISCOVERY_INTERVAL_SEC)
+    stale_keys = [
+        key for key, cached in _tennis_source_cache.items()
+        if now - cached["fetched_at"] > stale_after
+    ]
+    for key in stale_keys:
+        _tennis_source_cache.pop(key, None)
 
     deduped: dict[str, dict] = {}
-    for batch in day_batches:
-        if isinstance(batch, Exception) or not isinstance(batch, list):
-            continue
-        for match in batch:
+    for cached in _tennis_source_cache.values():
+        for match in cached["matches"]:
             key = _tennis_identity_key(match)
             existing = deduped.get(key)
-            if existing is None or _tennis_match_rank(match) > _tennis_match_rank(existing):
+            if existing is None or tennis_record_preference(match) > tennis_record_preference(existing):
                 deduped[key] = match
 
-    matches = []
+    merged_matches = []
     for key, match in deduped.items():
         merged = dict(match)
         merged["canonical_id"] = key
-        matches.append(merged)
+        merged_matches.append(merged)
+    merged_matches.sort(key=lambda item: item.get("start_time") or "")
+    return merged_matches
 
-    matches.sort(key=lambda m: m.get("start_time") or "")
 
-    if not matches and _tennis_cache_date == today and _tennis_cache:
-        logger.warning(
-            "[APIProvider] Tennis refresh returned 0 tracked matches; keeping previous same-day cache."
-        )
-        _tennis_cache_ts = now
+async def _get_cached_tennis_scoreboard(
+    session: aiohttp.ClientSession,
+    *,
+    force_full: bool = False,
+) -> list[dict]:
+    """
+    Returns tracked tennis matches from a rolling window around today.
+    Cached for TENNIS_CACHE_TTL_SEC seconds; invalidated at configured local midnight.
+    """
+    global _tennis_cache, _tennis_cache_date, _tennis_cache_ts, _tennis_last_discovery_ts
+
+    today = get_bot_local_date_string()
+    now = bot_now()
+    discovery_due = (
+        force_full
+        or _tennis_last_discovery_ts is None
+        or (now - _tennis_last_discovery_ts).total_seconds() >= TENNIS_FULL_DISCOVERY_INTERVAL_SEC
+    )
+
+    if (
+        not force_full
+        and not discovery_due
+        and _tennis_cache_date == today
+        and _tennis_cache_ts is not None
+        and (now - _tennis_cache_ts).total_seconds() < TENNIS_CACHE_TTL_SEC
+    ):
         return _tennis_cache
 
-    _tennis_cache = matches
+    sources = _tennis_full_sources(now) if discovery_due else _tennis_target_sources(_tennis_cache)
+    refresh_type = "discovery" if discovery_due else "targeted"
+
+    if sources:
+        results = await espn_tennis_client.fetch_tennis_sources(session, sources)
+        _record_tennis_source_results(refresh_type, results)
+        for result in results:
+            if result.ok:
+                _tennis_source_cache[(result.tour, result.date_str)] = {
+                    "matches": list(result.matches),
+                    "fetched_at": now,
+                }
+        if discovery_due:
+            _tennis_last_discovery_ts = now
+
+    _tennis_cache = _merge_tennis_source_cache(now)
     _tennis_cache_date = today
     _tennis_cache_ts = now
     logger.info(
-        f"[APIProvider] Tennis scoreboard fetched: {len(matches)} tracked match(es) "
-        f"across default scoreboard plus {len(date_params) - 1} dated day(s)."
+        "[APIProvider] Tennis %s refresh: %d endpoint(s), %d tracked match(es).",
+        refresh_type,
+        len(sources),
+        len(_tennis_cache),
     )
     return _tennis_cache
 
 
-async def fetch_tennis_day(session: aiohttp.ClientSession) -> list[dict]:
+async def fetch_tennis_day(
+    session: aiohttp.ClientSession,
+    *,
+    force_full: bool = False,
+) -> list[dict]:
     """Tracked tennis matches from the rolling ESPN ATP/WTA scoreboard window."""
-    return await _get_cached_tennis_scoreboard(session)
+    return await _get_cached_tennis_scoreboard(session, force_full=force_full)
 
 
 async def fetch_upcoming_tennis_schedule(session: aiohttp.ClientSession, now_utc: datetime | None = None) -> list[dict]:
@@ -2358,29 +2459,6 @@ def _tennis_identity_key(match: dict) -> str:
         except Exception:
             date_part = str(start_time)[:10]
     return f"{players[0]}|{players[1]}|{date_part}|{event_name}"
-
-
-def _tennis_status_rank(match: dict) -> int:
-    status = (match.get("status") or {}).get("short")
-    if status == "FT":
-        return 3 if tennis_final_data_ready(match) else 2
-    if status == "LIVE":
-        return 2
-    if status == "NS":
-        return 1
-    return 0
-
-
-def _tennis_match_rank(match: dict) -> tuple:
-    status = match.get("status") or {}
-    sets = match.get("sets") or []
-    return (
-        _tennis_status_rank(match),
-        1 if match.get("winner") else 0,
-        len(sets),
-        1 if status.get("detail") else 0,
-        1 if match.get("round") else 0,
-    )
 
 
 def _is_today(start_time: str | None) -> bool:

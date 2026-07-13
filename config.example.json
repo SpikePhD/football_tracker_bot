@@ -114,6 +114,13 @@
     "tennis_cache_ttl_sec": 55,
     "tennis_upcoming_days": 7,
     "tennis_pre_announce_hours": 8,
+    "tennis_early_watch_poll_interval_sec": 900,
+    "tennis_imminent_window_minutes": 30,
+    "tennis_imminent_poll_interval_sec": 120,
+    "tennis_live_poll_interval_sec": 60,
+    "tennis_full_discovery_interval_sec": 1800,
+    "tennis_idle_discovery_interval_sec": 21600,
+    "tennis_post_start_watch_hours": 4,
     "tennis_finished_retention_hours": 24,
     "live_update_edit_window_messages": 100,
     "api_provider": {
@@ -140,7 +147,8 @@
   },
   "memory": {
     "stale_threshold_days": 30,
-    "espn_cache_ttl_sec": 43200
+    "espn_cache_ttl_sec": 43200,
+    "roster_unsupported_retry_days": 7
   },
   "llm": {
     "base_url": "https://api.mistral.ai/v1",

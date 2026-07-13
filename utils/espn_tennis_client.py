@@ -1,7 +1,8 @@
 # utils/espn_tennis_client.py
 import asyncio
 import logging
-from datetime import datetime
+import time
+from dataclasses import dataclass
 
 import aiohttp
 
@@ -12,6 +13,36 @@ logger = logging.getLogger(__name__)
 ESPN_TENNIS_BASE = "https://site.api.espn.com/apis/site/v2/sports/tennis"
 ESPN_TENNIS_TOURS = ("atp", "wta")
 ESPN_TIMEOUT = aiohttp.ClientTimeout(total=10)
+_WARNING_INTERVAL_SEC = 30 * 60
+_last_warning_at: dict[tuple[str, str, str], float] = {}
+
+
+@dataclass(frozen=True)
+class TennisSourceResult:
+    tour: str
+    date_str: str | None
+    matches: tuple[dict, ...]
+    ok: bool
+    error_kind: str | None = None
+    http_status: int | None = None
+
+
+def _source_label(tour: str, date_str: str | None) -> str:
+    return f"{tour}:{date_str or 'default'}"
+
+
+def _warn_source_failure(
+    tour: str,
+    date_str: str | None,
+    error_kind: str,
+    message: str,
+) -> None:
+    key = (tour, date_str or "default", error_kind)
+    now = time.monotonic()
+    last = _last_warning_at.get(key)
+    if last is None or now - last >= _WARNING_INTERVAL_SEC:
+        logger.warning("espn_tennis_client: %s for %s", message, _source_label(tour, date_str))
+        _last_warning_at[key] = now
 
 
 def _normalize_name(name: str) -> str:
@@ -139,42 +170,11 @@ def _competition_to_match(event: dict, competition: dict, tour: str) -> dict | N
     }
 
 
-def _dedup_key(match: dict) -> str:
-    """
-    Canonical dedup key independent of ATP/WTA feed label.
-    Uses normalized sorted player pair + competition date + event name.
-    """
-    players = sorted([
-        _normalize_name(match.get("player_a", "")),
-        _normalize_name(match.get("player_b", "")),
-    ])
-    start_time = match.get("start_time") or ""
-    date_part = ""
-    if start_time:
-        try:
-            date_part = datetime.fromisoformat(start_time.replace("Z", "+00:00")).date().isoformat()
-        except ValueError:
-            date_part = start_time[:10]
-    event_name = _normalize_name(match.get("event_name", ""))
-    return f"{players[0]}|{players[1]}|{date_part}|{event_name}"
-
-
-def _match_richness_score(match: dict) -> tuple:
-    """
-    Prefer records with richer score/status metadata when duplicates collide.
-    """
-    sets = match.get("sets") or []
-    status = match.get("status") or {}
-    round_text = match.get("round") or ""
-    return (
-        len(sets),
-        1 if status.get("detail") else 0,
-        1 if round_text else 0,
-        1 if match.get("winner") else 0,
-    )
-
-
-async def _fetch_tour_scoreboard(session: aiohttp.ClientSession, tour: str, date_str: str | None = None) -> dict:
+async def _fetch_tour_scoreboard(
+    session: aiohttp.ClientSession,
+    tour: str,
+    date_str: str | None = None,
+) -> TennisSourceResult:
     url = f"{ESPN_TENNIS_BASE}/{tour}/scoreboard"
     if date_str:
         url += f"?dates={date_str}"
@@ -182,55 +182,45 @@ async def _fetch_tour_scoreboard(session: aiohttp.ClientSession, tour: str, date
     try:
         async with session.get(url, timeout=ESPN_TIMEOUT) as response:
             if response.status != 200:
-                logger.warning(f"espn_tennis_client: HTTP {response.status} for {tour} scoreboard")
-                return {}
-            return await response.json(content_type=None)
+                _warn_source_failure(tour, date_str, "http", f"HTTP {response.status}")
+                return TennisSourceResult(tour, date_str, (), False, "http", response.status)
+            payload = await response.json(content_type=None)
     except asyncio.TimeoutError:
-        logger.warning(f"espn_tennis_client: timeout for {tour} scoreboard")
-        return {}
+        _warn_source_failure(tour, date_str, "timeout", "timeout")
+        return TennisSourceResult(tour, date_str, (), False, "timeout")
     except Exception as e:
-        logger.warning(f"espn_tennis_client: error for {tour} scoreboard: {e}")
-        return {}
-
-
-async def fetch_tracked_tennis_matches(
-    session: aiohttp.ClientSession,
-    date_str: str | None = None,
-) -> list[dict]:
-    """
-    Fetch tracked tennis matches from ESPN ATP/WTA scoreboards.
-    date_str must be YYYYMMDD when provided.
-    """
-    results = await asyncio.gather(
-        *(_fetch_tour_scoreboard(session, tour, date_str) for tour in ESPN_TENNIS_TOURS),
-        return_exceptions=True,
-    )
+        _warn_source_failure(tour, date_str, "other", f"error: {type(e).__name__}")
+        return TennisSourceResult(tour, date_str, (), False, "other")
 
     matches: list[dict] = []
-    for tour, payload in zip(ESPN_TENNIS_TOURS, results):
-        if isinstance(payload, Exception) or not isinstance(payload, dict):
-            continue
-
-        for event in payload.get("events", []):
-            for competition in event.get("competitions") or []:
+    for event in payload.get("events", []):
+        for competition in event.get("competitions") or []:
+            match = _competition_to_match(event, competition, tour)
+            if match:
+                matches.append(match)
+        for grouping in event.get("groupings") or []:
+            for competition in grouping.get("competitions") or []:
                 match = _competition_to_match(event, competition, tour)
                 if match:
                     matches.append(match)
+    return TennisSourceResult(tour, date_str, tuple(matches), True)
 
-            groupings = event.get("groupings") or []
-            for grouping in groupings:
-                for competition in grouping.get("competitions") or []:
-                    match = _competition_to_match(event, competition, tour)
-                    if match:
-                        matches.append(match)
 
-    deduped: dict[str, dict] = {}
-    for match in matches:
-        key = _dedup_key(match)
-        existing = deduped.get(key)
-        if existing is None or _match_richness_score(match) > _match_richness_score(existing):
-            deduped[key] = match
-
-    final_matches = list(deduped.values())
-    final_matches.sort(key=lambda m: m.get("start_time") or "")
-    return final_matches
+async def fetch_tennis_sources(
+    session: aiohttp.ClientSession,
+    sources: list[tuple[str, str | None]],
+) -> list[TennisSourceResult]:
+    """Fetch distinct ESPN tour/date sources concurrently."""
+    distinct = list(dict.fromkeys(sources))
+    results = await asyncio.gather(
+        *(_fetch_tour_scoreboard(session, tour, date_str) for tour, date_str in distinct),
+        return_exceptions=True,
+    )
+    normalized: list[TennisSourceResult] = []
+    for (tour, date_str), result in zip(distinct, results):
+        if isinstance(result, TennisSourceResult):
+            normalized.append(result)
+        else:
+            _warn_source_failure(tour, date_str, "other", "unexpected fetch failure")
+            normalized.append(TennisSourceResult(tour, date_str, (), False, "other"))
+    return normalized

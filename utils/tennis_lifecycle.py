@@ -92,3 +92,38 @@ def tennis_final_data_ready(match: dict) -> bool:
         return False
 
     return all(_is_completed_tennis_set(s.get("a"), s.get("b")) for s in sets)
+
+
+def tennis_record_preference(match: dict) -> tuple:
+    """Return the shared preference rank used to reconcile duplicate ESPN records.
+
+    A complete final is authoritative. A live record deliberately outranks an
+    incomplete final so a transient ESPN status flicker cannot erase live state.
+    """
+    status = match.get("status") or {}
+    lifecycle = status.get("short")
+    if lifecycle == "FT" and tennis_final_data_ready(match):
+        lifecycle_rank = 4
+    elif lifecycle == "LIVE":
+        lifecycle_rank = 3
+    elif lifecycle == "FT":
+        lifecycle_rank = 2
+    elif lifecycle == "NS":
+        lifecycle_rank = 1
+    else:
+        lifecycle_rank = 0
+
+    sets = match.get("sets") or []
+    populated_sets = sum(
+        1 for item in sets
+        if isinstance(item, dict) and (item.get("a") is not None or item.get("b") is not None)
+    )
+    return (
+        lifecycle_rank,
+        1 if match.get("winner") else 0,
+        populated_sets,
+        len(sets),
+        1 if status.get("detail") or status.get("short_detail") else 0,
+        1 if match.get("round") else 0,
+        1 if match.get("event_name") else 0,
+    )

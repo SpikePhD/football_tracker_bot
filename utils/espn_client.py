@@ -446,24 +446,67 @@ def _normalize_standings(data: dict) -> list[dict]:
 async def fetch_team_roster_espn(
     session: aiohttp.ClientSession,
     team_id: str,
-    slug: str,
-) -> dict | None:
+    slug: str | list[str] | tuple[str, ...],
+) -> dict:
     """
     Fetch team roster (players + coach) from ESPN.
     ESPN endpoint: https://site.api.espn.com/apis/site/v2/sports/soccer/teams/{team_id}
-    Returns dict with team name, coach, and players (by name) or None on failure.
+    Returns a structured result classifying success, unsupported endpoints, or
+    transient failure. The caller preserves previously stored roster data.
     """
-    url = f"{ESPN_BASE}/teams/{team_id}"
-    try:
-        async with session.get(url, timeout=ESPN_TIMEOUT) as resp:
-            if resp.status != 200:
-                logger.warning(f"ESPN team roster HTTP {resp.status} for {team_id}")
-                return None
-            data = await resp.json(content_type=None)
-            return _normalize_roster(data)
-    except Exception as e:
-        logger.warning(f"Failed to fetch roster for {team_id}: {e}")
-        return None
+    candidates = [slug] if isinstance(slug, str) else list(slug)
+    candidates = [str(value) for value in dict.fromkeys(candidates) if value]
+    urls = [(value, f"{ESPN_BASE}/{value}/teams/{team_id}") for value in candidates]
+    urls.append(("generic", f"{ESPN_BASE}/teams/{team_id}"))
+    attempts: list[dict] = []
+
+    for scope, url in urls:
+        try:
+            async with session.get(url, timeout=ESPN_TIMEOUT) as resp:
+                attempts.append({"scope": scope, "http_status": resp.status})
+                if resp.status == 200:
+                    data = await resp.json(content_type=None)
+                    return {
+                        "status": "ok",
+                        "roster": _normalize_roster(data),
+                        "scope": scope,
+                        "attempts": attempts,
+                    }
+                if resp.status in (400, 404):
+                    continue
+                return {
+                    "status": "transient_error",
+                    "roster": None,
+                    "scope": scope,
+                    "http_status": resp.status,
+                    "attempts": attempts,
+                }
+        except asyncio.TimeoutError:
+            attempts.append({"scope": scope, "error": "timeout"})
+            return {
+                "status": "transient_error",
+                "roster": None,
+                "scope": scope,
+                "error": "timeout",
+                "attempts": attempts,
+            }
+        except Exception as exc:
+            attempts.append({"scope": scope, "error": type(exc).__name__})
+            return {
+                "status": "transient_error",
+                "roster": None,
+                "scope": scope,
+                "error": type(exc).__name__,
+                "attempts": attempts,
+            }
+
+    return {
+        "status": "unsupported",
+        "roster": None,
+        "scope": "generic",
+        "http_status": attempts[-1].get("http_status") if attempts else None,
+        "attempts": attempts,
+    }
 
 
 def _normalize_roster(data: dict) -> dict:

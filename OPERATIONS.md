@@ -225,15 +225,19 @@ This aliasing is what prevents fallback live/FT data from creating a second life
 Football and tennis both use a sleep/awake scheduler model:
 
 - sleeping: no live, near-start, FT-due, or pending announcement work; future schedule refresh runs every 6 hours
-- awake: active work exists; football polls at the configured provider interval and tennis polls every 60 seconds while work remains
+- awake: active work exists; football polls at the configured provider interval; tennis uses 15-minute early watch, 2-minute imminent/delayed-start, and 60-second live/final-pending defaults
 
 One awake football check uses one rolling provider snapshot for scheduler decisions, live updates, and FT processing. Direct single-fixture FT recovery remains separate only for persisted due fixtures missing from that shared window.
 
 ESPN refreshes are active-targeted. Full discovery across all configured leagues remains every 30 minutes for current/future provider dates and every 6 hours for past dates. Between discoveries, the existing live freshness interval refreshes only leagues with live, near-kickoff, unresolved FT, or late-event-repair work. This retains competition discovery and cross-midnight coverage while avoiding all-league fan-out every minute. Provider health snapshots expose daily `full_discovery`, `active_refresh`, and `total` league-request counts.
 
+Tennis follows the same discovery/targeting principle. A cold or periodic discovery makes eight ESPN requests (ATP/WTA across default, yesterday, today, and tomorrow). Between discoveries, one request is made for each distinct known tour/date pair. Failed sources retain recent successful data for up to twice the discovery interval. `!api` and dashboard health report tennis discovery, targeted, success, timeout, HTTP-error, and other-error counters for the local day/process.
+
 Unannounced tennis finals remain eligible for retry for `operations.tennis_finished_retention_hours`, including matches that cross local midnight. A failed Discord send is not recorded as announced. Tennis live-message IDs and final deduplication survive service restarts; old list-based tennis state is migrated automatically on first load.
 
 The scheduler loads tennis deduplication before its first decision. Expired terminal tennis records are pruned after the same finished-retention window; live and future records are retained.
+
+Weekly roster refreshes derive ESPN league slugs from stored standings and matches, then fall back to the generic team endpoint. Confirmed 400/404 unsupported lookups are retained in `bot_memory/roster_lookup_state.json` for the configured retry period; transient failures are never negative-cached and existing roster data is preserved.
 
 Inspect scheduler mode with:
 

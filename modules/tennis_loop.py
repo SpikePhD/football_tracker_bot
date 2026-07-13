@@ -1,6 +1,6 @@
 # modules/tennis_loop.py
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from config import CHANNEL_ID, TENNIS_FINISHED_RETENTION_HOURS, TENNIS_PRE_ANNOUNCE_HOURS
 from modules import api_provider
@@ -228,16 +228,22 @@ def clear_tennis_state_today() -> None:
     logger.info("Kept rolling tennis lifecycle state across the local-day boundary.")
 
 
-async def run_tennis_loop(bot) -> None:
+async def run_tennis_loop(
+    bot,
+    *,
+    matches: list[dict] | tuple[dict, ...] | None = None,
+    now_utc: datetime | None = None,
+) -> None:
     if is_silent():
         return
     _load_state_once()
 
-    try:
-        matches = await api_provider.fetch_tennis_day(bot.http_session)
-    except Exception as e:
-        logger.warning(f"Tennis loop fetch error: {e}", exc_info=True)
-        return
+    if matches is None:
+        try:
+            matches = await api_provider.fetch_tennis_day(bot.http_session)
+        except Exception as e:
+            logger.warning(f"Tennis loop fetch error: {e}", exc_info=True)
+            return
 
     if not matches:
         return
@@ -304,10 +310,12 @@ async def run_tennis_loop(bot) -> None:
             continue
 
         if status_short == "FT":
-            if not tennis_final_within_retention(match, bot_now()):
+            if not tennis_final_within_retention(match, now_utc or bot_now()):
                 logger.debug(f"Skipping FT match {match_id} - outside finished retention window")
                 continue
             if not tennis_final_data_ready(match):
+                if track_id in live_state_keys:
+                    live_ids_seen.add(track_id)
                 logger.info(
                     "Deferring tennis FT for %s because final data is incomplete "
                     "(winner=%r, sets=%r).",
@@ -333,6 +341,7 @@ async def run_tennis_loop(bot) -> None:
                 live_message_ids.pop(track_id, None)
                 live_state_keys.pop(track_id, None)
                 _persist_state()
+                logger.info("Tennis FT posted and persisted for %s.", track_id)
 
             else:
                 before = dict(tennis_match_records.get(track_id, {}))
@@ -345,4 +354,4 @@ async def run_tennis_loop(bot) -> None:
     stale_live = [mid for mid in live_state_keys if mid not in live_ids_seen]
     for mid in stale_live:
         live_state_keys.pop(mid, None)
-    prune_tennis_state(bot_now())
+    prune_tennis_state(now_utc or bot_now())
