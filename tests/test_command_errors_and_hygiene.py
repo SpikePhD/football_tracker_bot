@@ -254,7 +254,8 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertNotIn("printf 'warning_error_count=", text)
         self.assertIn("APP_WARNING_RE=", text)
         self.assertIn("APP_ERROR_RE=", text)
-        self.assertIn("sort \"$APP_EXPORT_TMP\" > \"$APP_EXPORT\"", text)
+        self.assertIn("LC_ALL=C sort -Vr", text)
+        self.assertIn("LC_ALL=C sort -s -k1,2 \"$APP_EXPORT_TMP\" > \"$APP_EXPORT\"", text)
         self.assertNotIn("grep -Eih 'ERROR|CRITICAL|Traceback|Exception' \"$APP_EXPORT\"", text)
         self.assertIn("systemd journal may duplicate app output", text)
         self.assertIn("collect_daily_logs.sh", operations)
@@ -264,7 +265,8 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
         self.assertIn("app_warning_error_count", operations)
         self.assertIn("journal_warning_error_count", operations)
         self.assertIn("severity labels", operations)
-        self.assertIn("chronological order", operations)
+        self.assertIn("stable timestamp sort", operations)
+        self.assertIn("causal order", operations)
 
     def test_daily_log_collection_sorts_app_lines_and_counts_severity_labels(self):
         if os.name == "nt":
@@ -282,6 +284,7 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
             log_dir.mkdir(parents=True)
             (log_dir / "bot.log").write_text(
                 "\n".join([
+                    "[2026-06-17 12:00:00] [INFO    ] [modules.live_loop] current log tie",
                     "[2026-06-17 23:59:50] [INFO    ] [modules.live_loop] later line",
                     "[2026-06-17 00:00:41] [INFO    ] [modules.live_loop] No live fixtures returned or fetch error.",
                 ]) + "\n",
@@ -291,7 +294,12 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
                 "\n".join([
                     "[2026-06-17 06:00:00] [WARNING ] [modules.test] warning line",
                     "[2026-06-17 07:00:00] [ERROR   ] [modules.test] error line",
+                    "[2026-06-17 12:00:00] [INFO    ] [modules.live_loop] older rotation tie",
                 ]) + "\n",
+                encoding="utf-8",
+            )
+            (log_dir / "bot.log.2").write_text(
+                "[2026-06-17 12:00:00] [INFO    ] [modules.live_loop] oldest rotation tie\n",
                 encoding="utf-8",
             )
 
@@ -310,7 +318,17 @@ class CommandErrorsAndHygieneTests(unittest.TestCase):
             summary = export_dir / f"summary_{target_date}.txt"
 
             lines = app_export.read_text(encoding="utf-8").splitlines()
-            self.assertEqual(lines, sorted(lines))
+            timestamps = [line[:21] for line in lines]
+            self.assertEqual(timestamps, sorted(timestamps))
+            tied_lines = [line for line in lines if line.startswith("[2026-06-17 12:00:00]")]
+            self.assertEqual(
+                tied_lines,
+                [
+                    "[2026-06-17 12:00:00] [INFO    ] [modules.live_loop] oldest rotation tie",
+                    "[2026-06-17 12:00:00] [INFO    ] [modules.live_loop] older rotation tie",
+                    "[2026-06-17 12:00:00] [INFO    ] [modules.live_loop] current log tie",
+                ],
+            )
 
             summary_text = summary.read_text(encoding="utf-8")
             self.assertIn("app_warning_error_count=2", summary_text)

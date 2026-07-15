@@ -66,16 +66,17 @@ class EspnRequestReductionTests(unittest.TestCase):
 
         async def run():
             fetch = AsyncMock(return_value=self._summary([fresh_live], {135}))
-            with (
-                patch.object(api_provider, "bot_now", return_value=now),
-                patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fetch),
-            ):
-                matches = await api_provider._get_active_scoreboard_for_date(
-                    None, "2026-07-11", now
-                )
-                return matches, fetch
+            with self.assertLogs("modules.api_provider", level="DEBUG") as captured:
+                with (
+                    patch.object(api_provider, "bot_now", return_value=now),
+                    patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fetch),
+                ):
+                    matches = await api_provider._get_active_scoreboard_for_date(
+                        None, "2026-07-11", now
+                    )
+            return matches, fetch, captured.output
 
-        matches, fetch = asyncio.run(run())
+        matches, fetch, log_output = asyncio.run(run())
 
         requested_map = fetch.await_args.args[1]
         self.assertEqual(requested_map, {135: api_provider.LEAGUE_SLUG_MAP[135]})
@@ -88,6 +89,94 @@ class EspnRequestReductionTests(unittest.TestCase):
         self.assertEqual(
             api_provider.get_status()["espn_league_requests_today"],
             {"full_discovery": 0, "active_refresh": 1, "total": 1},
+        )
+        self.assertTrue(any("Refreshing ESPN active scoreboards" in line for line in log_output))
+        self.assertTrue(any("ESPN active refresh for" in line for line in log_output))
+        self.assertFalse(any(line.startswith("INFO:") for line in log_output))
+
+    def test_partial_active_refresh_warns_and_preserves_failed_league(self):
+        from modules import api_provider
+
+        now = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
+        fresh = espn_match(fixture_id="fresh-135", league_id=135)
+        stale = espn_match(fixture_id="stale-39", league_id=39)
+        cached = {
+            "matches": [fresh, stale],
+            "fetched_at": now - timedelta(minutes=2),
+            "full_fetched_at": now - timedelta(minutes=5),
+            "league_fetched_at": {
+                "135": now - timedelta(minutes=2),
+                "39": now - timedelta(minutes=2),
+            },
+        }
+        summary = {
+            "matches": [fresh],
+            "success_count": 1,
+            "failure_count": 1,
+            "succeeded_league_ids": [135],
+            "failed_league_ids": [39],
+        }
+
+        async def run():
+            fetch = AsyncMock(return_value=summary)
+            with self.assertLogs("modules.api_provider", level="WARNING") as captured:
+                with (
+                    patch.object(api_provider, "bot_now", return_value=now),
+                    patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fetch),
+                ):
+                    matches = await api_provider._refresh_active_espn_leagues(
+                        None,
+                        "2026-07-11",
+                        cached,
+                        {135, 39},
+                    )
+            return matches, captured.output
+
+        matches, log_output = asyncio.run(run())
+
+        self.assertEqual(
+            {match["fixture"]["id"] for match in matches},
+            {"fresh-135", "stale-39"},
+        )
+        self.assertTrue(any("preserved stale data" in line for line in log_output))
+        self.assertEqual(
+            api_provider.get_status()["espn_league_requests_today"]["active_refresh"],
+            2,
+        )
+
+    def test_unexpected_active_refresh_error_remains_error_and_counts_request(self):
+        from modules import api_provider
+
+        now = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
+        live = espn_match(fixture_id="live-135", league_id=135)
+        cached = {
+            "matches": [live],
+            "fetched_at": now - timedelta(minutes=2),
+            "league_fetched_at": {"135": now - timedelta(minutes=2)},
+        }
+
+        async def run():
+            fetch = AsyncMock(side_effect=RuntimeError("provider exploded"))
+            with self.assertLogs("modules.api_provider", level="ERROR") as captured:
+                with (
+                    patch.object(api_provider, "bot_now", return_value=now),
+                    patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fetch),
+                ):
+                    matches = await api_provider._refresh_active_espn_leagues(
+                        None,
+                        "2026-07-11",
+                        cached,
+                        {135},
+                    )
+            return matches, captured.output
+
+        matches, log_output = asyncio.run(run())
+
+        self.assertEqual(matches, [live])
+        self.assertTrue(any("Unexpected active ESPN refresh error" in line for line in log_output))
+        self.assertEqual(
+            api_provider.get_status()["espn_league_requests_today"]["active_refresh"],
+            1,
         )
 
     def test_recent_discovery_with_no_active_fixture_makes_no_request(self):
@@ -262,24 +351,29 @@ class EspnRequestReductionTests(unittest.TestCase):
 
         async def run():
             fetch = AsyncMock(return_value=failed)
-            with (
-                patch.object(api_provider, "bot_now", return_value=now),
-                patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fetch),
-            ):
-                matches = await api_provider.fetch_football_window(
-                    None,
-                    now - timedelta(hours=1),
-                    now + timedelta(hours=1),
-                    now_utc=now,
-                    refresh_mode="active",
-                )
-                return matches, fetch
+            with self.assertLogs("modules.api_provider", level="WARNING") as captured:
+                with (
+                    patch.object(api_provider, "bot_now", return_value=now),
+                    patch.object(api_provider.espn_client, "fetch_all_leagues_with_summary", fetch),
+                ):
+                    matches = await api_provider.fetch_football_window(
+                        None,
+                        now - timedelta(hours=1),
+                        now + timedelta(hours=1),
+                        now_utc=now,
+                        refresh_mode="active",
+                    )
+            return matches, fetch, captured.output
 
-        matches, fetch = asyncio.run(run())
+        matches, fetch, log_output = asyncio.run(run())
         self.assertEqual(matches, [])
         self.assertFalse(api_provider._espn_healthy)
         self.assertGreater(api_provider._retry_after, now)
         self.assertEqual(fetch.await_count, 1)
+        self.assertTrue(any(
+            "Active ESPN refresh had no successful league responses" in line
+            for line in log_output
+        ))
 
 
 if __name__ == "__main__":

@@ -183,7 +183,8 @@ class TennisProviderRequestTests(unittest.TestCase):
             asyncio.run(api_provider.fetch_tennis_day(object()))
             self.assertEqual(len(fetch.await_args.args[1]), 8)
 
-        status = api_provider.get_tennis_status()
+            status = api_provider.get_tennis_status()
+
         self.assertEqual(status["requests"]["discovery"], 16)
         self.assertEqual(status["requests"]["targeted"], 1)
         self.assertEqual(status["requests"]["total"], 17)

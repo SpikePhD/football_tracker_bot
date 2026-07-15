@@ -29,13 +29,27 @@ count_log_matches() {
 }
 
 shopt -s nullglob
-APP_LOG_FILES=("$ROOT_DIR"/bot_memory/logs/bot.log*)
+ROTATED_LOG_FILES=()
+for candidate in "$APP_LOG".[0-9]*; do
+  if [[ "$candidate" =~ \.[0-9]+$ ]]; then
+    ROTATED_LOG_FILES+=("$candidate")
+  fi
+done
+
+APP_LOG_FILES=()
+if (( ${#ROTATED_LOG_FILES[@]} > 0 )); then
+  mapfile -t APP_LOG_FILES < <(printf '%s\n' "${ROTATED_LOG_FILES[@]}" | LC_ALL=C sort -Vr)
+fi
+if [[ -f "$APP_LOG" ]]; then
+  APP_LOG_FILES+=("$APP_LOG")
+fi
+
 if (( ${#APP_LOG_FILES[@]} > 0 )); then
   : > "$APP_EXPORT_TMP"
   for log_file in "${APP_LOG_FILES[@]}"; do
     grep "^\[$TARGET_DATE " "$log_file" >> "$APP_EXPORT_TMP" || true
   done
-  sort "$APP_EXPORT_TMP" > "$APP_EXPORT"
+  LC_ALL=C sort -s -k1,2 "$APP_EXPORT_TMP" > "$APP_EXPORT"
 else
   printf 'App log not found: %s\n' "$APP_LOG" > "$APP_EXPORT"
 fi

@@ -439,7 +439,7 @@ async def _refresh_active_espn_leagues(
         for league_id in LEAGUE_SLUG_MAP
         if league_id in due_league_ids
     }
-    logger.info(
+    logger.debug(
         "[APIProvider] Refreshing ESPN active scoreboards for %s (%d/%d tracked leagues).",
         provider_date,
         len(slug_map),
@@ -501,7 +501,7 @@ async def _refresh_active_espn_leagues(
             f"[APIProvider] ESPN active refresh preserved stale data for "
             f"{len(failed_league_ids)} failed league(s) on {provider_date}.",
         )
-    logger.info(
+    logger.debug(
         "[APIProvider] ESPN active refresh for %s: %d match(es), %d league response(s) ok, %d failed.",
         provider_date,
         len(matches),
