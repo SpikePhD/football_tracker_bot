@@ -228,6 +228,10 @@ async def _edit_discord_message(token: str, channel_id: int, message_id: int, co
     finally:
         if not client.is_closed():
             await client.close()
+        # Allow aiohttp's SSL transport to release before asyncio closes the
+        # one-shot event loop; otherwise successful edits can emit a connector
+        # cleanup warning after the process has already completed.
+        await asyncio.sleep(0.25)
     return client.edit_succeeded
 
 
