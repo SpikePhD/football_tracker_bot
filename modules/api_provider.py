@@ -1303,21 +1303,73 @@ def event_completeness_status(match: dict, memory_dir=None) -> dict:
     return {"status": EVENTS_PENDING_ENRICHMENT, "missing_goals": missing, "score_key": score_key}
 
 
-def _event_quality(events: list) -> tuple[int, int, int]:
+def _event_int_time_value(event: dict, key: str, default: int = 0) -> int:
+    try:
+        return int(event.get("time", {}).get(key) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _event_player_signature(event: dict) -> tuple[str, ...]:
+    normalized = _normalize_fixture_name(event.get("player", {}).get("name"))
+    tokens = normalized.split()
+    if len(tokens) >= 2:
+        return (tokens[0][0], tokens[-1])
+    return tuple(tokens)
+
+
+def _goal_event_category(event: dict) -> str:
+    detail = str(event.get("detail") or "").strip().lower()
+    if "own goal" in detail:
+        return "own_goal"
+    if "penalty" in detail:
+        return "penalty"
+    return "normal"
+
+
+def _event_record_quality(event: dict) -> tuple[int, int, int, int]:
+    player_name = str(event.get("player", {}).get("name") or "").strip()
+    normalized_player = _normalize_fixture_name(player_name)
+    player_tokens = normalized_player.split()
+    has_full_name = int(len(player_tokens) >= 2 and len(player_tokens[0]) > 1)
+    has_player = int(bool(normalized_player and normalized_player not in {"n a", "unknown"}))
+    has_team = int(bool(_normalize_fixture_name(event.get("team", {}).get("name"))))
+    has_stoppage = int(event.get("time", {}).get("extra") not in (None, "", 0, "0"))
+    return has_full_name, has_stoppage, has_player, has_team
+
+
+def _event_quality(events: list) -> tuple[int, int, tuple[int, int, int, int], int]:
     goal_count = _goal_event_count(events)
     red_cards = sum(1 for e in events if e.get("type") == "Card" and e.get("detail") == "Red Card")
-    return goal_count, red_cards, len(events)
+    metadata_quality = [0, 0, 0, 0]
+    for event in events:
+        for index, value in enumerate(_event_record_quality(event)):
+            metadata_quality[index] += value
+    return goal_count, red_cards, tuple(metadata_quality), len(events)
 
 
 def _events_are_strictly_better(candidate_events: list, current_events: list) -> bool:
     return _event_quality(candidate_events) > _event_quality(current_events)
 
 
+def _event_source_priority(source_label: str | None) -> int:
+    if source_label == "ESPN":
+        return 2
+    if source_label and "API-Football" in source_label:
+        return 1
+    return 0
+
+
 def _event_elapsed_value(event: dict) -> int:
-    try:
-        return int(event.get("time", {}).get("elapsed") or 9999)
-    except (TypeError, ValueError):
-        return 9999
+    return _event_int_time_value(event, "elapsed", 9999)
+
+
+def _event_sort_key(event: dict, match: dict) -> tuple:
+    return (
+        _event_elapsed_value(event),
+        _event_int_time_value(event, "extra"),
+        _event_identity(event, match),
+    )
 
 
 def _event_team_side_for_match(event: dict, match: dict) -> str:
@@ -1339,25 +1391,70 @@ def _event_identity(event: dict, match: dict) -> tuple:
     detail = str(event.get("detail") or "").strip().lower()
     return (
         _event_elapsed_value(event),
+        _event_int_time_value(event, "extra"),
         _event_team_side_for_match(event, match),
         player,
         detail,
     )
 
 
-def _merge_distinct_events(match: dict, event_sources: list[list]) -> list:
-    counted_goals: list[dict] = []
+def _cross_source_goal_duplicate(left: dict, right: dict, match: dict) -> bool:
+    left_side = _event_team_side_for_match(left, match)
+    right_side = _event_team_side_for_match(right, match)
+    if not left_side or left_side != right_side:
+        return False
+    if _goal_event_category(left) != _goal_event_category(right):
+        return False
+    if not _event_player_signature(left) or _event_player_signature(left) != _event_player_signature(right):
+        return False
+
+    left_elapsed = _event_elapsed_value(left)
+    right_elapsed = _event_elapsed_value(right)
+    left_extra = _event_int_time_value(left, "extra")
+    right_extra = _event_int_time_value(right, "extra")
+    if left_extra or right_extra:
+        return left_elapsed == right_elapsed and left_extra == right_extra
+    return abs(left_elapsed - right_elapsed) <= 1
+
+
+def _prefer_event_record(candidate: dict, candidate_priority: int, current: dict, current_priority: int) -> bool:
+    return (_event_record_quality(candidate), candidate_priority) > (
+        _event_record_quality(current),
+        current_priority,
+    )
+
+
+def _merge_distinct_events(match: dict, event_sources: list[tuple[str, list]]) -> list:
+    counted_goals: list[tuple[dict, int, int]] = []
     non_goals: list[dict] = []
-    seen_goal_keys: set[tuple] = set()
     seen_non_goal_keys: set[tuple] = set()
 
-    for events in event_sources:
+    for source_index, (source_label, events) in enumerate(event_sources):
+        source_priority = _event_source_priority(source_label)
+        seen_source_goal_keys: set[tuple] = set()
         for event in events or []:
             if is_counted_goal_event(event):
                 key = _event_identity(event, match)
-                if key not in seen_goal_keys:
-                    counted_goals.append(event)
-                    seen_goal_keys.add(key)
+                if key in seen_source_goal_keys:
+                    continue
+                seen_source_goal_keys.add(key)
+
+                duplicate_index = next(
+                    (
+                        index
+                        for index, (existing, existing_source_index, _) in enumerate(counted_goals)
+                        if existing_source_index != source_index
+                        and _cross_source_goal_duplicate(existing, event, match)
+                    ),
+                    None,
+                )
+                if duplicate_index is None:
+                    counted_goals.append((event, source_index, source_priority))
+                    continue
+
+                existing, existing_source_index, existing_priority = counted_goals[duplicate_index]
+                if _prefer_event_record(event, source_priority, existing, existing_priority):
+                    counted_goals[duplicate_index] = (event, source_index, source_priority)
                 continue
 
             key = (
@@ -1369,8 +1466,36 @@ def _merge_distinct_events(match: dict, event_sources: list[list]) -> list:
                 non_goals.append(event)
                 seen_non_goal_keys.add(key)
 
-    counted_goals.sort(key=lambda event: (_event_elapsed_value(event), _event_identity(event, match)))
-    return [*counted_goals, *non_goals]
+    goal_events = [event for event, _, _ in counted_goals]
+    goal_events.sort(key=lambda event: _event_sort_key(event, match))
+    return [*goal_events, *non_goals]
+
+
+def _merged_goal_events_exceed_score(match: dict, events: list) -> bool:
+    goals = match.get("goals", {}) or {}
+    try:
+        caps = {
+            "home": int(goals.get("home", 0) or 0),
+            "away": int(goals.get("away", 0) or 0),
+        }
+    except (TypeError, ValueError):
+        return False
+
+    side_counts = {"home": 0, "away": 0}
+    unknown = 0
+    for event in events:
+        if not is_counted_goal_event(event):
+            continue
+        side = _event_team_side_for_match(event, match)
+        if side in side_counts:
+            side_counts[side] += 1
+        else:
+            unknown += 1
+    return (
+        side_counts["home"] > caps["home"]
+        or side_counts["away"] > caps["away"]
+        or side_counts["home"] + side_counts["away"] + unknown > caps["home"] + caps["away"]
+    )
 
 
 def _best_known_events_for_fixture(match: dict) -> list:
@@ -1392,7 +1517,23 @@ def _merge_complementary_partial_events(
 ) -> dict | None:
     current_events = match.get("events", []) or []
     best_events = _best_known_events_for_fixture(match)
-    merged_events = _merge_distinct_events(match, [best_events, current_events, enriched_events])
+    merged_events = _merge_distinct_events(
+        match,
+        [
+            ("best-known events", best_events),
+            ("ESPN", current_events),
+            (source_label, enriched_events),
+        ],
+    )
+    if _merged_goal_events_exceed_score(match, merged_events):
+        fixture_id = match.get("fixture", {}).get("id")
+        logger.info(
+            "[Enrich] ESPN fixture %s: rejected complementary %s merge because "
+            "semantic deduplication still exceeded the accepted score.",
+            fixture_id,
+            source_label,
+        )
+        return None
     merged_match = _sanitize_goal_events_for_score(
         {**match, "events": merged_events},
         f"{source_label} complementary merge",
@@ -1562,8 +1703,14 @@ def _remember_best_known_events(
 
     existing = _best_known_events_by_espn_fixture.get(fixture_id)
     existing_events = existing.get("events", []) if existing else []
-    if existing and not _events_are_strictly_better(events, existing_events):
-        return
+    if existing:
+        candidate_preference = (_event_quality(events), _event_source_priority(source_label))
+        existing_preference = (
+            _event_quality(existing_events),
+            _event_source_priority(existing.get("source")),
+        )
+        if candidate_preference <= existing_preference:
+            return
 
     _best_known_events_by_espn_fixture[fixture_id] = {
         "events": list(events),

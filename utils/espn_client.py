@@ -7,6 +7,7 @@ import asyncio
 import logging
 import aiohttp
 import re
+from math import ceil
 
 logger = logging.getLogger(__name__)
 _scoreboard_warning_log_keys: set[tuple[str, str | None, str]] = set()
@@ -55,6 +56,27 @@ def _map_status(state: str, period: int, description: str, status_name: str) -> 
 
 # ── Event normalization ───────────────────────────────────────────────────────
 
+_EVENT_CLOCK_RE = re.compile(r"^\s*(\d+)\s*['’]?\s*(?:\+\s*(\d+)\s*['’]?)?")
+
+
+def _normalize_event_time(detail: dict) -> dict:
+    """Return the provider's displayed football minute with stoppage time."""
+    clock = detail.get("clock", {}) or {}
+    display_value = str(clock.get("displayValue") or "").strip()
+    match = _EVENT_CLOCK_RE.match(display_value)
+    if match:
+        event_time = {"elapsed": int(match.group(1))}
+        if match.group(2) is not None:
+            event_time["extra"] = int(match.group(2))
+        return event_time
+
+    try:
+        seconds = float(clock.get("value") or 0)
+    except (TypeError, ValueError):
+        seconds = 0
+    return {"elapsed": max(0, ceil(seconds / 60))}
+
+
 def _normalize_details(details: list, team_id_to_name: dict) -> list:
     """Convert ESPN competition details (goals, cards) to API-Football event format."""
     events = []
@@ -66,51 +88,51 @@ def _normalize_details(details: list, team_id_to_name: dict) -> list:
         etype_id = str(detail_type.get("id", ""))
         athletes = detail.get("athletesInvolved", [])
         player_name = athletes[0].get("fullName", "N/A") if athletes else "N/A"
-        clock_val = int(detail.get("clock", {}).get("value", 0)) // 60
+        event_time = _normalize_event_time(detail)
         team_id = detail.get("team", {}).get("id")
         team_name = team_id_to_name.get(team_id, "Unknown")
+        is_shootout = detail.get("shootout") is True or etype_id == "104"
+        is_penalty = detail.get("penaltyKick") is True or etype in ("Penalty - Scored", "Penalty")
+        is_own_goal = detail.get("ownGoal") is True or etype == "Own Goal"
+        is_scoring_play = (
+            detail.get("scoringPlay") is True
+            or detail.get("scoreValue") not in (None, 0, "0")
+            or etype == "Own Goal"
+            or etype.startswith("Goal")
+            or etype in ("Penalty - Scored", "Penalty")
+        )
 
-        dedup_key = (clock_val, player_name, etype, etype_id)
+        dedup_key = (
+            event_time.get("elapsed"),
+            event_time.get("extra"),
+            player_name,
+            etype,
+            etype_id,
+        )
         if dedup_key in seen:
             continue
         seen.add(dedup_key)
 
-        if etype == "Goal":
+        if is_shootout and is_scoring_play:
             events.append({
-                "time": {"elapsed": clock_val},
-                "player": {"name": player_name},
-                "team": {"id": team_id, "name": team_name},
-                "type": "Goal",
-                "detail": "Normal Goal",
-            })
-        elif etype_id == "104" and etype in ("Penalty - Scored", "Penalty"):
-            events.append({
-                "time": {"elapsed": clock_val},
+                "time": event_time,
                 "player": {"name": player_name},
                 "team": {"id": team_id, "name": team_name},
                 "type": "PenaltyShootout",
                 "detail": "Scored",
                 "shootout": True,
             })
-        elif etype in ("Penalty - Scored", "Penalty"):
+        elif is_scoring_play:
             events.append({
-                "time": {"elapsed": clock_val},
+                "time": event_time,
                 "player": {"name": player_name},
                 "team": {"id": team_id, "name": team_name},
                 "type": "Goal",
-                "detail": "Penalty",
-            })
-        elif etype == "Own Goal":
-            events.append({
-                "time": {"elapsed": clock_val},
-                "player": {"name": player_name},
-                "team": {"id": team_id, "name": team_name},
-                "type": "Goal",
-                "detail": "Own Goal",
+                "detail": "Own Goal" if is_own_goal else ("Penalty" if is_penalty else "Normal Goal"),
             })
         elif etype == "Red Card":
             events.append({
-                "time": {"elapsed": clock_val},
+                "time": event_time,
                 "player": {"name": player_name},
                 "team": {"id": team_id, "name": team_name},
                 "type": "Card",

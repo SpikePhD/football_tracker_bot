@@ -141,8 +141,13 @@ def normalize_api_football_events(raw_events: list) -> list:
             event_type == "Penalty Shootout"
             or "shootout" in str(detail or "").lower()
         )
+        raw_time = e.get("time", {}) or {}
+        event_time = {"elapsed": raw_time.get("elapsed", "?")}
+        extra = raw_time.get("extra")
+        if extra not in (None, "", 0, "0"):
+            event_time["extra"] = extra
         normalized.append({
-            "time": {"elapsed": e.get("time", {}).get("elapsed", "?")},
+            "time": event_time,
             "player": {"name": e.get("player", {}).get("name", "N/A")},
             "team": {
                 "id": e.get("team", {}).get("id"),
@@ -153,6 +158,16 @@ def normalize_api_football_events(raw_events: list) -> list:
             "shootout": True if is_shootout else False,
         })
     return normalized
+
+
+def format_event_minute(event: dict) -> str:
+    """Format a normalized elapsed/extra event clock for public messages."""
+    event_time = event.get("time", {}) or {}
+    elapsed = event_time.get("elapsed", "?")
+    extra = event_time.get("extra")
+    if extra not in (None, "", 0, "0"):
+        return f"{elapsed}+{extra}"
+    return str(elapsed)
 
 
 def format_match_events(events: list, home: str, away: str) -> list[str]:
@@ -166,7 +181,7 @@ def format_match_events(events: list, home: str, away: str) -> list[str]:
     """
     result = []
     for e in normal_match_events(events):
-        minute = e.get("time", {}).get("elapsed", "?")
+        minute = format_event_minute(e)
         player = e.get("player", {}).get("name", "N/A")
         team = e.get("team", {}).get("name")
         side = "(H)" if team == home else "(A)" if team == away else ""

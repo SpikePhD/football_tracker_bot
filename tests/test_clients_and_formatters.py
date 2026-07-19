@@ -55,6 +55,20 @@ class ClientsAndFormattersTests(unittest.TestCase):
 
         self.assertEqual(events[0]["team"], {"id": 10, "name": "Home"})
 
+    def test_api_football_event_normalization_preserves_stoppage_time(self):
+        from utils.event_formatter import format_match_events, normalize_api_football_events
+
+        events = normalize_api_football_events([{
+            "time": {"elapsed": 90, "extra": 6},
+            "player": {"name": "Late Scorer"},
+            "team": {"id": 10, "name": "Home"},
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }])
+
+        self.assertEqual(events[0]["time"], {"elapsed": 90, "extra": 6})
+        self.assertEqual(format_match_events(events, "Home", "Away"), ["90+6' - Late Scorer (H)"])
+
     def test_espn_normalization_preserves_team_ids_on_match_and_events(self):
         from utils import espn_client
 
@@ -98,6 +112,77 @@ class ClientsAndFormattersTests(unittest.TestCase):
         self.assertEqual(match["teams"]["home"]["id"], "100")
         self.assertEqual(match["teams"]["away"]["id"], "200")
         self.assertEqual(match["events"][0]["team"], {"id": "100", "name": "Home"})
+
+    def test_espn_fixture_760516_normalizes_all_scorers_and_display_clocks(self):
+        from modules.ft_handler import _build_ft_message
+        from utils import espn_client
+
+        def goal(type_id, type_text, seconds, display, team_id, player, **flags):
+            return {
+                "type": {"id": str(type_id), "text": type_text},
+                "clock": {"value": seconds, "displayValue": display},
+                "team": {"id": team_id},
+                "scoreValue": 1,
+                "scoringPlay": True,
+                "shootout": False,
+                "athletesInvolved": [{"fullName": player}],
+                **flags,
+            }
+
+        raw = {
+            "id": "760516",
+            "date": "2026-07-18T21:00Z",
+            "status": {
+                "period": 2,
+                "displayClock": "90:00",
+                "type": {"state": "post", "description": "Full Time", "name": "STATUS_FULL_TIME"},
+            },
+            "competitions": [{
+                "competitors": [
+                    {"homeAway": "home", "score": "4", "team": {"id": "478", "displayName": "France"}},
+                    {"homeAway": "away", "score": "6", "team": {"id": "448", "displayName": "England"}},
+                ],
+                "details": [
+                    goal(70, "Goal", 134, "3'", "448", "Declan Rice"),
+                    goal(137, "Goal - Header", 1072, "18'", "448", "Ezri Konsa"),
+                    goal(70, "Goal", 2170, "37'", "448", "Bukayo Saka"),
+                    goal(70, "Goal", 2700, "45'+1'", "448", "Bukayo Saka"),
+                    goal(70, "Goal", 2850, "48'", "478", "Kylian Mbappé"),
+                    goal(70, "Goal", 3219, "54'", "478", "Bradley Barcola"),
+                    goal(70, "Goal", 3950, "66'", "478", "Kylian Mbappé"),
+                    goal(98, "Penalty - Scored", 5201, "87'", "448", "Bukayo Saka", penaltyKick=True),
+                    goal(70, "Goal", 5400, "90'+6'", "478", "Ousmane Dembélé"),
+                    goal(70, "Goal", 5400, "90'+8'", "448", "Jude Bellingham"),
+                ],
+            }],
+        }
+
+        match = espn_client._normalize_event(raw, 1)
+
+        self.assertEqual(len(match["events"]), 10)
+        self.assertEqual(
+            [(event["time"], event["player"]["name"]) for event in match["events"]],
+            [
+                ({"elapsed": 3}, "Declan Rice"),
+                ({"elapsed": 18}, "Ezri Konsa"),
+                ({"elapsed": 37}, "Bukayo Saka"),
+                ({"elapsed": 45, "extra": 1}, "Bukayo Saka"),
+                ({"elapsed": 48}, "Kylian Mbappé"),
+                ({"elapsed": 54}, "Bradley Barcola"),
+                ({"elapsed": 66}, "Kylian Mbappé"),
+                ({"elapsed": 87}, "Bukayo Saka"),
+                ({"elapsed": 90, "extra": 6}, "Ousmane Dembélé"),
+                ({"elapsed": 90, "extra": 8}, "Jude Bellingham"),
+            ],
+        )
+        self.assertEqual(
+            _build_ft_message(match),
+            "FT: France 4 - 6 England (3' - Declan Rice (A); 18' - Ezri Konsa (A); "
+            "37' - Bukayo Saka (A); 45+1' - Bukayo Saka (A); 48' - Kylian Mbappé (H); "
+            "54' - Bradley Barcola (H); 66' - Kylian Mbappé (H); "
+            "87' - Bukayo Saka (Penalty) (A); 90+6' - Ousmane Dembélé (H); "
+            "90+8' - Jude Bellingham (A))",
+        )
 
     def test_espn_normalization_separates_shootout_penalties_and_preserves_winner(self):
         from utils import espn_client

@@ -960,6 +960,145 @@ class ProviderEnrichmentTests(unittest.TestCase):
         self.assertEqual(len(counted_goals), 1)
         self.assertEqual(counted_goals[0]["player"]["name"], "Y. Ibrahim")
 
+    def test_complementary_merge_reconciles_full_and_abbreviated_cross_provider_scorer(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="760516", league_id=1)
+        match["teams"] = {
+            "home": {"id": "478", "name": "France"},
+            "away": {"id": "448", "name": "England"},
+        }
+        match["goals"] = {"home": 0, "away": 3}
+        match["events"] = [
+            {
+                "time": {"elapsed": 2},
+                "player": {"name": "Declan Rice"},
+                "team": {"id": "448", "name": "England"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 37},
+                "player": {"name": "Bukayo Saka"},
+                "team": {"id": "448", "name": "England"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+        api_events = [
+            {
+                "time": {"elapsed": 3},
+                "player": {"name": "D. Rice"},
+                "team": {"id": "448", "name": "England"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 18},
+                "player": {"name": "E. Konsa"},
+                "team": {"id": "448", "name": "England"},
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+
+        merged = api_provider._merge_complementary_partial_events(
+            match,
+            api_events,
+            3,
+            1591865,
+            "API-Football events",
+        )
+
+        self.assertIsNotNone(merged)
+        self.assertEqual(
+            [event["player"]["name"] for event in merged["events"]],
+            ["Declan Rice", "E. Konsa", "Bukayo Saka"],
+        )
+
+    def test_complementary_merge_rejects_ambiguous_surplus_instead_of_pruning(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="ambiguous-surplus", league_id=1)
+        match["goals"] = {"home": 0, "away": 3}
+        match["events"] = [
+            {
+                "time": {"elapsed": 30},
+                "player": {"name": "Third Scorer"},
+                "team": match["teams"]["away"],
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 40},
+                "player": {"name": "Fourth Scorer"},
+                "team": match["teams"]["away"],
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+        api_events = [
+            {
+                "time": {"elapsed": 10},
+                "player": {"name": "First Scorer"},
+                "team": match["teams"]["away"],
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+            {
+                "time": {"elapsed": 20},
+                "player": {"name": "Second Scorer"},
+                "team": match["teams"]["away"],
+                "type": "Goal",
+                "detail": "Normal Goal",
+            },
+        ]
+
+        merged = api_provider._merge_complementary_partial_events(
+            match,
+            api_events,
+            3,
+            123,
+            "API-Football events",
+        )
+
+        self.assertIsNone(merged)
+
+    def test_equal_goal_count_prefers_richer_current_espn_events(self):
+        from modules import api_provider
+
+        match = espn_match(fixture_id="equal-quality-correction", league_id=1)
+        match["events"] = [{
+            "time": {"elapsed": 3},
+            "player": {"name": "Declan Rice"},
+            "team": match["teams"]["home"],
+            "type": "Goal",
+            "detail": "Normal Goal",
+        }]
+        api_provider._best_known_events_by_espn_fixture["equal-quality-correction"] = {
+            "events": [{
+                "time": {"elapsed": 2},
+                "player": {"name": "D. Rice"},
+                "team": match["teams"]["home"],
+                "type": "Goal",
+                "detail": "Normal Goal",
+            }],
+            "goal_count": 1,
+            "event_count": 1,
+            "score_total_at_capture": 1,
+            "source": "API-Football events",
+            "api_fixture_id": 1591865,
+            "updated_at": datetime(2026, 7, 18, 21, 3, 0),
+        }
+
+        enriched = asyncio.run(api_provider.enrich_fixture_events(None, match))
+
+        self.assertEqual(enriched["events"][0]["player"]["name"], "Declan Rice")
+        self.assertEqual(
+            api_provider._best_known_events_by_espn_fixture["equal-quality-correction"]["source"],
+            "ESPN",
+        )
+
     def test_complementary_merge_keeps_pending_status_when_still_incomplete(self):
         from modules import api_provider
 
