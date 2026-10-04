@@ -128,8 +128,11 @@ def _minimal_override(base: Any, value: Any) -> Any:
     """Return only values that differ from defaults, or None when identical."""
     if isinstance(base, dict) and isinstance(value, dict):
         result = {}
-        for key in base:
-            child = _minimal_override(base[key], value[key])
+        for key, item in value.items():
+            if key not in base:
+                result[key] = deepcopy(item)
+                continue
+            child = _minimal_override(base[key], item)
             if child is not None:
                 result[key] = child
         return result or None

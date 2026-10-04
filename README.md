@@ -21,7 +21,7 @@ The deployment target is a Raspberry Pi running a `systemd` service, with ESPN a
 - Live, upcoming, and recently finished tennis matches
 - Football memory used by the `!ask` assistant
 
-Default football coverage includes Serie A, Coppa Italia, Supercoppa Italiana, Premier League, FA Cup, Carabao Cup, Community Shield, La Liga, Copa del Rey, Supercopa de Espana, UEFA club competitions, Club World Cup, Intercontinental Cup, FIFA World Cup, and UEFA EURO.
+Default football coverage includes Serie A, Coppa Italia, Supercoppa Italiana, Premier League, FA Cup, Carabao Cup, Community Shield, La Liga, Copa del Rey, Supercopa de Espana, UEFA club competitions, Club World Cup, Intercontinental Cup, FIFA World Cup, UEFA EURO, and UEFA Nations League.
 
 ## Data Providers
 

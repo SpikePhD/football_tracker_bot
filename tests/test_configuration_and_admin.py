@@ -56,6 +56,44 @@ class ConfigurationTests(unittest.TestCase):
                 )
         self.assertEqual(effective["discord"]["channel_id"], 777)
 
+    def test_complete_save_preserves_new_competition_mappings(self):
+        from modules import configuration
+
+        base = deepcopy(self.base)
+        tracking = base["tracking"]
+        tracking["tracked_league_ids"] = [value for value in tracking["tracked_league_ids"] if value != 5]
+        tracking["league_name_map"].pop("5", None)
+        tracking["league_slug_map"].pop("5", None)
+        tracking["international_slugs"] = [
+            value for value in tracking["international_slugs"] if value != "uefa.nations"
+        ]
+        updated = deepcopy(base)
+        updated["tracking"]["tracked_league_ids"].append(5)
+        updated["tracking"]["league_name_map"]["5"] = "UEFA Nations League"
+        updated["tracking"]["league_slug_map"]["5"] = "uefa.nations"
+        updated["tracking"]["international_slugs"].append("uefa.nations")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            default_path = root / "config.json"
+            local_path = root / "config.local.json"
+            self._write(default_path, base)
+            configuration.save_complete_config(
+                updated, default_path=default_path, local_path=local_path,
+            )
+            effective = configuration.load_effective_config(default_path, local_path)
+            overrides = json.loads(local_path.read_text(encoding="utf-8"))
+            self.assertEqual(effective["tracking"], updated["tracking"])
+            self.assertEqual(overrides["tracking"]["league_slug_map"], {"5": "uefa.nations"})
+
+            # A subsequent dashboard save must retain the newly introduced map keys.
+            effective["bot"]["name"] = "Updated Bot"
+            configuration.save_complete_config(
+                effective, default_path=default_path, local_path=local_path,
+            )
+            reloaded = configuration.load_effective_config(default_path, local_path)
+            self.assertEqual(reloaded["tracking"], updated["tracking"])
+
     def test_unknown_override_key_is_rejected(self):
         from modules import configuration
 

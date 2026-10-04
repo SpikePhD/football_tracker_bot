@@ -31,7 +31,8 @@
       1168,
       15,
       1,
-      4
+      4,
+      5
     ],
     "league_name_map": {
       "135": "Serie A",
@@ -51,7 +52,8 @@
       "1168": "Intercontinental Cup",
       "15": "Club World Cup",
       "1": "FIFA World Cup",
-      "4": "UEFA EURO"
+      "4": "UEFA EURO",
+      "5": "UEFA Nations League"
     },
     "league_slug_map": {
       "135": "ita.1",
@@ -71,7 +73,8 @@
       "1168": "fifa.intercontinental_cup",
       "15": "fifa.cwc",
       "1": "fifa.world",
-      "4": "uefa.euro"
+      "4": "uefa.euro",
+      "5": "uefa.nations"
     },
     "international_slugs": [
       "uefa.champions",
@@ -81,7 +84,8 @@
       "fifa.cwc",
       "fifa.intercontinental_cup",
       "fifa.world",
-      "uefa.euro"
+      "uefa.euro",
+      "uefa.nations"
     ],
     "domestic_slug_groups": {
       "ita.1": ["ita.1", "ita.coppa_italia", "ita.super_cup"],
